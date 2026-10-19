@@ -29,6 +29,7 @@
 backend/velvet.toml
 backend/data/
 backend/config/
+backend/spectrum-config/
 backend/codex/
 **/*.db
 **/*.db-*

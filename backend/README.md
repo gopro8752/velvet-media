@@ -54,12 +54,16 @@ Playback reports begin when compatible clients send telemetry. Historic playback
 ## Optional integrations
 
 - **AI categories:** set `VELVET_IMAGE_TARGET=with-codex` in `.env`, set `category_ai.enabled=true`, rebuild, and run `docker compose exec backend codex login --device-auth`. Authentication is stored under the private `config/codex` mount. This integration uses the official CLI's account authentication; service availability and usage limits are determined by the account and upstream service. Never put account credentials into a Dockerfile, image, or repository.
-- **Live TV:** configure your own compatible bridge in `[live_tv]`. The bundled adapter understands PrismCast's Spectrum playlist format and can optionally prefer a direct EPlusTV source for reviewed national channels. Bridges and provider authentication are separate services; neither is included in the image.
+- **Live TV:** configure your own compatible bridge in `[live_tv]`. The experimental [native Spectrum service](../tve/spectrum/README.md) supplies the full account lineup to updated Widevine/FairPlay clients. The legacy adapter also supports PrismCast's Spectrum playlist and an optional EPlusTV source for reviewed national channels. Bridges and provider authentication run separately from the backend image.
 - **TV guide:** enable `guide_enabled` for supported channel mappings. Listings are fetched at runtime from an external feed. Exact feed coverage varies.
 - **Live sports:** opt into `[live_sports]` to enable the external event/embed adapter. Availability and playback depend on that external service and client support.
 - **Mobile/Roku compatibility:** FFmpeg supplies audio conversion and live remuxing. Original streams remain available to capable clients.
 
 All optional integrations default to disabled. The public repository includes no external media assets or program listings. Runtime metadata, artwork, guide feeds, and media remain subject to their respective providers' terms and licenses.
+
+### Native Spectrum source
+
+Set `native_spectrum_url` to the private origin of the [native service](../tve/spectrum/README.md) after provisioning its account session and updating every client. This selects Spectrum's current account catalog and native protected playback for Live TV, with no browser fallback. The backend relays only scoped manifests, encrypted media, public FairPlay certificates, and opaque platform license exchanges. It never sends client credentials to Spectrum or decrypts protected streams. Existing `upstream_url` settings still serve the separate Roku sports browser path.
 
 ### Optional direct TV Everywhere source
 

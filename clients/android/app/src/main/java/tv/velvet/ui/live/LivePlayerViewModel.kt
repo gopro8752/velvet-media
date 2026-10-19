@@ -1,12 +1,12 @@
 package tv.velvet.ui.live
 
 import android.app.Application
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
@@ -14,6 +14,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import kotlinx.coroutines.CancellationException
@@ -31,6 +32,7 @@ import tv.velvet.data.live.LiveReconnectBudget
 import tv.velvet.data.live.LiveRepository
 import tv.velvet.data.live.LiveSessionController
 import tv.velvet.data.live.adjacentLiveChannel
+import tv.velvet.data.live.mediaItem
 import tv.velvet.data.settings.SettingsRepository
 import java.util.concurrent.TimeUnit
 
@@ -86,7 +88,14 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
                 Player.STATE_ENDED -> recover()
             }
         }
-        override fun onPlayerError(error: PlaybackException) { if (ownsPlayback()) recover() }
+        override fun onPlayerError(error: PlaybackException) {
+            if (ownsPlayback()) {
+                // Error codes help diagnose device DRM without logging a
+                // capability URL, provider response, or license payload.
+                Log.w("VelvetLive", "Playback failed: ${error.errorCodeName}")
+                recover()
+            }
+        }
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             telemetry.observe()
             healthy?.cancel()
@@ -108,6 +117,14 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setPreferredAudioLanguages("en", "eng").setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
         player.addListener(listener)
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onDrmKeysLoaded(eventTime: AnalyticsListener.EventTime) {
+                if (ownsPlayback()) Log.i("VelvetLive", "Device DRM keys loaded")
+            }
+            override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
+                if (ownsPlayback()) Log.i("VelvetLive", "Live video first frame rendered")
+            }
+        })
         load()
         viewModelScope.launch {
             val profile = settings.activeProfileId.first()
@@ -161,8 +178,7 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
         sessions.tune(channel.id, onReady = { session ->
             if (!closed && !suspended) {
                 repository.lastChannelId.value = channel.id
-                player.setMediaItem(MediaItem.Builder().setMediaId(session.id).setUri(session.playbackUrl)
-                    .setMimeType(session.mimeType).build())
+                player.setMediaItem(session.mediaItem())
                 player.prepare()
                 player.seekToDefaultPosition()
                 player.playWhenReady = true

@@ -1,0 +1,9 @@
+{
+  "name": "velvet-spectrum",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Spectrum session and encrypted-media relay for Velvet native players",
+  "scripts": { "start": "node src/server.mjs", "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=22" }
+}

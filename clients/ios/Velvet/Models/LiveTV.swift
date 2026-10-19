@@ -33,6 +33,61 @@ struct LiveTuneResponse: Decodable {
     let channel: LiveChannel
     let canPause: Bool
     let canSeek: Bool
+    let drm: LiveDRMResponse?
+}
+
+struct LiveDRMResponse: Decodable {
+    let scheme: String
+    let licensePath: String
+    let certificatePath: String
+    let contentIdMode: String
+}
+
+struct LiveFairPlayConfiguration {
+    let licenseURL: URL
+    let certificateURL: URL
+
+    init?(response: LiveDRMResponse, sessionID: String, connection: LiveConnection) {
+        guard response.scheme == "fairplay", response.contentIdMode == "spectrum-content-id",
+              Self.safeReference(sessionID),
+              let license = connection.sessionResourceURL(response.licensePath, expected: "/live/drm/" + sessionID),
+              let certificate = connection.sessionResourceURL(response.certificatePath, expected: "/live/cert/" + sessionID) else { return nil }
+        licenseURL = license
+        certificateURL = certificate
+    }
+
+    static func safeReference(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 160 && value.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95
+        }
+    }
+}
+
+/// Spectrum's ContentId is the raw query value, not a URL-decoded string.
+/// The backend keeps the original provider key URI behind the opaque reference.
+struct LiveFairPlayKey: Equatable {
+    let reference: String
+    let contentIdentifier: Data
+
+    init?(identifier: String) {
+        let prefix = "skd://velvet/"
+        guard identifier.hasPrefix(prefix), !identifier.contains("#"), !identifier.contains("\\"),
+              !identifier.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+              let query = identifier.firstIndex(of: "?") else { return nil }
+        let reference = String(identifier[identifier.index(identifier.startIndex, offsetBy: prefix.count)..<query])
+        guard LiveFairPlayConfiguration.safeReference(reference) else { return nil }
+        let values = identifier[identifier.index(after: query)...].split(separator: "&").compactMap { field -> String? in
+            let pair = field.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            return pair.count == 2 && pair[0].lowercased() == "contentid" ? String(pair[1]) : nil
+        }
+        guard values.count == 1, let rawID = values.first, !rawID.isEmpty else { return nil }
+        // Match the provider's short-ID padding while using the native FPS
+        // contentIdentifier API, not WebKit's framed initialization data.
+        let content = Data((rawID.utf16.count < 2 ? "  " + rawID : rawID).utf8)
+        guard (2...200).contains(content.count) else { return nil }
+        self.reference = reference
+        contentIdentifier = content
+    }
 }
 
 struct LivePlayTarget: Identifiable, Hashable {
@@ -143,6 +198,14 @@ struct LiveConnection {
         return url
     }
 
+    func sessionResourceURL(_ path: String, expected: String) -> URL? {
+        guard path == expected, !path.contains("\\"),
+              let url = URL(string: path, relativeTo: base)?.absoluteURL,
+              Self.sameOrigin(base, url), url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil, url.path == expected else { return nil }
+        return url
+    }
+
     private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
         func port(_ url: URL) -> Int { url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80) }
         return lhs.scheme?.lowercased() == rhs.scheme?.lowercased()
@@ -155,6 +218,16 @@ struct LiveSession {
     let channel: LiveChannel
     let playbackURL: URL
     let connection: LiveConnection
+    let fairPlay: LiveFairPlayConfiguration?
+
+    init(id: String, channel: LiveChannel, playbackURL: URL, connection: LiveConnection,
+         fairPlay: LiveFairPlayConfiguration? = nil) {
+        self.id = id
+        self.channel = channel
+        self.playbackURL = playbackURL
+        self.connection = connection
+        self.fairPlay = fairPlay
+    }
 }
 
 enum LiveTVError: LocalizedError {

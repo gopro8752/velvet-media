@@ -75,6 +75,9 @@ struct VerifyLiveTV {
         expect(channels.enabled, "Live catalog did not decode")
         let lease = try await client.tune(channelID: "sports-1")
         expect(lease.channel.id == "sports-1", "Tune selected wrong channel")
+        expect(lease.fairPlay == nil, "Legacy clear-HLS tune must stay on the clear path")
+        expect(requests.last?.value(forHTTPHeaderField: "X-Velvet-Client") == "ios", "Tune did not identify the native client")
+        expect(requests.last?.value(forHTTPHeaderField: "X-Velvet-Playback-Capabilities") == "hls-clear,hls-fairplay", "Tune did not advertise native FairPlay")
         connection = LiveConnection(baseUrl: "https://changed.example", syncUrl: "https://changed.example", token: "new")!
         await client.release(lease)
         expect(requests.last?.url?.host == "Velvet.example", "Cleanup used changed Settings instead of lease owner")
@@ -95,6 +98,93 @@ struct VerifyLiveTV {
             expect(error.localizedDescription == "Sign in to your provider.", "Server guidance was lost")
             expect(!error.canRetryAutomatically, "Authentication failure should not auto-loop")
         }
-        print("Live TV checks passed: catalog, actual sports tags, safe URL/auth, session ownership/cleanup, and bounded stale-safe lifecycle.")
+
+        connection = original
+        let drm: [String: String] = ["scheme": "fairplay", "licensePath": "/live/drm/lease-1",
+                                    "certificatePath": "/live/cert/lease-1", "contentIdMode": "spectrum-content-id"]
+        var protected = try JSONSerialization.jsonObject(with: tuneData) as! [String: Any]
+        protected["drm"] = drm
+        var protectedData = try JSONSerialization.data(withJSONObject: protected)
+        LiveMockProtocol.handler = { request in
+            requests.append(request)
+            return request.httpMethod == "DELETE" ? (204, Data()) : (200, protectedData)
+        }
+        let protectedLease = try await client.tune(channelID: "sports-1")
+        let fairPlay = protectedLease.fairPlay!
+        expect(fairPlay.certificateURL.absoluteString == "https://Velvet.example/live/cert/lease-1", "FairPlay certificate endpoint is wrong")
+        expect(fairPlay.licenseURL.absoluteString == "https://Velvet.example/live/drm/lease-1", "FairPlay license endpoint is wrong")
+        for (field, bad) in [
+            ("scheme", "widevine"), ("contentIdMode", "unknown"),
+            ("licensePath", "https://other.example/live/drm/lease-1"),
+            ("licensePath", "/live/drm/other-lease"), ("certificatePath", "/live/cert/other-lease"),
+            ("licensePath", "/live/drm/lease-1?url=private"), ("licensePath", "/live/drm/lease-1#fragment"),
+            ("licensePath", "/live/drm/%2e%2e/admin"), ("certificatePath", "//other.example/live/cert/lease-1")
+        ] {
+            var invalid = drm
+            invalid[field] = bad
+            protected["drm"] = invalid
+            protectedData = try JSONSerialization.data(withJSONObject: protected)
+            requests = []
+            do { _ = try await client.tune(channelID: "sports-1"); preconditionFailure("Invalid FairPlay descriptor accepted: \(field)") }
+            catch LiveTVError.invalidResponse {}
+            expect(requests.last?.httpMethod == "DELETE", "Rejected DRM descriptor leaked its viewer lease")
+        }
+        protected["drm"] = ["scheme": "fairplay"]
+        protectedData = try JSONSerialization.data(withJSONObject: protected)
+        requests = []
+        do { _ = try await client.tune(channelID: "sports-1"); preconditionFailure("Incomplete DRM descriptor accepted") }
+        catch LiveTVError.invalidResponse {}
+        expect(requests.last?.httpMethod == "DELETE", "Undecodable DRM descriptor leaked its viewer lease")
+
+        let encodedKey = LiveFairPlayKey(identifier: "skd://velvet/key-123?ContentId=abc%2Fdef%3D")!
+        expect(encodedKey.reference == "key-123", "Key reference changed")
+        expect(encodedKey.contentIdentifier == Data("abc%2Fdef%3D".utf8), "ContentId was percent-decoded")
+        expect(LiveFairPlayKey(identifier: "skd://velvet/k?contentid=A")?.contentIdentifier == Data("  A".utf8), "Short ID padding differs from Spectrum")
+        for invalid in ["skd://other/k?ContentId=ab", "https://velvet/k?ContentId=ab", "skd://velvet/../k?ContentId=ab",
+                        "skd://velvet/%2e%2e?ContentId=ab", "skd://velvet/k?ContentId=", "skd://velvet/k?Other=ab",
+                        "skd://velvet/k?ContentId=ab&ContentId=cd", "skd://velvet/k?ContentId=ab#fragment",
+                        "skd://velvet/k?ContentId=" + String(repeating: "x", count: 201)] {
+            expect(LiveFairPlayKey(identifier: invalid) == nil, "Malformed FairPlay key identifier accepted")
+        }
+
+        let transport = LiveFairPlayTransport(configuration: fairPlay, connection: original,
+                                              session: URLSession(configuration: config))
+        let certificate = Data([0x30, 0x03, 0x01, 0x02, 0x03])
+        let spc = Data([0, 255, 1, 128, 2, 3])
+        let ckc = Data([255, 0, 128, 4, 5])
+        LiveMockProtocol.handler = { request in
+            expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer private", "License exchange lost its owning backend credential")
+            if request.httpMethod == "GET" {
+                expect(request.url == fairPlay.certificateURL, "Certificate requested from wrong endpoint")
+                return (200, certificate)
+            }
+            expect(request.url?.path == "/live/drm/lease-1" && request.url?.query == "key=key-123", "License proxy did not receive only its key reference")
+            expect(request.value(forHTTPHeaderField: "Content-Type") == "application/octet-stream", "SPC content type is wrong")
+            var sent = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 128)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    sent.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            expect(sent == spc, "Opaque SPC was encoded or modified")
+            return (200, ckc)
+        }
+        let fetchedCertificate = try await transport.certificate()
+        expect(fetchedCertificate == certificate, "DER certificate bytes changed")
+        let fetchedLicense = try await transport.license(spc: spc, keyReference: encodedKey.reference)
+        expect(fetchedLicense == ckc, "Opaque binary CKC was decoded or modified")
+        LiveMockProtocol.handler = { _ in (403, Data("private upstream credentials".utf8)) }
+        do { _ = try await transport.license(spc: spc, keyReference: "key-123"); preconditionFailure("Denied license accepted") }
+        catch let error as LiveTVError {
+            expect(!error.localizedDescription.contains("private upstream"), "License error leaked upstream details")
+            expect(!error.canRetryAutomatically, "License denial should not loop")
+        }
+        transport.cancel()
+        print("Live TV checks passed: legacy HLS, native FairPlay contract/raw exchange, private endpoint validation, lease cleanup, and bounded stale-safe lifecycle.")
     }
 }

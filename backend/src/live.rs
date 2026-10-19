@@ -10,6 +10,9 @@ use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 
 use crate::config::LiveTv;
 
+#[path = "live_native.rs"]
+mod native;
+
 const IDLE: Duration = Duration::from_secs(120);
 const CACHE_AGE: Duration = Duration::from_secs(60);
 const MAX_SESSIONS: usize = 32;
@@ -45,7 +48,7 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Channel {
     id: String,
@@ -59,10 +62,10 @@ struct Entry { channel: Channel, url: Url }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Lineup { enabled: bool, source_name: String, channels: Vec<Channel>, message: Option<String> }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Tune { channel_id: String, client: Option<NativeClient> }
-#[derive(Clone, Copy, Deserialize)]
+struct Tune { channel_id: String, #[serde(skip_serializing_if = "Option::is_none")] client: Option<NativeClient> }
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum NativeClient { Roku }
 #[derive(Serialize)]
@@ -151,6 +154,7 @@ struct LiveState {
     cache: AsyncMutex<LineupCache>, sessions: Mutex<Sessions>, requests: Arc<Semaphore>, guide: Arc<crate::epg::GuideService>,
     roku: Option<crate::roku_live::RokuLive>,
     direct: Option<DirectTve>,
+    native: Option<native::NativeSpectrum>,
 }
 
 pub fn router(cfg: LiveTv, token: String) -> anyhow::Result<Router> {
@@ -182,6 +186,7 @@ pub(crate) fn router_with_roku_bridge(cfg: LiveTv, token: String, source_base: S
     build_router(cfg,token,Some(crate::roku_live::RokuLive::new(source_base)?))
 }
 fn build_router(cfg: LiveTv, token: String, roku: Option<crate::roku_live::RokuLive>) -> anyhow::Result<(Router, NativeBridge)> {
+    let native = cfg.native_spectrum_url.as_deref().map(native::NativeSpectrum::new).transpose()?;
     let origin = configured_origin(&cfg.upstream_url).map_err(|_| anyhow::anyhow!("invalid live_tv.upstream_url: expected HTTP(S) origin without credentials or path"))?;
     let lineup_url = scoped_url(&origin, &origin, &cfg.lineup_path, "/playlist", true)
         .map_err(|_| anyhow::anyhow!("invalid live_tv.lineup_path: expected /playlist with optional query"))?;
@@ -194,7 +199,7 @@ fn build_router(cfg: LiveTv, token: String, roku: Option<crate::roku_live::RokuL
         .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(60)).build()?;
     let guide_service = crate::epg::GuideService::new(cfg.enabled && cfg.guide_enabled);
-    let state = Arc::new(LiveState { cfg, token, origin, lineup_url, http, guide: guide_service, roku, direct,
+    let state = Arc::new(LiveState { cfg, token, origin, lineup_url, http, guide: guide_service, roku, direct, native,
         cache: AsyncMutex::new(LineupCache::default()), sessions: Mutex::new(Sessions::default()),
         requests: Arc::new(Semaphore::new(64)) });
     let weak = Arc::downgrade(&state);
@@ -210,7 +215,9 @@ fn build_router(cfg: LiveTv, token: String, roku: Option<crate::roku_live::RokuL
         .route("/live/guide", get(guide)).route("/live/tune", post(tune)).route("/live/sessions/:id", delete(end_session))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     let bridge = NativeBridge(state.clone());
-    Ok((protected.route("/live/streams/:id/:resource", get(playback)).with_state(state), bridge))
+    Ok((protected.route("/live/streams/:id/:resource", get(playback))
+        .route("/live/drm/:id", post(native::license))
+        .route("/live/cert/:id", get(native::certificate)).with_state(state), bridge))
 }
 async fn auth(State(state): State<Arc<LiveState>>, request: Request, next: Next) -> Response {
     let authorized = state.token.is_empty() || request.headers().get(header::AUTHORIZATION)
@@ -223,14 +230,19 @@ async fn channels(State(state): State<Arc<LiveState>>) -> Response {
         return no_store(Json(Lineup { enabled: false, source_name: state.cfg.source_name.clone(), channels: vec![],
             message: Some("Live TV is not configured yet".into()) }).into_response());
     }
-    let (entries, message) = load_lineup(&state).await;
+    let (channels, message) = load_channels(&state).await;
     no_store(Json(Lineup { enabled: true, source_name: state.cfg.source_name.clone(),
-        channels: entries.into_iter().map(|entry| entry.channel).collect(), message }).into_response())
+        channels, message }).into_response())
 }
 async fn guide(State(state): State<Arc<LiveState>>) -> Response {
-    let entries = if state.cfg.enabled { load_lineup(&state).await.0 } else { vec![] };
-    let channels: Vec<_> = entries.into_iter().map(|entry| (entry.channel.id, entry.channel.name)).collect();
+    let entries = if state.cfg.enabled { load_channels(&state).await.0 } else { vec![] };
+    let channels: Vec<_> = entries.into_iter().map(|channel| (channel.id, channel.name)).collect();
     no_store(Json(state.guide.snapshot(&state.cfg.source_name, &channels)).into_response())
+}
+async fn load_channels(state: &LiveState) -> (Vec<Channel>, Option<String>) {
+    if let Some(native) = &state.native { return native.channels().await; }
+    let (entries, message) = load_lineup(state).await;
+    (entries.into_iter().map(|entry| entry.channel).collect(), message)
 }
 async fn load_lineup(state: &LiveState) -> (Vec<Entry>, Option<String>) {
     let mut cache = state.cache.lock().await;
@@ -424,9 +436,10 @@ async fn probe_direct(state: &LiveState, candidate: &DirectChannel) -> Result<()
     }
     Ok(())
 }
-async fn tune(State(state): State<Arc<LiveState>>, Json(request): Json<Tune>) -> Result<Response> {
+async fn tune(State(state): State<Arc<LiveState>>, headers: HeaderMap, Json(request): Json<Tune>) -> Result<Response> {
     if !state.cfg.enabled { return Err(LiveError(StatusCode::SERVICE_UNAVAILABLE, "Live TV is not configured yet")); }
     if !safe_name(&request.channel_id) { return Err(LiveError(StatusCode::BAD_REQUEST, "Invalid channel")); }
+    if let Some(native) = &state.native { return native.tune(&state, &request, &headers).await; }
     let (entries, _) = load_lineup(&state).await;
     let entry = entries.iter().find(|entry| entry.channel.id == request.channel_id)
         .ok_or(LiveError(StatusCode::NOT_FOUND, "Channel unavailable; refresh the channel list"))?;
@@ -489,9 +502,23 @@ async fn adapt_session_with_limit(state: &LiveState, id: &str, client: Option<Na
     if result.is_err() { state.sessions.lock().unwrap().remove(id); }
     result
 }
-async fn end_session(State(state): State<Arc<LiveState>>, Path(id): Path<String>) -> Response {
-    state.sessions.lock().unwrap().remove(&id);
-    no_store(StatusCode::NO_CONTENT.into_response())
+async fn end_session(State(state): State<Arc<LiveState>>, Path(id): Path<String>, query: axum::extract::RawQuery) -> Result<Response> {
+    let legacy = {
+        let mut sessions = state.sessions.lock().unwrap();
+        let present = sessions.items.contains_key(&id);
+        if present { sessions.remove(&id); }
+        present
+    };
+    if !legacy && state.cfg.enabled {
+        if let Some(native) = &state.native {
+            if query.0.is_some() { return Err(expired()); }
+            // Native deletion performs I/O. Invalid-descriptor cleanup already
+            // owns its tune permit and calls native.end directly.
+            let _permit = state.requests.try_acquire().map_err(|_| LiveError(StatusCode::SERVICE_UNAVAILABLE, "Live source busy; retry shortly"))?;
+            return native.end(&id).await;
+        }
+    }
+    Ok(no_store(StatusCode::NO_CONTENT.into_response()))
 }
 async fn read_text(mut response: reqwest::Response, limit: usize) -> Result<String> {
     if response.content_length().is_some_and(|length| length > limit as u64) { return Err(invalid()); }
@@ -502,7 +529,15 @@ async fn read_text(mut response: reqwest::Response, limit: usize) -> Result<Stri
     }
     String::from_utf8(bytes).map_err(|_| invalid())
 }
-async fn playback(State(state): State<Arc<LiveState>>, Path((id, key)): Path<(String, String)>, headers: HeaderMap) -> Result<Response> {
+async fn playback(State(state): State<Arc<LiveState>>, Path((id, key)): Path<(String, String)>, query: axum::extract::RawQuery, headers: HeaderMap) -> Result<Response> {
+    let legacy = {
+        let mut sessions = state.sessions.lock().unwrap();
+        sessions.reap(Instant::now());
+        sessions.items.contains_key(&id)
+    };
+    if !legacy && state.cfg.enabled {
+        if let Some(native) = &state.native { return native.playback(&state, &id, &key, query.0.as_deref(), &headers).await; }
+    }
     let result = playback_inner(&state, &id, &key, headers).await;
     // Clients already retune on live playback failure. The next tune falls back
     // instead of repeatedly selecting a broken direct provider. Never splice two

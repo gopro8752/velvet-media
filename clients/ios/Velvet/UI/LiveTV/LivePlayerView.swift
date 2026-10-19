@@ -30,7 +30,11 @@ struct LivePlayerView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let engine = vm.engine {
+            if let engine = vm.fairPlayEngine {
+                FairPlayLiveVideoSurface(engine: engine)
+                    .id(ObjectIdentifier(engine))
+                    .ignoresSafeArea()
+            } else if let engine = vm.engine {
                 PlayerVideoSurface(engine: engine)
                     .id(ObjectIdentifier(engine))
                     .ignoresSafeArea()

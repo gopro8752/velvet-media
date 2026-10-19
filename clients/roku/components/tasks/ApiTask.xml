@@ -5,5 +5,6 @@
     <field id="result" type="assocarray" alwaysNotify="true" />
   </interface>
   <script type="text/brightscript" uri="pkg:/source/VelvetUtils.brs" />
+  <script type="text/brightscript" uri="pkg:/source/LivePlaybackPolicy.brs" />
   <script type="text/brightscript" uri="ApiTask.brs" />
 </component>

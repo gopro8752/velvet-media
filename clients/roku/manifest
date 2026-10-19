@@ -1,8 +1,8 @@
 title=Velvet
 subtitle=Your entertainment, together
 major_version=0
-minor_version=3
-build_version=1
+minor_version=4
+build_version=0
 mm_icon_focus_hd=pkg:/images/icon-hd.png
 mm_icon_focus_sd=pkg:/images/icon-sd.png
 splash_screen_fhd=pkg:/images/splash-fhd.png
@@ -12,3 +12,5 @@ splash_color=#090B12
 splash_min_time=0
 ui_resolutions=fhd
 supports_input_launch=1
+requires_widevine_drm=1
+requires_widevine_version=1.0

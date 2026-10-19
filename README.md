@@ -87,6 +87,8 @@ Live TV and Live Sports are separate optional sections. A configured channel bri
 
 For supported FOX-family channels, the optional [direct TV Everywhere adapter](backend/tve/README.md) relays authenticated network feeds without browser capture or a Channels DVR subscription. It uses your existing TV-provider entitlement and keeps the Spectrum bridge available for other channels and playback fallback.
 
+The experimental [native Spectrum service](tve/spectrum/README.md) instead supplies the account's current lineup and encrypted streams directly to Widevine/FairPlay players. It requires updated clients and a privately provisioned Spectrum session. When enabled, Live TV no longer uses browser capture; Spectrum's access and device-protection requirements still apply.
+
 ### Understand your server
 
 The private admin portal brings viewing activity and server capacity together:

@@ -51,6 +51,8 @@ pub struct LiveTv {
     pub guide_enabled: bool,
     /// Optional private EPlusTV origin. Spectrum remains the lineup and fallback.
     pub direct_tve_url: Option<String>,
+    /// Optional private native Spectrum sidecar. Replaces Live TV capture when configured.
+    pub native_spectrum_url: Option<String>,
 }
 
 impl Default for LiveTv {
@@ -62,6 +64,7 @@ impl Default for LiveTv {
             lineup_path: "/playlist?service=spectrum".into(),
             guide_enabled: false,
             direct_tve_url: None,
+            native_spectrum_url: None,
         }
     }
 }
@@ -162,6 +165,7 @@ mod tests {
         assert!(cfg.indexers.iter().all(|i| i.api_key.is_empty()));
         assert!(!cfg.category_ai.enabled && !cfg.live_tv.enabled && !cfg.live_sports.enabled);
         assert!(cfg.live_tv.direct_tve_url.is_none());
+        assert!(cfg.live_tv.native_spectrum_url.is_none());
         assert_eq!(cfg.public_base_url.as_deref(), Some("https://velvet.example.com"));
     }
 

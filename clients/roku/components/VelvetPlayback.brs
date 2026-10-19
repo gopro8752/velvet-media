@@ -146,13 +146,15 @@ sub handlePlaybackResponse(kind as string, data as object, context as dynamic)
         m.formatRetry = false
         playCurrentStream()
     else if kind = "liveTune"
-        url = VBackendMediaUrl(m.baseUrl, VStr(VGet(data, "playbackPath")))
-        if url = ""
+        live = VLivePlaybackDescriptor(m.baseUrl, data, VStr(VGet(m.playChannel, "id")))
+        if live = invalid
+            rejectedSession = VLiveSessionId(VGet(data, "sessionId"))
+            if rejectedSession <> "" then requestApi("liveStop", "/live/sessions/" + VEncode(rejectedSession), "DELETE")
             playbackFailure("The live channel did not return a valid playback address.")
             return
         end if
-        m.liveSession = VStr(VGet(data, "sessionId"))
-        m.streams = [{url: url, name: m.playItem.title, behaviorHints: {filename: "live.m3u8"}}]
+        m.liveSession = live.sessionId
+        m.streams = [{url: live.url, name: m.playItem.title, liveFormat: live.streamFormat, drmParams: live.drmParams}]
         m.sourceIndex = 0
         playCurrentStream()
     else if kind = "nextSeason"
@@ -236,13 +238,20 @@ sub playNativeStream(url as string, forcedFormat as string, startPosition as int
     if m.formatRetry
         if content.streamFormat = "mp4" then content.streamFormat = "mkv" else content.streamFormat = "mp4"
     end if
-    if m.isLive then content.streamFormat = "hls"
+    if m.isLive then content.streamFormat = VStr(VGet(stream, "liveFormat"), "hls")
     if forcedFormat <> "" then content.streamFormat = forcedFormat
     content.playStart = startPosition
     content.HttpCertificatesFile = "common:/certs/ca-bundle.crt"
     headers = []
-    if m.token <> "" then headers.Push("Authorization:Bearer " + m.token)
+    if m.token <> "" and not m.isLive then headers.Push("Authorization:Bearer " + m.token)
     content.HttpHeaders = headers
+    ' A fresh DRM HTTP agent prevents provider/session headers carrying into a
+    ' different title. The CDM posts its opaque challenge to the validated relay.
+    drmAgent = CreateObject("roHttpAgent")
+    drmAgent.SetCertificatesFile("common:/certs/ca-bundle.crt")
+    drmAgent.AddHeader("Content-Type", "application/octet-stream")
+    m.video.drmHttpAgent = drmAgent
+    if m.isLive and VGet(stream, "drmParams") <> invalid then content.drmParams = stream.drmParams
     m.acceptPlayerTracks = false
     retainedPause = m.rokuAudioPaused
     retainedReplay = m.replayState

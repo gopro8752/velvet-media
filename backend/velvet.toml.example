@@ -44,6 +44,10 @@ guide_enabled = false
 # full lineup, guide identity, and fallback. Leave unset until authenticated and
 # tested. Provider logins belong in the bridge's private runtime storage.
 # direct_tve_url = "http://velvet-tve:8000"
+# Optional native Spectrum service: full account lineup with device DRM.
+# When set, Live TV never falls back to browser capture. Update every client
+# before enabling. upstream_url still serves the separate Roku sports bridge.
+# native_spectrum_url = "http://velvet-spectrum:8812"
 
 # Optional external event discovery/embed adapter; no channels are bundled.
 [live_sports]

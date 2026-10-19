@@ -7,6 +7,7 @@
   <script type="text/brightscript" uri="pkg:/source/PlayerOptionsPolicy.brs" />
   <script type="text/brightscript" uri="pkg:/source/PreferencesPolicy.brs" />
   <script type="text/brightscript" uri="pkg:/source/LiveGuidePolicy.brs" />
+  <script type="text/brightscript" uri="pkg:/source/LivePlaybackPolicy.brs" />
   <script type="text/brightscript" uri="VelvetPreferencesController.brs" />
   <script type="text/brightscript" uri="VelvetLiveController.brs" />
   <script type="text/brightscript" uri="VelvetSportsController.brs" />

@@ -32,12 +32,18 @@ data class LiveCatalog(val enabled: Boolean = false, val sourceName: String = "L
 
 @Serializable private data class TuneRequest(val channelId: String)
 @Serializable internal data class TuneResponse(val sessionId: String, val playbackPath: String,
-    val mimeType: String, val channel: LiveChannel, val canPause: Boolean = false, val canSeek: Boolean = false)
+    val mimeType: String, val channel: LiveChannel, val canPause: Boolean = false, val canSeek: Boolean = false,
+    val drm: LiveDrmResponse? = null)
+@Serializable internal data class LiveDrmResponse(val scheme: String, val licensePath: String, val multiSession: Boolean = false)
 @Serializable private data class LiveError(val error: String = "Live TV is unavailable. Try again.")
 
 /** Session credentials are kept in memory and never appear in a navigation URL or watch history. */
 class LiveSession(val id: String, val channel: LiveChannel, val playbackUrl: String,
-    val mimeType: String, internal val releaseUrl: String, internal val bearer: String?)
+    val mimeType: String, internal val releaseUrl: String, internal val bearer: String?,
+    val drm: LiveWidevine? = null)
+
+/** Device CDM handles the keys. This is only an expiring backend license capability. */
+class LiveWidevine internal constructor(val licenseUrl: String, val multiSession: Boolean)
 
 interface LiveService {
     suspend fun tune(channelId: String): LiveSession
@@ -55,10 +61,24 @@ class LiveReconnectBudget {
 
 /** Media3 treats an explicit Apple HLS MIME alias as progressive; normalize the validated wire format. */
 internal fun livePlayerMimeType(wireMimeType: String): String {
-    require(wireMimeType == "application/vnd.apple.mpegurl" || wireMimeType == MimeTypes.APPLICATION_M3U8) {
-        "This live stream format isn't supported."
+    return when (wireMimeType) {
+        "application/vnd.apple.mpegurl", MimeTypes.APPLICATION_M3U8 -> MimeTypes.APPLICATION_M3U8
+        MimeTypes.APPLICATION_MPD -> MimeTypes.APPLICATION_MPD
+        else -> throw IllegalArgumentException("This live stream format isn't supported.")
     }
-    return MimeTypes.APPLICATION_M3U8
+}
+
+internal fun liveWidevine(base: HttpUrl, drm: LiveDrmResponse?, sessionId: String, playbackPath: String): LiveWidevine? {
+    if (drm == null) return null
+    require(drm.scheme == "widevine") { "This live protection format isn't supported on this device." }
+    // A license URI embedded in provider metadata must never override this
+    // same-origin, session-scoped relay or receive the backend's bearer token.
+    require(Regex("^[a-f0-9]{48}$").matches(sessionId) && drm.licensePath == "/live/drm/$sessionId") { "Invalid live license address." }
+    require(Regex("^/live/streams/$sessionId/[A-Za-z0-9_-]+\\.(m3u8|mpd)$").matches(playbackPath)) { "Invalid protected live playback address." }
+    val url = base.resolve(drm.licensePath) ?: error("Invalid live license address.")
+    require(url.scheme == base.scheme && url.host == base.host && url.port == base.port &&
+        url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null) { "Invalid live license address." }
+    return LiveWidevine(url.toString(), drm.multiSession)
 }
 
 internal fun livePlaybackUrl(base: HttpUrl, path: String): HttpUrl {
@@ -122,6 +142,10 @@ class LiveRepository(private val settings: SettingsRepository, client: OkHttpCli
     override suspend fun tune(channelId: String): LiveSession = withContext(Dispatchers.IO) {
         val (base, token) = endpoint()
         val request = Request.Builder().url(base.toString().trimEnd('/') + "/live/tune").authenticated(token)
+            // Headers keep older backends compatible: their existing tune body
+            // denies unknown fields, while unrecognized headers are harmless.
+            .header("X-Velvet-Client", "android")
+            .header("X-Velvet-Playback-Capabilities", "hls-clear,dash-widevine,hls-fmp4-widevine")
             .post(json.encodeToString(TuneRequest.serializer(), TuneRequest(channelId)).toRequestBody("application/json".toMediaType())).build()
         client.await(request).use { response ->
             val body = response.body?.string().orEmpty()
@@ -133,7 +157,7 @@ class LiveRepository(private val settings: SettingsRepository, client: OkHttpCli
             try {
                 val playerMimeType = livePlayerMimeType(tuned.mimeType)
                 LiveSession(session.id, session.channel, livePlaybackUrl(base, tuned.playbackPath).toString(),
-                    playerMimeType, session.releaseUrl, token)
+                    playerMimeType, session.releaseUrl, token, liveWidevine(base, tuned.drm, tuned.sessionId, tuned.playbackPath))
             } catch (error: Exception) { runCatching { release(session) }; throw error }
         }
     }

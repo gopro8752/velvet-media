@@ -15,8 +15,8 @@ android {
         applicationId = "tv.velvet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 28
-        versionName = "1.10.8"
+        versionCode = 29
+        versionName = "1.11.0"
     }
 
     // Keep supported TV architectures without shipping every browser binary to each device.
@@ -69,6 +69,7 @@ dependencies {
     implementation(libs.navigation.compose)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui)
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.coil.compose)

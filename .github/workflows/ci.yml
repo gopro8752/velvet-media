@@ -44,5 +44,7 @@ jobs:
           node-version: '22'
       - run: node --test clients/android/tests/sports-startup.test.cjs
       - run: node --test clients/ios/Tests/sports-playback-startup.test.mjs
+      - run: npm test
+        working-directory: tve/spectrum
       - run: npm ci && npm test && npm run build
         working-directory: clients/roku

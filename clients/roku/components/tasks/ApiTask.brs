@@ -13,6 +13,10 @@ sub runRequest()
     transfer.RetainBodyOnError(true)
     transfer.SetUrl(request.baseUrl + request.path)
     transfer.AddHeader("Accept", "application/json")
+    capabilities = VLiveRequestHeaders(request.path)
+    for each name in capabilities
+        transfer.AddHeader(name, capabilities[name])
+    end for
     token = VStr(VGet(request, "token"))
     if token <> "" then transfer.AddHeader("Authorization", "Bearer " + token)
     method = VStr(VGet(request, "method", "GET"))

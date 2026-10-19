@@ -59,6 +59,8 @@ class LiveTest {
         assertEquals(news.id, response.channel.id)
         assertFalse(response.canPause)
         assertFalse(response.canSeek)
+        assertNull(response.drm)
+        assertNull(liveWidevine("https://velvet.example.net".toHttpUrl(), response.drm, response.sessionId, response.playbackPath))
     }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -73,6 +75,54 @@ class LiveTest {
             assertEquals(C.CONTENT_TYPE_HLS, Util.inferContentTypeForUriAndMimeType(Uri.EMPTY, livePlayerMimeType(wireMime)))
         }
         assertThrows(IllegalArgumentException::class.java) { livePlayerMimeType("video/mp4") }
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    @Test fun protectedDashUsesOnlyTheBackendsExpiringWidevineLicenseRelay() {
+        val response = Json.decodeFromString(TuneResponse.serializer(), """{
+            "sessionId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "playbackPath":"/live/streams/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest.mpd",
+            "mimeType":"application/dash+xml", "channel":{"id":"station:news","name":"Local News"},
+            "drm":{"scheme":"widevine","licensePath":"/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","multiSession":true}
+        }""")
+        val base = "https://velvet.example.net:8443".toHttpUrl()
+        assertEquals(C.CONTENT_TYPE_DASH, Util.inferContentTypeForUriAndMimeType(Uri.EMPTY, livePlayerMimeType(response.mimeType)))
+        assertEquals("https://velvet.example.net:8443/live/streams/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest.mpd", livePlaybackUrl(base, response.playbackPath).toString())
+        val drm = liveWidevine(base, response.drm, response.sessionId, response.playbackPath)!!
+        assertEquals("https://velvet.example.net:8443/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", drm.licenseUrl)
+        assertTrue(drm.multiSession)
+        val defaultRotation = Json.decodeFromString(LiveDrmResponse.serializer(), """{"scheme":"widevine","licensePath":"/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}""")
+        assertFalse(liveWidevine(base, defaultRotation, response.sessionId, response.playbackPath)!!.multiSession)
+    }
+
+    @Test fun licenseDescriptorsCannotSendDeviceChallengesToForeignOrUnscopedEndpoints() {
+        val base = "https://velvet.example.net".toHttpUrl()
+        for (path in listOf("https://provider.example/license", "//provider.example/license", "/admin", "/live/drm/short",
+            "/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?token=secret", "/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#fragment", "/live/drm/../1234567890abcdef",
+            "/live/drm/%2e%2e%2f1234567890abcdef", "/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/extra", "/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\extra",
+            "/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ", "/live/drm/" + "a".repeat(257))) {
+            assertThrows("Reject $path", IllegalArgumentException::class.java) { liveWidevine(base, LiveDrmResponse("widevine", path), "a".repeat(48), "/live/streams/" + "a".repeat(48) + "/manifest.mpd") }
+        }
+        for (scheme in listOf("fairplay", "playready", "clearkey", "", "WIDEVINE")) {
+            assertThrows(IllegalArgumentException::class.java) { liveWidevine(base, LiveDrmResponse(scheme, "/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "a".repeat(48), "/live/streams/" + "a".repeat(48) + "/manifest.mpd") }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            liveWidevine("https://user:password@velvet.example.net".toHttpUrl(), LiveDrmResponse("widevine", "/live/drm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "a".repeat(48), "/live/streams/" + "a".repeat(48) + "/manifest.mpd")
+        }
+    }
+
+    @Test fun protectedMediaAndLicenseCannotBorrowAnotherSessionsCapabilities() {
+        val base = "https://velvet.example.net".toHttpUrl()
+        val session = "a".repeat(48)
+        val other = "b".repeat(48)
+        val drm = LiveDrmResponse("widevine", "/live/drm/$session")
+        for (path in listOf("/live/streams/$other/manifest.mpd", "/live/streams/$session/../$other/manifest.mpd",
+            "/live/streams/$session/manifest.mpd?session=$other", "/live/streams/$session/%2e%2e/manifest.mpd")) {
+            assertThrows(IllegalArgumentException::class.java) { liveWidevine(base, drm, session, path) }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            liveWidevine(base, drm.copy(licensePath = "/live/drm/$other"), session, "/live/streams/$session/manifest.mpd")
+        }
+        assertNotNull(liveWidevine(base, drm, session, "/live/streams/$session/index.m3u8"))
     }
 
     @Test fun reconnectsAreBoundedUntilPlaybackIsHealthyOrUserRetries() {

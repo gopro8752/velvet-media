@@ -13,6 +13,7 @@ final class LivePlayerViewModel: ObservableObject {
     @Published private(set) var phase = LivePlayerPhase.loading
     @Published private(set) var message = "Connecting to live TV…"
     @Published private(set) var engine: PlayerEngine?
+    @Published private(set) var fairPlayEngine: FairPlayLiveEngine?
     @Published private(set) var buffering = false
     @Published private(set) var audioOptions: [TrackOption] = []
     @Published private(set) var subtitleOptions: [TrackOption] = []
@@ -63,8 +64,8 @@ final class LivePlayerViewModel: ObservableObject {
                 guard let self else { return .init(state: "ended") }
                 let status = self.phase == .suspended ? "paused" : self.phase == .failed ? "error" :
                     self.phase == .loading || self.buffering ? "buffering" :
-                    self.engine?.isPlayingNow == true ? "playing" : "paused"
-                return .init(state: status, positionMs: self.engine?.positionMs ?? 0)
+                    self.isPlayingNow ? "playing" : "paused"
+                return .init(state: status, positionMs: self.positionMs)
             }
         }
         guard let generation = lifecycle.start() else { return }
@@ -104,12 +105,16 @@ final class LivePlayerViewModel: ObservableObject {
     private func install(_ session: LiveSession, generation: UUID) {
         liveSession = session
         channel = session.channel
-        let player = PlayerEngine()
-        engine = player
         openedAt = Date()
         lastProgressAt = openedAt
         previousPosition = nil
         healthySince = nil
+        if let configuration = session.fairPlay {
+            installFairPlay(session, configuration: configuration, generation: generation)
+            return
+        }
+        let player = PlayerEngine()
+        engine = player
         player.onStateChanged = { [weak self, weak player] state in
             guard let self, let player, self.engine === player,
                   self.lifecycle.accepts(generation) else { return }
@@ -132,17 +137,59 @@ final class LivePlayerViewModel: ObservableObject {
         player.onTimeChanged = { [weak self, weak player] in
             guard let self, let player, self.engine === player,
                   self.lifecycle.accepts(generation) else { return }
-            let position = player.positionMs
-            if self.previousPosition.map({ abs(position - $0) >= 100 }) ?? (position > 0) {
-                self.lastProgressAt = Date()
-                self.buffering = false
-                if self.healthySince == nil { self.healthySince = self.lastProgressAt }
-            }
-            self.previousPosition = position
+            self.observeProgress(player.positionMs)
         }
         player.setMedia(url: session.playbackURL, headers: [:], hardwareDecoding: hardwareDecoding)
         player.play()
         startWatchdog(generation)
+    }
+
+    private var isPlayingNow: Bool { fairPlayEngine?.isPlayingNow ?? engine?.isPlayingNow ?? false }
+    private var positionMs: Int64 { fairPlayEngine?.positionMs ?? engine?.positionMs ?? 0 }
+
+    private func installFairPlay(_ session: LiveSession, configuration: LiveFairPlayConfiguration, generation: UUID) {
+        let player: FairPlayLiveEngine
+        do { player = try FairPlayLiveEngine(session: session, configuration: configuration) }
+        catch {
+            handleFailure(error.localizedDescription, generation: generation, retryable: false)
+            return
+        }
+        fairPlayEngine = player
+        player.onStateChanged = { [weak self, weak player] state in
+            guard let self, let player, self.fairPlayEngine === player, self.lifecycle.accepts(generation) else { return }
+            switch state {
+            case .playing:
+                self.phase = .playing
+                self.buffering = false
+                self.refreshTracks()
+            case .buffering:
+                self.buffering = true
+            }
+            self.telemetry?.observe()
+        }
+        player.onTimeChanged = { [weak self, weak player] in
+            guard let self, let player, self.fairPlayEngine === player, self.lifecycle.accepts(generation) else { return }
+            self.observeProgress(player.positionMs)
+        }
+        player.onTracksChanged = { [weak self, weak player] in
+            guard let self, let player, self.fairPlayEngine === player, self.lifecycle.accepts(generation) else { return }
+            self.refreshTracks()
+        }
+        player.onFailure = { [weak self, weak player] retryable in
+            guard let self, let player, self.fairPlayEngine === player, self.lifecycle.accepts(generation) else { return }
+            self.handleFailure("The protected live channel could not continue playback.", generation: generation, retryable: retryable)
+        }
+        player.play()
+        startWatchdog(generation)
+    }
+
+    private func observeProgress(_ position: Int64) {
+        if previousPosition.map({ abs(position - $0) >= 100 }) ?? (position > 0) {
+            lastProgressAt = Date()
+            buffering = false
+            if healthySince == nil { healthySince = lastProgressAt }
+        }
+        previousPosition = position
     }
 
     private func startWatchdog(_ generation: UUID) {
@@ -219,6 +266,8 @@ final class LivePlayerViewModel: ObservableObject {
         watchdog = nil
         engine?.teardown()
         engine = nil
+        fairPlayEngine?.teardown()
+        fairPlayEngine = nil
         buffering = false
         audioOptions = []
         subtitleOptions = []
@@ -234,6 +283,11 @@ final class LivePlayerViewModel: ObservableObject {
     }
 
     private func refreshTracks() {
+        if let fairPlayEngine {
+            audioOptions = fairPlayEngine.audioOptions
+            subtitleOptions = fairPlayEngine.subtitleOptions
+            return
+        }
         guard let engine else { return }
         audioOptions = engine.audioTracks.map {
             TrackOption(index: $0.id, label: $0.name, selected: $0.id == engine.currentAudioTrackId)
@@ -247,11 +301,13 @@ final class LivePlayerViewModel: ObservableObject {
     }
 
     func selectAudio(_ option: TrackOption) {
+        fairPlayEngine?.selectAudio(option.index)
         engine?.selectAudioTrack(id: option.index)
         refreshTracks()
     }
 
     func selectSubtitle(_ option: TrackOption) {
+        fairPlayEngine?.selectSubtitle(option.index)
         engine?.selectSubtitleTrack(id: option.index)
         refreshTracks()
     }
