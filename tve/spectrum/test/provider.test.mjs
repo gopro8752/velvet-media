@@ -142,6 +142,13 @@ test('catalog uses entitlementId, preserves reviewed aliases, filters access, de
   await f.provider.channels(true);assert.equal(f.calls.length,2);
 });
 
+test('provider relative artwork paths resolve against its public image CDN',async t=>{
+  const rows=[{entitlementId:'art',online:true,onlineEntitled:true,networkName:' Channel ',logoUri:'/logos/channel.png'},
+    {entitlementId:'missing',online:true,onlineEntitled:true,networkName:'Missing'}];
+  const f=await fixture(t,()=>reply(rows));const entries=await f.provider.channels();
+  assert.equal(entries[0].channel.logoUrl,'https://cdnimg.spectrum.net/logos/channel.png');
+  assert.equal(entries[0].channel.name,'Channel');assert.equal(entries[1].channel.logoUrl,null);
+});
 test('an alias cannot collide with another channel generated ID in either catalog order',async t=>{
   const rows=[{entitlementId:'A',online:true,onlineEntitled:true,networkName:'Fixture A'},
     {entitlementId:'B',online:true,onlineEntitled:true,networkName:'Fixture B'}];

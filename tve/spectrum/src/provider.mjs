@@ -74,9 +74,14 @@ export class SpectrumProvider {
         if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)||ids.has(id)) throw new BridgeError();
         ids.add(id);
         seen.add(service);
-        const name = String(alias?.name || entry.networkName || entry.callSign || 'Spectrum channel').slice(0,160);
+        const name = String(alias?.name || entry.networkName || entry.callSign || 'Spectrum channel').trim().slice(0,160);
         let logoUrl = null;
-        try { const u = new URL(entry.logoUri); if (u.protocol==='https:' && !u.username && !u.password) logoUrl=u.href; } catch {}
+        try {
+          if(typeof entry.logoUri==='string'&&entry.logoUri){
+            const u = new URL(entry.logoUri,'https://cdnimg.spectrum.net');
+            if(u.protocol==='https:'&&!u.username&&!u.password&&!u.hash)logoUrl=u.href;
+          }
+        } catch {}
         const numbers = Array.isArray(entry.channelNumbers) ? entry.channelNumbers : [];
         const number = numbers.find(n => typeof n==='string' || typeof n==='number');
         items.push({service,guideId:String(entry.tmsGuideId??''),channel:{id,name,number:number===undefined?null:String(number),logoUrl,group:'Spectrum'}});
