@@ -236,8 +236,14 @@ async fn channels(State(state): State<Arc<LiveState>>) -> Response {
 }
 async fn guide(State(state): State<Arc<LiveState>>) -> Response {
     let entries = if state.cfg.enabled { load_channels(&state).await.0 } else { vec![] };
-    let channels: Vec<_> = entries.into_iter().map(|channel| (channel.id, channel.name)).collect();
-    no_store(Json(state.guide.snapshot(&state.cfg.source_name, &channels)).into_response())
+    let channels: Vec<_> = entries.iter().map(|channel| (channel.id.clone(), channel.name.clone())).collect();
+    let mut guide = state.guide.snapshot(&state.cfg.source_name, &channels);
+    if state.cfg.enabled && state.cfg.guide_enabled {
+        if let Some(native) = &state.native {
+            if let Some(provider_guide) = native.guide(&entries).await { guide = guide.prefer_native(provider_guide); }
+        }
+    }
+    no_store(Json(guide).into_response())
 }
 async fn load_channels(state: &LiveState) -> (Vec<Channel>, Option<String>) {
     if let Some(native) = &state.native { return native.channels().await; }

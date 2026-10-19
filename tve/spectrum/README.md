@@ -39,7 +39,13 @@ guide_enabled = true
 # Keep your existing upstream_url if using Roku's separate sports bridge.
 ```
 
-The native service becomes the authoritative Live TV lineup and playback source. It does not silently fall back to PrismCast. The existing `upstream_url` remains available for the separate Roku sports browser path. Guide coverage continues to depend on the backend's station mappings; an included channel does not guarantee guide data or availability outside the account's home.
+The native service becomes the authoritative Live TV lineup and playback source. It does not silently fall back to PrismCast. The existing `upstream_url` remains available for the separate Roku sports browser path. An included channel does not guarantee availability outside the account's home.
+
+## Program guide
+
+The guide uses Spectrum's own 24-hour schedule, matched to exact station IDs from the signed-in channel lineup. It includes program times, descriptions, episode titles, artwork, genres, ratings and Live/New flags when provided. Reading the guide never opens a stream or uses a playback connection.
+
+Listings refresh at most every 15 minutes. Browsing serves cached listings while a refresh runs; temporary failures retain only programs that have not ended, with retries limited to once per minute. The backend's verified XMLTV mappings remain a fallback for entirely missing provider rows. Conflicting schedules are never combined, and channels without listings remain playable. Provider authentication stays private on the server; only normalized program metadata reaches clients.
 
 ## Session behavior
 

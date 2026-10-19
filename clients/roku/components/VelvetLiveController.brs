@@ -2,7 +2,8 @@
 sub initLiveBrowser()
     m.liveView = m.top.FindNode("liveView")
     m.liveView.ObserveField("action", "onLiveBrowserAction")
-    m.liveBrowser = {channels: [], guide: {}, query: "", loading: false, message: ""}
+    m.liveBrowser = {channels: [], guide: {}, query: "", loading: false, message: "", favoriteIds: [], favoritesOnly: false}
+    m.liveLastRefresh = 0
     m.livePending = 0
     m.liveBrowserTimer = CreateObject("roSGNode", "Timer")
     m.liveBrowserTimer.duration = 30
@@ -12,6 +13,10 @@ sub initLiveBrowser()
 end sub
 
 sub openLiveBrowser()
+    m.liveFavoriteKey = "liveFavorites:" + m.baseUrl + ":" + m.profileId
+    storedFavorites = m.registry.Read(m.liveFavoriteKey)
+    m.liveBrowser.favoriteIds = []
+    if storedFavorites <> "" then m.liveBrowser.favoriteIds = VGuideFavoriteIds(ParseJson(storedFavorites))
     m.livePending = 0
     m.view.visible = true
     m.liveView.visible = true
@@ -43,6 +48,7 @@ sub refreshLiveBrowser()
     m.liveBrowser.loading = true
     m.liveBrowser.message = ""
     m.livePending = 2
+    m.liveLastRefresh = VNowMs()
     publishLiveBrowser()
     requestApi("liveChannels", "/live/channels")
     requestApi("liveGuide", "/live/guide")
@@ -78,7 +84,11 @@ sub onLiveBrowserTick()
     if dialog <> invalid
         if not dialog.close then return
     end if
-    publishLiveBrowser()
+    if VNowMs() - m.liveLastRefresh >= 300000
+        refreshLiveBrowser()
+    else
+        publishLiveBrowser()
+    end if
 end sub
 
 sub onLiveBrowserAction(event as Object)
@@ -89,6 +99,21 @@ sub onLiveBrowserAction(event as Object)
         tuneChannel(VGet(action, "channel", {}))
     else if kind = "liveRefresh"
         refreshLiveBrowser()
+    else if kind = "liveFilter"
+        m.liveBrowser.favoritesOnly = VBool(VGet(action, "favoritesOnly"))
+        publishLiveBrowser()
+    else if kind = "liveFavorite"
+        id = VStr(VGet(action, "channelId"))
+        validChannel = false
+        for each channel in m.liveBrowser.channels
+            if VStr(VGet(channel, "id")) = id then validChannel = true
+        end for
+        if validChannel
+            m.liveBrowser.favoriteIds = VGuideToggleFavorite(m.liveBrowser.favoriteIds, id)
+            m.registry.Write(m.liveFavoriteKey, FormatJson(m.liveBrowser.favoriteIds))
+            m.registry.Flush()
+            publishLiveBrowser()
+        end if
     else if kind = "liveSearch"
         dialog = CreateObject("roSGNode", "StandardKeyboardDialog")
         dialog.title = "Search Live TV"

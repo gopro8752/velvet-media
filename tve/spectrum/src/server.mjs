@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {BridgeError,MESSAGES,boundedRequest,fetchCdn,cdnUrl} from './http.mjs';
 import {SpectrumProvider} from './provider.mjs';
 import {createMediaRegistry} from './manifest.mjs';
+import {createGuide} from './guide.mjs';
 
 const CAP = /^[a-f0-9]{48}$/;
 const IDLE = 120000;
@@ -33,6 +34,7 @@ export function validateConfig(input) {
 export function createBridge(input,{request=boundedRequest,provider,now=Date.now,log=()=>{}}={}) {
   const config=validateConfig(input);
   provider??=new SpectrumProvider(config,{request,now});
+  const guide=createGuide(provider,{now});
   const sessions=new Map(),pendingTunes=new Set(),cleanupJobs=new Set(),cleanupSessions=new Map();
   let opening=0,shuttingDown=false,certificate=null,certificateAt=0,certificateWork=null;
   const report=(event,error)=>log({event,code:error instanceof BridgeError?error.code:'source_unavailable'});
@@ -126,6 +128,7 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
   },15000);reaper.unref?.();
   return {
     async channels(){return {enabled:true,sourceName:config.sourceName,channels:(await provider.channels()).map(e=>e.channel),message:null};},
+    async guide(){return guide.snapshot(config.sourceName);},
     tune,
     async media(id,key,range){return resource(owned(id),key,range);},
     async license(id,key,body,signal){
@@ -177,6 +180,7 @@ export function createHttpServer(bridge,{allowedClients}={}) {
       const url=new URL(req.url,'http://localhost');let match;
       if(req.method==='GET'&&url.pathname==='/health'&&!url.search)return reply(200,'{"ok":true}');
       if(req.method==='GET'&&url.pathname==='/live/channels'&&!url.search)return reply(200,JSON.stringify(await bridge.channels()));
+      if(req.method==='GET'&&url.pathname==='/live/guide'&&!url.search)return reply(200,JSON.stringify(await bridge.guide()));
       if(req.method==='POST'&&url.pathname==='/live/tune'&&!url.search){
         let value;try{value=JSON.parse(await body(req,2048));}catch(error){if(error instanceof BridgeError)throw error;throw new BridgeError('invalid_request',400);}
         if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['channelId','client'].includes(k))||(value.client!==undefined&&value.client!=='roku'))throw new BridgeError('invalid_request',400);

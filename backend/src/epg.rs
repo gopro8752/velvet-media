@@ -32,7 +32,7 @@ struct Mapping {
 fn mappings() -> Vec<Mapping> {
     serde_json::from_str(include_str!("epg_mappings.json")).expect("reviewed XMLTV mapping")
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Program {
     pub id: String,
@@ -41,21 +41,50 @@ pub struct Program {
     pub end_time: String,
     pub description: Option<String>,
     pub episode_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating: Option<String>,
+    #[serde(default)]
+    pub is_live: bool,
+    #[serde(default)]
+    pub is_new: bool,
 }
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelGuide {
-    channel_id: String,
-    programs: Vec<Program>,
+    pub(crate) channel_id: String,
+    pub(crate) programs: Vec<Program>,
 }
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Guide {
-    enabled: bool,
-    source_name: String,
-    updated_at: Option<String>,
-    channels: Vec<ChannelGuide>,
-    message: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) source_name: String,
+    pub(crate) updated_at: Option<String>,
+    pub(crate) channels: Vec<ChannelGuide>,
+    pub(crate) message: Option<String>,
+}
+impl Guide {
+    /// Native station IDs are authoritative. Verified XMLTV fills only entirely
+    /// missing native rows; conflicting schedules are never mixed together.
+    pub(crate) fn prefer_native(mut self, native: Self) -> Self {
+        let now = Utc::now();
+        let mut rows: HashMap<_, _> = native.channels.into_iter().map(|c| (c.channel_id, c.programs)).collect();
+        for channel in &mut self.channels {
+            if let Some(mut programs) = rows.remove(&channel.channel_id) {
+                programs.retain(|p| DateTime::parse_from_rfc3339(&p.end_time).is_ok_and(|end| end > now));
+                if !programs.is_empty() { channel.programs = programs; }
+            }
+        }
+        self.updated_at = native.updated_at.or(self.updated_at);
+        self.message = if self.channels.iter().all(|c| !c.programs.is_empty()) { None } else {
+            Some("Listings are unavailable for some channels; you can still watch them live.".into())
+        };
+        self
+    }
 }
 #[derive(Default)]
 struct FeedCache {
@@ -453,6 +482,7 @@ fn parse_xml<R: BufRead>(
                                 end_time: end.to_rfc3339_opts(SecondsFormat::Secs, true),
                                 description: (!p.description.is_empty()).then_some(p.description),
                                 episode_title: (!p.episode.is_empty()).then_some(p.episode),
+                                ..Default::default()
                             };
                             if !list.iter().any(|v| v.start_time == program.start_time) {
                                 list.push(program);
@@ -483,6 +513,26 @@ mod tests {
         DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc)
+    }
+    #[test]
+    fn native_rows_replace_conflicting_xmltv_and_keep_verified_fallback_for_missing_feeds() {
+        let valid = |title: &str| Program { title: title.into(), start_time: Utc::now().to_rfc3339(), end_time: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(), ..Default::default() };
+        let fallback = Guide { enabled:true, source_name:"Configured name".into(), updated_at:None, message:Some("Fallback incomplete".into()), channels:vec![
+            ChannelGuide {channel_id:"exact-a".into(),programs:vec![valid("XMLTV A")]},
+            ChannelGuide {channel_id:"exact-b".into(),programs:vec![valid("XMLTV B")]},
+        ]};
+        let native = Guide { enabled:true, source_name:"Provider name".into(), updated_at:Some(Utc::now().to_rfc3339()),message:None,channels:vec![
+            ChannelGuide {channel_id:"exact-a".into(),programs:vec![valid("Native A")]},
+            ChannelGuide {channel_id:"exact-b".into(),programs:vec![Program { end_time:"2000-01-01T00:00:00Z".into(), ..valid("Expired") }]},
+            ChannelGuide {channel_id:"not-in-catalog".into(),programs:vec![valid("Unrelated feed")]},
+        ]};
+        let result = fallback.prefer_native(native);
+        assert_eq!(result.channels.len(),2);
+        assert_eq!(result.channels[0].programs.len(),1);
+        assert_eq!(result.channels[0].programs[0].title,"Native A");
+        assert_eq!(result.channels[1].programs[0].title,"XMLTV B");
+        assert_eq!(result.source_name,"Configured name");
+        assert!(result.message.is_none());
     }
     #[test]
     fn exact_mapping_never_substitutes_another_affiliate_or_pacific_feed() {
@@ -540,6 +590,7 @@ mod tests {
             end_time: future,
             description: None,
             episode_title: None,
+            ..Default::default()
         };
         let mut old = good.clone();
         old.id = "old".into();

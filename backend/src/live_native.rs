@@ -8,13 +8,16 @@ const MAX_LICENSE: usize = 1024 * 1024;
 const MAX_MANIFEST: usize = 2 * 1024 * 1024;
 const MAX_CERTIFICATE: usize = 64 * 1024;
 const MAX_DESCRIPTOR: usize = 64 * 1024;
+const MAX_GUIDE: usize = 16 * 1024 * 1024;
 const DASH: &str = "application/dash+xml";
 const CAPABILITIES: &str = "x-velvet-playback-capabilities";
 const CLIENT: &str = "x-velvet-client";
 
 #[derive(Default)]
 struct CatalogCache { attempted: Option<Instant>, channels: Vec<Channel>, issue: Option<String> }
-pub(super) struct NativeSpectrum { origin: Url, http: reqwest::Client, cache: AsyncMutex<CatalogCache> }
+#[derive(Default)]
+struct GuideCache { attempted: Option<Instant>, value: Option<crate::epg::Guide> }
+pub(super) struct NativeSpectrum { origin: Url, http: reqwest::Client, cache: AsyncMutex<CatalogCache>, guide_cache: AsyncMutex<GuideCache> }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,9 +145,39 @@ impl NativeSpectrum {
         let http = reqwest::Client::builder().user_agent("velvet-native-live/0.1")
             .no_proxy().redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5)).timeout(Duration::from_secs(60)).build()?;
-        Ok(Self { origin, http, cache: AsyncMutex::new(CatalogCache::default()) })
+        Ok(Self { origin, http, cache: AsyncMutex::new(CatalogCache::default()), guide_cache: AsyncMutex::new(GuideCache::default()) })
     }
     fn url(&self, path: &str) -> Result<Url> { self.origin.join(path).map_err(|_| invalid()) }
+    pub(super) async fn guide(&self, channels: &[Channel]) -> Option<crate::epg::Guide> {
+        let mut cache = self.guide_cache.lock().await;
+        if cache.attempted.is_some_and(|at| at.elapsed() < CACHE_AGE) { return cache.value.clone(); }
+        cache.attempted = Some(Instant::now());
+        let fetched = async {
+            let response = self.http.get(self.url("/live/guide")?).timeout(Duration::from_secs(40)).send().await.map_err(transport_error)?;
+            if !response.status().is_success() { return Err(sidecar_error(response).await); }
+            let mut guide: crate::epg::Guide = serde_json::from_slice(&read_bytes(response, MAX_GUIDE).await?).map_err(|_| invalid())?;
+            let known: HashSet<_> = channels.iter().map(|c| c.id.as_str()).collect();
+            let mut seen = HashSet::new();
+            if !guide.enabled || guide.channels.len() > MAX_CHANNELS || guide.updated_at.as_deref().is_some_and(|date| chrono::DateTime::parse_from_rfc3339(date).is_err()) { return Err(invalid()); }
+            for row in &mut guide.channels {
+                if !known.contains(row.channel_id.as_str()) || !seen.insert(row.channel_id.clone()) || row.programs.len() > 160 { return Err(invalid()); }
+                let mut starts = HashSet::new();
+                for p in &row.programs {
+                    let start = chrono::DateTime::parse_from_rfc3339(&p.start_time).map_err(|_| invalid())?;
+                    let end = chrono::DateTime::parse_from_rfc3339(&p.end_time).map_err(|_| invalid())?;
+                    if !text_field(&p.id, 256) || !text_field(&p.title, 400) || end <= start || end - start > chrono::Duration::hours(24)
+                        || !starts.insert(start.timestamp()) || p.description.as_deref().is_some_and(|s| !text_field(s, 4000))
+                        || p.episode_title.as_deref().is_some_and(|s| !text_field(s, 400)) || p.rating.as_deref().is_some_and(|s| !text_field(s, 32))
+                        || p.genres.len() > 12 || p.genres.iter().any(|s| !text_field(s, 80))
+                        || p.image_url.as_deref().is_some_and(|s| s.len() > 2048 || !Url::parse(s).is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("cdnimg.spectrum.net") && u.port().is_none() && u.path().starts_with("/imageserver/program/") && u.username().is_empty() && u.password().is_none() && u.query().is_none() && u.fragment().is_none())) { return Err(invalid()); }
+                }
+                row.programs.sort_by(|a, b| a.start_time.cmp(&b.start_time));
+            }
+            Ok(guide)
+        }.await;
+        if let Ok(guide) = fetched { cache.value = Some(guide); }
+        cache.value.clone()
+    }
     pub(super) async fn channels(&self) -> (Vec<Channel>, Option<String>) {
         let mut cache = self.cache.lock().await;
         if cache.attempted.is_some_and(|at| at.elapsed() < CACHE_AGE) { return (cache.channels.clone(), cache.issue.clone()); }

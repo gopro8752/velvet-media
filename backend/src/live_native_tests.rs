@@ -11,9 +11,10 @@ fn descriptor() -> serde_json::Value {
 }
 #[derive(Default)]
 struct Mock {
-    catalogs: AtomicUsize, tunes: AtomicUsize, streams: AtomicUsize, licenses: AtomicUsize,
+    catalogs: AtomicUsize, guides: AtomicUsize, tunes: AtomicUsize, streams: AtomicUsize, licenses: AtomicUsize,
     certificates: AtomicUsize, ends: AtomicUsize, prism: AtomicUsize,
     descriptor: Mutex<Option<serde_json::Value>>, failure: Mutex<Option<(&'static str, StatusCode)>>,
+    guide: Mutex<Option<serde_json::Value>>,
     requests: Mutex<Vec<(String, HeaderMap, Vec<u8>)>>, redirect: Mutex<String>,
 }
 struct Fixture { base: String, mock: Arc<Mock>, bridge: NativeBridge, tasks: Vec<tokio::task::JoinHandle<()>> }
@@ -54,6 +55,13 @@ impl Fixture {
                     return (status, Json(serde_json::json!({"code":code,"error":"PRIVATE provider URL and account details"}))).into_response();
                 }
                 Json(mock.descriptor.lock().unwrap().clone().unwrap_or_else(descriptor)).into_response()
+            }))
+            .route("/live/guide", get(|State(mock): State<Arc<Mock>>, headers: HeaderMap| async move {
+                mock.guides.fetch_add(1, Ordering::Relaxed); record(&mock, "guide", headers, vec![]);
+                match mock.guide.lock().unwrap().clone() {
+                    Some(value) => Json(value).into_response(),
+                    None => StatusCode::NOT_FOUND.into_response(),
+                }
             }))
             .route("/live/streams/:id/:key", get(|State(mock): State<Arc<Mock>>, Path((id,key)): Path<(String,String)>, headers: HeaderMap| async move {
                 mock.streams.fetch_add(1, Ordering::Relaxed); record(&mock, "stream", headers.clone(), vec![]);
@@ -301,4 +309,71 @@ async fn native_unknown_session_deletion_shares_the_request_budget() {
     drop(permits);
     assert_eq!(request().send().await.unwrap().status(),StatusCode::NO_CONTENT);
     assert_eq!(fixture.mock.ends.load(Ordering::Relaxed),1);
+}
+
+fn guide_fixture() -> serde_json::Value {
+    let start = chrono::Utc::now() - chrono::Duration::minutes(10);
+    let end = start + chrono::Duration::hours(1);
+    serde_json::json!({"enabled":true,"sourceName":"Spectrum","updatedAt":start.to_rfc3339(),"message":null,
+        "channels":[{"channelId":"native-news","programs":[{"id":"native-news:morning","title":"Morning news",
+            "startTime":start.to_rfc3339(),"endTime":end.to_rfc3339(),"description":"Today’s headlines.","episodeTitle":null,
+            "imageUrl":"https://cdnimg.spectrum.net/imageserver/program/EP123","genres":["News & Weather"],"rating":"TVG","isLive":true,"isNew":true,
+            "privateToken":"MUST-NOT-LEAK"}]}]})
+}
+
+#[tokio::test]
+async fn native_guide_has_exact_station_programs_artwork_and_cache_without_tuning() {
+    let fixture = Fixture::new().await;
+    *fixture.mock.guide.lock().unwrap() = Some(guide_fixture());
+    let native = fixture.bridge.0.native.as_ref().unwrap();
+    let channels = native.channels().await.0;
+    let first = native.guide(&channels).await.unwrap();
+    assert_eq!(first.channels[0].programs[0].title,"Morning news");
+    assert!(first.channels[0].programs[0].is_live);
+    assert_eq!(first.channels[0].programs[0].genres,vec!["News & Weather"]);
+    assert!(!serde_json::to_string(&first).unwrap().contains("MUST-NOT-LEAK"));
+    assert!(native.guide(&channels).await.is_some());
+    assert_eq!(fixture.mock.guides.load(Ordering::Relaxed),1);
+    assert_eq!(fixture.mock.tunes.load(Ordering::Relaxed),0);
+    assert_eq!(fixture.mock.licenses.load(Ordering::Relaxed),0);
+    assert_eq!(fixture.mock.prism.load(Ordering::Relaxed),0);
+}
+
+#[tokio::test]
+async fn native_guide_rejects_wrong_stations_unsafe_artwork_and_invalid_program_intervals() {
+    for case in 0..8 {
+        let fixture = Fixture::new().await;
+        let mut value = guide_fixture();
+        match case {
+            0 => value["channels"][0]["channelId"] = "other-affiliate".into(),
+            1 => value["channels"][0]["programs"][0]["imageUrl"] = "https://evil.example/private".into(),
+            2 => value["channels"][0]["programs"][0]["endTime"] = "2000-01-01T00:00:00Z".into(),
+            3 => value["channels"][0]["programs"][0]["title"] = "unsafe\nline".into(),
+            4 => value["channels"][0]["programs"][0]["imageUrl"] = "https://cdnimg.spectrum.net/imageserver/program/EP123?access_token=synthetic-private-token".into(),
+            5 => value["channels"][0]["programs"][0]["imageUrl"] = "https://cdnimg.spectrum.net/imageserver/program/EP123#private".into(),
+            6 => value["channels"][0]["programs"][0]["imageUrl"] = "https://cdnimg.spectrum.net/other-endpoint".into(),
+            _ => value["channels"][0]["programs"][0]["imageUrl"] = "https://cdnimg.spectrum.net:8443/imageserver/program/EP123".into(),
+        }
+        *fixture.mock.guide.lock().unwrap() = Some(value);
+        let native = fixture.bridge.0.native.as_ref().unwrap();
+        assert!(native.guide(&native.channels().await.0).await.is_none(),"case {case}");
+        assert_eq!(fixture.mock.tunes.load(Ordering::Relaxed),0);
+    }
+}
+
+#[tokio::test]
+async fn native_guide_accepts_unicode_at_utf8_limits_and_rejects_oversized_metadata() {
+    for oversized in [false, true] {
+        let fixture = Fixture::new().await;
+        let mut value = guide_fixture();
+        let program = &mut value["channels"][0]["programs"][0];
+        program["title"] = "😀".repeat(if oversized { 101 } else { 100 }).into();
+        program["description"] = "é".repeat(2000).into();
+        program["episodeTitle"] = "漢".repeat(133).into();
+        program["genres"] = serde_json::json!(["界".repeat(26)]);
+        program["rating"] = "★".repeat(10).into();
+        *fixture.mock.guide.lock().unwrap() = Some(value);
+        let native = fixture.bridge.0.native.as_ref().unwrap();
+        assert_eq!(native.guide(&native.channels().await.0).await.is_some(), !oversized);
+    }
 }

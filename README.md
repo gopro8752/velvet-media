@@ -3,6 +3,7 @@
 <p align="center">
   <a href="#get-started">Get started</a> ·
   <a href="#on-the-big-screen">Screenshots</a> ·
+  <a href="#browse-live-tv-as-a-guide">Live TV guide</a> ·
   <a href="#velour-your-velvet-home-screen">Velour</a> ·
   <a href="#the-apps">The apps</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -42,9 +43,9 @@ Velour and Velvet are designed to be used together. Build and install both with 
 
 | Component | Built with | What it does | Setup |
 | --- | --- | --- | --- |
-| **Velvet for Android TV** | Kotlin, Compose for TV, Media3, GeckoView | Remote-first browsing and playback, glass dock, profiles, category queues, stream/track controls, and playback handoff. Developed around NVIDIA Shield. | [Android guide](clients/android/README.md) |
-| **Velvet for iPhone and iPad** | SwiftUI, VLCKit | Touch browsing and playback, iPad landscape support, shared watch state, categories, and Send to TV. | [iOS guide](clients/ios/README.md) |
-| **Velvet for Roku — ALPHA** | BrightScript, SceneGraph | Native browsing, profiles, categories, player controls, live views, and reporting. Requires per-device developer-mode sideloading; hardware and feature differences remain. | [Roku guide and limitations](clients/roku/README.md) |
+| **Velvet for Android TV** | Kotlin, Compose for TV, Media3, GeckoView | Remote-first browsing and playback, a timeline TV guide, glass dock, profiles, category queues, stream/track controls, and playback handoff. Developed around NVIDIA Shield. | [Android guide](clients/android/README.md) |
+| **Velvet for iPhone and iPad** | SwiftUI, VLCKit, AVPlayer/FairPlay | Touch browsing and playback, an adaptive TV guide, iPad landscape support, shared watch state, categories, and Send to TV. | [iOS guide](clients/ios/README.md) |
+| **Velvet for Roku — ALPHA** | BrightScript, SceneGraph | Native browsing, profiles, categories, player controls, a timeline TV guide, sports views, and reporting. Requires per-device developer-mode sideloading; hardware and feature differences remain. | [Roku guide and limitations](clients/roku/README.md) |
 | **Velour — Velvet's companion launcher** | Kotlin, Compose | Android TV home screen with an app grid, wallpapers, Velvet resume shortcuts, game cards that open Live Sports, weather, and an ambient clock. | [Launcher guide](launcher/README.md) |
 | **Velvet backend + admin** | Rust, Tokio, Axum, SQLite | Resolution and streaming, synchronization, compatibility processing, optional integrations, and private reporting. | [Server guide](backend/README.md) |
 
@@ -81,13 +82,30 @@ AI categories are optional. The backend can invoke the official Codex CLI after 
 - Use backend compatibility processing for formats a client cannot play directly, including mobile audio conversion when needed. Capable TV clients can retain the original audio path; actual passthrough depends on the device, player, and sound system.
 - Use intro skipping where detection data is available.
 
+### Browse Live TV as a guide
+
+[![Velvet's Android TV guide with a channel rail, evening program timeline, and selected-program artwork](docs/screenshots/velvet-tv-guide.png)](docs/screenshots/velvet-tv-guide.png)
+
+Open Live TV to see what's airing and what's coming up. The guide keeps channel identities clear, shows program times and live progress, and lets you search **channel names, numbers, program titles, and episode names**. Save favorite channels and switch between **All channels** and **Favorites**. Favorites are stored on each device, separately for each backend and profile; they do not sync between devices.
+
+| Screen | Browsing and controls |
+| --- | --- |
+| **Shield / Android TV** | A two-hour timeline with half-hour markers, a fixed channel rail, and a preview of the selected program. Up/Down changes channels while preserving the selected time; Left/Right moves through programs. OK watches a current program or opens details for a future one. Use **Now** to return to the current broadcast and **Favorite** to save the selected channel. |
+| **iPhone** | A compact **On now / Up next** guide with remaining time and progress. Tap a program for details and the channel's current and upcoming schedule, or tap the channel to watch live. Stars save favorites. |
+| **iPad** | A time-aligned grid with a fixed channel rail, half-hour markers, two-hour paging, and a **Now** shortcut. Narrow windows adapt to the iPhone-style layout. Program details can include artwork, episode information, and descriptions when supplied. |
+| **Roku — ALPHA** | A two-hour timeline adapted to SceneGraph. Up/Down changes channels; Left/Right browses programs. OK watches what's on now or opens future-program details. **Options** toggles a favorite, **Play** watches the channel live, **Rewind** returns to Now, and **Fast Forward** advances a page of channels. [Roku controls and limitations →](clients/roku/README.md#live-tv-guide) |
+
+Future listings let you inspect upcoming programs. Choosing live playback from those details opens whatever is airing on the channel now; the guide does not offer scheduled recording or catch-up playback. Missing listings are marked unavailable, and the channel remains selectable.
+
 ### Add live sources when you want them
 
-Live TV and Live Sports are separate optional sections. A configured channel bridge supplies Live TV and supported guide mappings supply listings. An external event adapter supplies sports discovery and playback options. These integrations default to off and depend on your configured upstream services, account access, and client capabilities. The backend does not itself grant channels or remove provider restrictions.
+Live TV and Live Sports are separate optional sections. The [native Spectrum service](tve/spectrum/README.md) supplies the signed-in account's current lineup, original encrypted streams, and **Spectrum's own 24-hour program guide**, matched to exact station IDs. Listings can include descriptions, episode titles, artwork, genres, ratings, and Live/New metadata when the provider supplies them. Browsing the guide does not open a video stream or consume a playback connection.
 
-For supported FOX-family channels, the optional [direct TV Everywhere adapter](backend/tve/README.md) relays authenticated network feeds without browser capture or a Channels DVR subscription. It uses your existing TV-provider entitlement and keeps the Spectrum bridge available for other channels and playback fallback.
+Native Spectrum playback uses Widevine on Shield/Android TV and compatible Roku devices, and FairPlay on iPhone/iPad. It does not require Channels DVR or a video browser, and it never silently falls back to browser capture. It requires updated clients and a privately provisioned Spectrum session; the public source does not yet include a Spectrum account sign-in UI. Your TV subscription, channel entitlements, location restrictions, blackouts, simultaneous-stream limits, and device protection requirements still apply. A listing is not a guarantee that a channel can be watched from every location.
 
-The experimental [native Spectrum service](tve/spectrum/README.md) instead supplies the account's current lineup and encrypted streams directly to Widevine/FairPlay players. It requires updated clients and a privately provisioned Spectrum session. When enabled, Live TV no longer uses browser capture; Spectrum's access and device-protection requirements still apply.
+Other configured Live TV bridges can use verified XMLTV station mappings. Those mappings also fill entirely missing native Spectrum guide rows; availability still depends on the provider's listings. For supported FOX-family channels on the legacy bridge path, the optional [direct TV Everywhere adapter](backend/tve/README.md) relays authenticated network feeds and retains the configured Spectrum bridge as its fallback. It is a separate alternative to native Spectrum.
+
+Live Sports uses an external event adapter for discovery and playback options. These integrations default to off and depend on your configured services, account access, and client capabilities. Velvet does not supply a channel subscription or remove provider restrictions.
 
 ### Understand your server
 
@@ -165,7 +183,13 @@ Keep that key private. Configure your NNTP connection limit to match your provid
 
 ### 4. Enable optional features
 
-Start with the basic catalog and playback working. Then configure [AI categories, live sources, and guide data](backend/README.md#optional-integrations). Enabling Live Sports also lets [Velour's Today cards](launcher/README.md#watch-from-your-home-screen) open matching games in Velvet. Back up your private configuration and persistent data volume separately from the source tree.
+Start with the basic catalog and playback working. Then configure [AI categories, live sources, and guide data](backend/README.md#optional-integrations).
+
+- **Native Spectrum and its guide:** follow the [private service setup](tve/spectrum/README.md#private-deployment), provision your own account session, and update every client. In the backend's `[live_tv]` section, set `enabled = true`, `guide_enabled = true`, and `native_spectrum_url` to the service's private address. Guide data is fetched by the server; no separate guide account or client API key is required. Keep the service and its authentication files private.
+- **Other Live TV sources:** configure your compatible bridge and enable `guide_enabled`; coverage uses the backend's verified station mappings. See [Live TV configuration](backend/README.md#optional-integrations).
+- **Live Sports:** enable its separate integration. This also lets [Velour's Today cards](launcher/README.md#watch-from-your-home-screen) open matching games in Velvet.
+
+Back up your private configuration and persistent data volume separately from the source tree.
 
 ## Repository map
 
@@ -175,11 +199,12 @@ clients/android/    Android TV application
 clients/ios/        iPhone and iPad application
 clients/roku/       Roku alpha application and sideload tooling
 launcher/           Velour Android TV launcher
+tve/spectrum/       Optional native Spectrum playback and program-guide service
 scripts/            Publication checks
 docs/               Project documentation assets
 ```
 
-Each component README documents its build and validation commands. The public snapshot was checked with backend tests, Android unit tests/lint and unsigned builds, an unsigned iOS Simulator build and playback-script tests, and Roku logic/package checks. CI repeats the source publication guard, secret scanning, backend tests, and portable client tests. Hardware testing is still needed for codecs, remote focus, voice input, and playback handoff.
+Each component README documents its build and validation commands. Checks include backend tests, Android unit tests/lint and unsigned builds, iOS Simulator builds and local guide/playback integration tests, and Roku logic/package checks. CI repeats the source publication guard, secret scanning, backend tests, and portable client tests. Hardware testing is still needed for codecs, remote focus, voice input, and playback handoff; simulator tests do not establish native DRM playback support.
 
 ## Privacy, contributions, and licensing
 

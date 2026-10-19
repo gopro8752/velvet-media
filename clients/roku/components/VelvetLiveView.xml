@@ -10,23 +10,33 @@
   <script type="text/brightscript" uri="pkg:/components/VelvetLiveView.brs" />
   <children>
     <Poster width="1920" height="1080" uri="pkg:/images/ambient.png" />
-    <Label translation="[96,66]" text="Live TV" width="1500" height="84" color="0xF2F4F8FF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="60" /></Label>
-    <VelvetButton id="search" translation="[96,170]" width="1390" height="74" label="Search channels and programs" icon="pkg:/images/search.png" />
-    <VelvetButton id="refresh" translation="[1510,170]" width="314" height="74" label="Refresh" centered="true" />
-    <Label id="status" translation="[96,260]" width="1728" height="34" color="0xA9B1C2FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="22" /></Label>
-    <Group id="channels" translation="[96,316]" />
-    <Group id="schedule" translation="[820,316]">
-      <Label id="channelTitle" width="1004" height="58" color="0xF2F4F8FF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="38" /></Label>
-      <VelvetButton id="watch" translation="[0,72]" width="1004" height="74" label="Watch live" icon="pkg:/images/play.png" />
-      <Group id="programs" translation="[0,164]" />
+    <Rectangle width="1920" height="1080" color="0x090B1270" />
+    <Label translation="[96,62]" text="Live TV" width="1000" height="82" color="0xF3F1FAFF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="60" /></Label>
+    <Label id="clock" translation="[1170,82]" width="654" height="44" horizAlign="right" color="0xD0CADFFF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="28" /></Label>
+    <VelvetButton id="all" translation="[96,164]" width="260" height="66" label="All channels" centered="true" />
+    <VelvetButton id="favorites" translation="[372,164]" width="260" height="66" label="Favorites" centered="true" />
+    <VelvetButton id="search" translation="[648,164]" width="784" height="66" label="Find a channel or program" icon="pkg:/images/search.png" />
+    <VelvetButton id="now" translation="[1448,164]" width="190" height="66" label="Now" centered="true" />
+    <VelvetButton id="refresh" translation="[1654,164]" width="170" height="66" label="Refresh" centered="true" />
+    <Label id="selectionMeta" translation="[96,263]" width="1370" height="34" color="0xCABBEFFF"><Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="23" /></Label>
+    <Label id="selectionTitle" translation="[96,304]" width="1370" height="58" color="0xF5F3FAFF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="42" /></Label>
+    <Label id="selectionDescription" translation="[96,369]" width="1430" height="64" wrap="true" maxLines="2" color="0xAAB0C1FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="24" /></Label>
+    <Label id="selectionAction" translation="[1490,309]" width="334" height="42" horizAlign="right" color="0xDDD6EDFF"><Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="24" /></Label>
+    <Label id="status" translation="[96,448]" width="300" height="30" color="0x8990A3FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="20" /></Label>
+    <Group id="ruler" translation="[416,442]" />
+    <Group id="grid" translation="[96,490]" />
+    <Group id="nowMarker" translation="[416,444]">
+      <Rectangle id="nowLine" translation="[0,42]" width="2" height="510" color="0xCBB3EF66" />
+      <Poster translation="[-30,0]" width="60" height="32" uri="pkg:/images/button.9.png" blendColor="0xCDB6FFFF" />
+      <Label translation="[-30,3]" width="60" height="28" text="NOW" horizAlign="center" color="0xF4EAFFFF"><Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="16" /></Label>
     </Group>
-    <Label id="footer" translation="[96,1006]" width="1728" height="36" color="0xA9B1C2FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="22" /></Label>
+    <Label id="footer" translation="[96,1020]" width="1728" height="34" color="0x949BAEFF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="21" /></Label>
     <Group id="details" visible="false">
-      <Rectangle width="1920" height="1080" color="0x090B12F5" />
+      <Rectangle width="1920" height="1080" color="0x090B12F8" />
       <Label id="programTitle" translation="[170,120]" width="1580" height="120" wrap="true" maxLines="2" color="0xF2F4F8FF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="48" /></Label>
-      <Label id="programTime" translation="[170,250]" width="1580" height="45" color="0xBEB5E8FF"><Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="26" /></Label>
+      <Label id="programTime" translation="[170,250]" width="1580" height="45" color="0xC7B8EAFF"><Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="26" /></Label>
       <ScrollableText id="programDescription" translation="[170,320]" width="1580" height="510" color="0xCDD2DEFF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="32" /></ScrollableText>
-      <Label translation="[170,900]" width="1580" height="42" text="Up / Down to read · Back or OK to return · Play to watch live" color="0xA9B1C2FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="24" /></Label>
+      <Label translation="[170,900]" width="1580" height="42" text="Up / Down to read · Back or OK to return · Play watches this channel live" color="0xA9B1C2FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="24" /></Label>
     </Group>
   </children>
 </component>

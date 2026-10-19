@@ -4,7 +4,8 @@ import kotlinx.serialization.Serializable
 import java.time.Instant
 
 @Serializable data class LiveProgram(val id: String, val title: String, val startTime: String, val endTime: String,
-    val description: String? = null, val episodeTitle: String? = null)
+    val description: String? = null, val episodeTitle: String? = null, val imageUrl: String? = null,
+    val genres: List<String> = emptyList(), val isLive: Boolean = false, val isNew: Boolean = false, val rating: String? = null)
 @Serializable data class LiveGuideChannel(val channelId: String, val programs: List<LiveProgram> = emptyList())
 @Serializable data class LiveGuide(val enabled: Boolean = false, val sourceName: String = "Spectrum", val updatedAt: String? = null,
     val channels: List<LiveGuideChannel> = emptyList(), val message: String? = null)

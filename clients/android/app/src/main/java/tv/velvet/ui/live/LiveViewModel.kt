@@ -7,18 +7,23 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import tv.velvet.data.live.LiveGuide
 import tv.velvet.data.live.LiveCatalog
 import tv.velvet.data.live.LiveException
 import tv.velvet.data.live.LiveRepository
+import tv.velvet.data.live.LiveGuidePreferences
 
 data class LiveBrowseState(val loading: Boolean = true, val catalog: LiveCatalog? = null, val error: String? = null, val guide: LiveGuide? = null, val guideError: String? = null)
 
-class LiveViewModel(private val repository: LiveRepository) : ViewModel() {
+class LiveViewModel(private val repository: LiveRepository, private val preferences: LiveGuidePreferences) : ViewModel() {
     private val _state = MutableStateFlow(LiveBrowseState(catalog = repository.cachedCatalog))
     val state = _state.asStateFlow()
     val lastChannelId = repository.lastChannelId
+    val favoriteIds = preferences.favoriteIds.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+    fun toggleFavorite(channelId: String) { viewModelScope.launch { preferences.toggle(channelId) } }
     private var load: Job? = null
     private var guideLoad: Job? = null
 

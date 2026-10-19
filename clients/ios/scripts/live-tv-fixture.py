@@ -112,7 +112,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.response(200, {"enabled": True, "sourceName": "Spectrum", "updatedAt": iso(now), "message": None, "channels": [
                     {"channelId": "sports-1", "programs": [
                         {"id": "current", "title": "Fixture Championship", "startTime": iso(now - 1200), "endTime": iso(now + 1800), "description": "Live fixture coverage.", "episodeTitle": None},
-                        {"id": "next", "title": "Fixture Highlights", "startTime": iso(now + 1800), "endTime": iso(now + 3600), "description": "The best moments.", "episodeTitle": "Final round"}]}]})
+                        {"id": "next", "title": "Fixture Highlights", "startTime": iso(now + 1800), "endTime": iso(now + 3600), "description": "The best moments.", "episodeTitle": "Final round"},
+                        {"id": "later", "title": "Fixture Late Show", "startTime": iso(now + 8100), "endTime": iso(now + 10800), "description": "A future guide entry for timeline navigation.", "episodeTitle": None}]}]})
             return
         if path.startswith("/embed/"):
             variant = "HD" if path.endswith("hd") else "SD"

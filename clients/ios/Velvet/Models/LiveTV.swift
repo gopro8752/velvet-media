@@ -167,6 +167,11 @@ struct LiveProgram: Decodable, Identifiable, Equatable {
     let endTime: Date
     let description: String?
     let episodeTitle: String?
+    var imageUrl: URL? = nil
+    var genres: [String]? = nil
+    var isLive: Bool? = nil
+    var isNew: Bool? = nil
+    var rating: String? = nil
 }
 
 /// Snapshot the server and its credential together. Session release must use

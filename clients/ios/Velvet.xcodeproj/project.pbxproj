@@ -29,6 +29,7 @@
 		3543C06D917B7FFB6DF14119 /* TmdbClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC891595CD1E7531E0EFF6A9 /* TmdbClient.swift */; };
 		3650967AC86361B435A15672 /* StreamLookahead.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51F17D66F1E718884199AD55 /* StreamLookahead.swift */; };
 		3D10E5A7B50FE7DABF54D83F /* PlayerRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64D99977E0A3D21121C31186 /* PlayerRecovery.swift */; };
+		3D5D7AC355A7FAA356B8F83E /* LiveGuidePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1770DE4406C11EA7E194556B /* LiveGuidePolicyTests.swift */; };
 		3E5DAF700148F877F6939340 /* TmdbRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94F4DF00CEAFC0D03A752255 /* TmdbRows.swift */; };
 		3F5D62F1E7736A980C3E30C9 /* PlayerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3E905517CF23FB11F24A72 /* PlayerViewModel.swift */; };
 		483FDFD80CB03222DDF60A6D /* StreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4439816CB9ED73DB1735FFF9 /* StreamClient.swift */; };
@@ -44,6 +45,7 @@
 		6EBAF9157BBA21E00F68C6FF /* Cards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49499C2FC7D11FDFADB4FA34 /* Cards.swift */; };
 		712A76BA5AA9D52CB0E3E3CE /* StreamFailoverWatchdogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B428D2856BFC27098818D86 /* StreamFailoverWatchdogTests.swift */; };
 		78D6A53ECA6FD1A94B2BFC4F /* TrackPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19A63ED5C6C7E87DB8BCEECE /* TrackPickerSheet.swift */; };
+		7AB9DB30CF6D5511AF563279 /* LiveGuidePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1EE9C358980F0BC9966FB9 /* LiveGuidePolicy.swift */; };
 		7B0C0EBDABEB414B8A2447F2 /* LiveSportsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8839158F07D16CFCCAD2D93 /* LiveSportsClient.swift */; };
 		7BD056B7BCD4C2B0F71E02A1 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 513BC75CF247A64964A45464 /* SettingsStore.swift */; };
 		7DFB5CDEAA05214ABDC2F19E /* PlayerSessionHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF45F43654398F54B0B1A272 /* PlayerSessionHost.swift */; };
@@ -123,6 +125,7 @@
 		09F6C112D9EC3663C76C975A /* TmdbDtos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbDtos.swift; sourceTree = "<group>"; };
 		09F8124221EB7D9F85E2C2D6 /* VelvetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VelvetApp.swift; sourceTree = "<group>"; };
 		0FA1B80DAE579DF10E699E20 /* handoff-fixture.mp4 */ = {isa = PBXFileReference; path = "handoff-fixture.mp4"; sourceTree = "<group>"; };
+		1770DE4406C11EA7E194556B /* LiveGuidePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGuidePolicyTests.swift; sourceTree = "<group>"; };
 		18C8D5DE78FBBDBF0C4587F5 /* Velvet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Velvet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		19A63ED5C6C7E87DB8BCEECE /* TrackPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackPickerSheet.swift; sourceTree = "<group>"; };
 		201FC71D75C85092867F6896 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -142,6 +145,7 @@
 		49499C2FC7D11FDFADB4FA34 /* Cards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cards.swift; sourceTree = "<group>"; };
 		49E667A740D8B888D16DE803 /* DetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailsView.swift; sourceTree = "<group>"; };
 		4A061A5759A006C5C87A9E10 /* PlaybackTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTelemetry.swift; sourceTree = "<group>"; };
+		4D1EE9C358980F0BC9966FB9 /* LiveGuidePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGuidePolicy.swift; sourceTree = "<group>"; };
 		4E1851B3F517E7C0CBC9E940 /* LiveTVView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTVView.swift; sourceTree = "<group>"; };
 		4F1207C0069593C32CB51CCB /* LivePlayerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePlayerViewModel.swift; sourceTree = "<group>"; };
 		513BC75CF247A64964A45464 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
@@ -350,6 +354,7 @@
 		5FF09B16D05592F22FF8CE8D /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				4D1EE9C358980F0BC9966FB9 /* LiveGuidePolicy.swift */,
 				D529714187D9D3BCF0E04BE4 /* LiveSports.swift */,
 				EAE4E96000F5FAF7B6908A08 /* LiveTV.swift */,
 				003D2FBE11E617C14868EB66 /* Models.swift */,
@@ -410,6 +415,7 @@
 				AE0B1E009A879AC693BC59A8 /* EpisodeNavigationTests.swift */,
 				EF2F49ACD1042D2248586F6E /* FairPlayLiveTests.swift */,
 				0FA1B80DAE579DF10E699E20 /* handoff-fixture.mp4 */,
+				1770DE4406C11EA7E194556B /* LiveGuidePolicyTests.swift */,
 				573EDB3ADAF91A7D8AFFEE14 /* PlaybackRecoveryPlayerTests.swift */,
 				AA792895E9F12872C4F066F8 /* PlaybackTelemetryTests.swift */,
 				66628798D6E3E35301B16FA7 /* PlayerControlsVisualTests.swift */,
@@ -631,6 +637,7 @@
 				E91D260B566D3DD57AFED8B1 /* HomeView.swift in Sources */,
 				B1BC1EE35F36284460937A97 /* HomeViewModel.swift in Sources */,
 				214C60E3A5683233FFB727B0 /* LiveFairPlayTransport.swift in Sources */,
+				7AB9DB30CF6D5511AF563279 /* LiveGuidePolicy.swift in Sources */,
 				E5D5EECEFB7E86CAF513E3FF /* LivePlayerView.swift in Sources */,
 				E005274823E4CE8E044C610E /* LivePlayerViewModel.swift in Sources */,
 				6C8B1CDED0EACFABFD900E31 /* LiveSports.swift in Sources */,
@@ -690,6 +697,7 @@
 				90DC24E5951B828B0A26DD3E /* CategoryQueueNavigationTests.swift in Sources */,
 				4AAEFDF5C17E1CF4EDC50CFE /* EpisodeNavigationTests.swift in Sources */,
 				AE11EC6E29FC53618CE07CE0 /* FairPlayLiveTests.swift in Sources */,
+				3D5D7AC355A7FAA356B8F83E /* LiveGuidePolicyTests.swift in Sources */,
 				F1B72AA602F0EB0A625F42A9 /* PlaybackRecoveryPlayerTests.swift in Sources */,
 				51F6A786050F67884088BBAD /* PlaybackTelemetryTests.swift in Sources */,
 				49336BE352A929964B48DBDA /* PlayerControlsVisualTests.swift in Sources */,

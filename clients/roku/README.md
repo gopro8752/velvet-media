@@ -31,6 +31,16 @@ ROKU_HOST=roku.example.test npm run deploy
 
 Replace that documentation hostname with your Roku's actual hostname or IP. The helper verifies developer mode, builds and tests, then prompts for the password without displaying it. For automation, use a private file via `ROKU_PASSWORD_FILE` with mode `600`. Do not place credentials in source or commit configuration containing them. The helper does not enable developer mode for you.
 
+## Live TV guide
+
+The guide uses a shared two-hour timeline with half-hour markers, channel logos, a live position indicator, and the selected program's synopsis. Listings come from your backend; an absent listing is shown as unavailable and never invented.
+
+- Up / Down changes channels while keeping the selected time. Left / Right browses programs and the available future schedule. At the beginning of the timeline, Left returns to the filters from any channel.
+- OK plays a current program. For an upcoming program, OK opens its description; it does not attempt to play a future broadcast. Play always watches the selected channel live.
+- Options adds or removes a favorite. Favorites stay on this Roku, separately for each backend and profile. Choose Favorites above the grid to reduce the lineup.
+- Search finds channel names, numbers, program titles, and episode titles. A program match opens at its scheduled time. Now or Rewind returns to the current broadcast; Fast Forward moves down a page of channels.
+- Back returns from program details or opens Velvet's navigation dock. Schedules refresh every five minutes while the guide is open.
+
 ## Current limitations
 
 - Developer-mode sideloading is a per-device setup and supports one developer app at a time. This is not an automatic family-and-friends installation or update service.

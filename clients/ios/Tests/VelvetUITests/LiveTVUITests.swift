@@ -91,6 +91,53 @@ final class LiveTVUITests: XCTestCase {
         XCTAssertFalse(app.buttons["live.close"].exists, "A late tune must not reopen the player.")
     }
 
+    func testGuideSearchFavoritesAndFutureProgramStayLiveOnly() async throws {
+        let search = app.textFields["live.guide.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap()
+        search.typeText("Final round")
+        let future = app.buttons["live.program.sports-1.next"]
+        XCTAssertTrue(future.waitForExistence(timeout: 10), "Search must include upcoming episode names, not just channels.")
+        XCTAssertFalse(app.buttons["live.channel.news-1"].exists)
+        future.tap()
+        XCTAssertTrue(app.staticTexts["UPCOMING"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Watch channel live"].exists)
+        XCTAssertTrue(app.staticTexts["This program hasn't started. Watching this channel opens what's on live now."].exists)
+        try await expectNoActiveSessions()
+        capture("Live TV future program")
+        app.buttons["Done"].tap()
+        app.buttons["Clear search"].tap()
+        let star = app.buttons["live.favorite.sports-1"]
+        if star.label.hasPrefix("Remove") { star.tap() }
+        star.tap()
+        app.buttons["Favorites"].tap()
+        XCTAssertTrue(app.buttons["live.channel.sports-1"].exists)
+        XCTAssertFalse(app.buttons["live.channel.news-1"].exists)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["live.channel.sports-1"].waitForExistence(timeout: 15))
+        app.buttons["Favorites"].tap()
+        XCTAssertTrue(app.buttons["live.channel.sports-1"].exists, "Favorite channels must survive app relaunch.")
+        XCTAssertFalse(app.buttons["live.channel.news-1"].exists)
+        app.buttons["live.favorite.sports-1"].tap()
+        XCTAssertTrue(app.staticTexts["Your favorites belong here"].waitForExistence(timeout: 5))
+    }
+
+    func testTabletTimelineKeepsChannelRailAndReturnsToNow() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("Wide guide layout is for iPad.") }
+        let channel = app.buttons["live.channel.sports-1"]
+        let before = channel.frame
+        let current = app.buttons["live.program.sports-1.current"]
+        XCTAssertTrue(current.waitForExistence(timeout: 10))
+        app.buttons["Next two hours"].tap()
+        XCTAssertTrue(app.buttons["live.program.sports-1.later"].waitForExistence(timeout: 5))
+        XCTAssertEqual(channel.frame.minX, before.minX, accuracy: 1)
+        XCTAssertEqual(channel.frame.minY, before.minY, accuracy: 1)
+        app.buttons["live.guide.now"].tap()
+        XCTAssertTrue(current.waitForExistence(timeout: 5))
+        capture("Live TV iPad timeline")
+    }
+
     private func expectNoActiveSessions() async throws {
         for _ in 0..<15 {
             let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:18881/test/status")!)

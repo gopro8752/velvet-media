@@ -34,7 +34,9 @@ function VGuidePrograms(value as Dynamic, nowSeconds as Double) as Object
             if id = identity then duplicate = true
         end for
         if start >= 0 and finish > start and finish > nowSeconds and title <> "" and not duplicate
-            item = {id:identity, title:title, startTime:VGet(raw,"startTime"), endTime:VGet(raw,"endTime"), description:VGet(raw,"description"), episodeTitle:VGet(raw,"episodeTitle")}
+            item = VCopy(raw)
+            item.id = identity
+            item.title = title
             item.startSeconds = start
             item.endSeconds = finish
             item.isNow = start <= nowSeconds and finish > nowSeconds
@@ -115,4 +117,136 @@ function VPrepareGuide(guide as Dynamic) as Object
         output.channels.Push({channelId:VGet(raw,"channelId"), programs:programs})
     end for
     return output
+end function
+
+' Every program shares one clock. Gaps describe absent listings, never invented shows.
+function VGuideWindowStart(nowSeconds as Double) as Double
+    return Int(nowSeconds / 1800#) * 1800#
+end function
+
+function VGuideWindowSegments(programs as Dynamic, startSeconds as Double, durationSeconds = 7200# as Double) as Object
+    finish = startSeconds + durationSeconds
+    cursor = startSeconds
+    segments = []
+    for each program in VArray(programs)
+        first = VNum(VGet(program, "startSeconds"), -1)
+        last = VNum(VGet(program, "endSeconds"), -1)
+        if first < finish and last > cursor
+            if first > cursor then segments.Push({startSeconds:cursor, endSeconds:first, program:invalid})
+            if first < cursor then first = cursor
+            if last > finish then last = finish
+            segments.Push({startSeconds:first, endSeconds:last, program:program})
+            cursor = last
+        end if
+        if cursor >= finish then exit for
+    end for
+    if cursor < finish then segments.Push({startSeconds:cursor, endSeconds:finish, program:invalid})
+    return segments
+end function
+
+' Half-open time ranges keep vertical focus on the same broadcast at a boundary.
+function VGuideSegmentAt(segments as Object, seconds as Double) as Integer
+    for i = 0 to segments.Count() - 1
+        if seconds >= segments[i].startSeconds and seconds < segments[i].endSeconds then return i
+    end for
+    if segments.Count() = 0 then return -1
+    if seconds < segments[0].startSeconds then return 0
+    return segments.Count() - 1
+end function
+
+function VGuideLastTime(rows as Object, nowSeconds as Double) as Double
+    result = VGuideWindowStart(nowSeconds) + 7200#
+    for each row in rows
+        for each program in row.programs
+            if program.endSeconds > result then result = program.endSeconds
+        end for
+    end for
+    return result
+end function
+
+function VGuideFavoriteIds(value as Dynamic) as Object
+    output = []
+    for each raw in VArray(value)
+        id = VStr(raw)
+        if id <> "" and not VGuideHasFavorite(output, id) then output.Push(id)
+    end for
+    return output
+end function
+
+function VGuideHasFavorite(ids as Object, id as String) as Boolean
+    for each entry in ids
+        if entry = id then return true
+    end for
+    return false
+end function
+
+function VGuideToggleFavorite(ids as Object, id as String) as Object
+    output = []
+    existed = VGuideHasFavorite(ids, id)
+    for each entry in ids
+        if entry <> id then output.Push(entry)
+    end for
+    if not existed and id <> "" then output.Push(id)
+    return output
+end function
+
+function VGuideFavoriteRows(rows as Object, ids as Object, onlyFavorites as Boolean) as Object
+    if not onlyFavorites then return rows
+    output = []
+    for each row in rows
+        if VGuideHasFavorite(ids, VStr(VGet(row.channel, "id"))) then output.Push(row)
+    end for
+    return output
+end function
+
+function VGuideClock(seconds as Double, includeDay = false as Boolean) as String
+    date = CreateObject("roDateTime")
+    date.FromSeconds(seconds)
+    date.ToLocalTime()
+    hour = date.GetHours()
+    suffix = " AM"
+    if hour >= 12 then suffix = " PM"
+    hour = hour Mod 12
+    if hour = 0 then hour = 12
+    result = VStr(hour) + ":" + Right("0" + VStr(date.GetMinutes()), 2) + suffix
+    if includeDay
+        days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        result = days[date.GetDayOfWeek()] + " · " + result
+    end if
+    return result
+end function
+
+function VGuideNavigateTime(programs as Object, windowStart as Double, focusTime as Double, nowSeconds as Double, lastTime as Double, direction as Integer) as Object
+    result = {windowStart:windowStart, focusTime:focusTime, focusHeader:false}
+    segments = VGuideWindowSegments(programs, windowStart)
+    index = VGuideSegmentAt(segments, focusTime)
+    nextIndex = index + direction
+    if direction < 0 and index = 0 and windowStart = VGuideWindowStart(nowSeconds)
+        result.focusHeader = true
+    else if nextIndex >= 0 and nextIndex < segments.Count()
+        result.focusTime = segments[nextIndex].startSeconds + 1
+    else if direction > 0 and windowStart + 7200# < lastTime
+        result.focusTime = windowStart + 7200# + 1
+        result.windowStart += 3600#
+    else if direction < 0 and windowStart > VGuideWindowStart(nowSeconds)
+        result.focusTime = windowStart - 1
+        result.windowStart -= 3600#
+        if result.windowStart < VGuideWindowStart(nowSeconds) then result.windowStart = VGuideWindowStart(nowSeconds)
+    end if
+    return result
+end function
+
+function VGuideSearchTime(row as Object, query as String, nowSeconds as Double) as Double
+    query = LCase(query.Trim())
+    channel = row.channel
+    channelText = LCase(VStr(VGet(channel, "name")) + " " + VStr(VGet(channel, "number")) + " " + VStr(VGet(channel, "group")))
+    if query = "" or Instr(1, channelText, query) > 0 then return nowSeconds
+    for each program in row.programs
+        text = LCase(VStr(VGet(program, "title")) + " " + VStr(VGet(program, "episodeTitle")))
+        if Instr(1, text, query) > 0
+            if program.startSeconds < nowSeconds then return nowSeconds
+            return program.startSeconds + 1
+        end if
+    end for
+    return nowSeconds
 end function
