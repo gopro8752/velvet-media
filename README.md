@@ -85,6 +85,8 @@ AI categories are optional. The backend can invoke the official Codex CLI after 
 
 Live TV and Live Sports are separate optional sections. A configured channel bridge supplies Live TV and supported guide mappings supply listings. An external event adapter supplies sports discovery and playback options. These integrations default to off and depend on your configured upstream services, account access, and client capabilities. The backend does not itself grant channels or remove provider restrictions.
 
+For supported FOX-family channels, the optional [direct TV Everywhere adapter](backend/tve/README.md) relays authenticated network feeds without browser capture or a Channels DVR subscription. It uses your existing TV-provider entitlement and keeps the Spectrum bridge available for other channels and playback fallback.
+
 ### Understand your server
 
 The private admin portal brings viewing activity and server capacity together:

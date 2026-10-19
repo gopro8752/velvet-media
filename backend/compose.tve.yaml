@@ -1,0 +1,28 @@
+# Optional direct TV Everywhere source. Combine with compose.yaml.
+# Admin stays on loopback: never publish it through a reverse proxy.
+services:
+  velvet-tve:
+    build:
+      context: ./tve
+    image: velvet-tve:4.16.6-hardened
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${VELVET_TVE_ADMIN_PORT:-8810}:8000"
+    environment:
+      PORT: "8000"
+      BASE_URL: "http://velvet-tve:8000"
+      LINEAR_CHANNELS: "true"
+      PROXY_SEGMENTS: "true"
+    volumes:
+      - tve-config:/app/config
+    mem_limit: 1g
+    cpus: 2
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+volumes:
+  tve-config:

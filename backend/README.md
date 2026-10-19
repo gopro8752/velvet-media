@@ -54,12 +54,36 @@ Playback reports begin when compatible clients send telemetry. Historic playback
 ## Optional integrations
 
 - **AI categories:** set `VELVET_IMAGE_TARGET=with-codex` in `.env`, set `category_ai.enabled=true`, rebuild, and run `docker compose exec backend codex login --device-auth`. Authentication is stored under the private `config/codex` mount. This integration uses the official CLI's account authentication; service availability and usage limits are determined by the account and upstream service. Never put account credentials into a Dockerfile, image, or repository.
-- **Live TV:** configure your own compatible bridge in `[live_tv]`. The bundled adapter understands PrismCast's Spectrum playlist format. The bridge and its authentication are separate services; neither is included in the image.
+- **Live TV:** configure your own compatible bridge in `[live_tv]`. The bundled adapter understands PrismCast's Spectrum playlist format and can optionally prefer a direct EPlusTV source for reviewed national channels. Bridges and provider authentication are separate services; neither is included in the image.
 - **TV guide:** enable `guide_enabled` for supported channel mappings. Listings are fetched at runtime from an external feed. Exact feed coverage varies.
 - **Live sports:** opt into `[live_sports]` to enable the external event/embed adapter. Availability and playback depend on that external service and client support.
 - **Mobile/Roku compatibility:** FFmpeg supplies audio conversion and live remuxing. Original streams remain available to capable clients.
 
 All optional integrations default to disabled. The public repository includes no external media assets or program listings. Runtime metadata, artwork, guide feeds, and media remain subject to their respective providers' terms and licenses.
+
+### Optional direct TV Everywhere source
+
+The additive [EPlusTV](https://github.com/tonywagner/EPlusTV) adapter can relay a network's original HLS stream through Velvet without browser capture. See the [private bridge setup](tve/README.md) for the optional deployment. It does not replace the Spectrum bridge or promise access to every channel. Spectrum continues to supply the complete channel list, existing channel IDs, artwork, guide matching, and playback fallback. Roku's separate sports browser bridge also stays on the existing `upstream_url`.
+
+After authenticating and verifying a compatible EPlusTV instance, add its private origin to your runtime configuration:
+
+```toml
+[live_tv]
+enabled = true
+source_name = "Spectrum"
+upstream_url = "http://live-bridge:5589"
+lineup_path = "/playlist?service=spectrum"
+guide_enabled = true
+direct_tve_url = "http://velvet-tve:8000"
+```
+
+Enable EPlusTV's dedicated linear channels and segment proxying (`PROXY_SEGMENTS=true`), and set its `BASE_URL` to the same private origin used by Velvet. Keep its administration, provider credentials, and persistent state private. Do not expose the bridge through the public Velvet hostname or put its logins into images or source control.
+
+The initial reviewed mappings cover FS1, FS2, the national Big Ten Network feed, Fox News, Fox Business, and Fox Weather, when present in your existing Spectrum lineup. Matching requires the original Velvet channel identity plus EPlusTV's exact provider/channel identity and station ID. Local FOX affiliates and Big Ten overflow channels retain Spectrum; similar names are not enough to substitute a feed.
+
+Before selecting a direct source, Velvet checks its master and child playlists, then verifies current media and its key/init resources within a bounded startup budget. Only EPlusTV's channel-scoped proxy routes on the configured origin are permitted. DRM playlists, inline key URLs, external media URLs, redirects, unavailable sources, or failed authentication fall back to Spectrum. A later direct playback error temporarily excludes that source when the client reconnects. Current upstream EPlusTV can leave some `.mp4` segments external or inline session keys even with segment proxying enabled; those feeds need a bridge that normalizes them into its local proxy routes before this adapter will select them. Leave the setting unset until real video and audio have been tested with your account.
+
+Provider entitlements, concurrent-stream limits, channel availability, and periodic sign-in requirements still apply. Authentication for one network does not establish access to other networks. No additional Velvet subscription is required.
 
 ## Run from source
 

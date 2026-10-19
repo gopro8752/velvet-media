@@ -1,0 +1,634 @@
+diff --git a/services/foxone-handler.ts b/services/foxone-handler.ts
+index b6b287c..9f91a5c 100644
+--- a/services/foxone-handler.ts
++++ b/services/foxone-handler.ts
+@@ -14,6 +14,7 @@ import {ClassTypeWithoutMethods, IEntry, IProvider, TChannelPlaybackInfo} from '
+ import {db} from './database';
+ import {debug} from './debug';
+ import {usesLinear, hideStudio} from './misc-db-service';
++import {foxOneErrorSummary, FoxOneTuneRequest, resolveFoxOnePlayback} from './foxone-safety';
+ 
+ interface IAppConfig {
+   network: {
+@@ -330,13 +331,14 @@ class FoxOneHandler {
+ 
+     const {enabled} = await db.providers.findOneAsync<IProvider<TFoxOneTokens, IFoxOneMeta>>({name: 'foxone'});
+ 
++    // Restore pending device-code state after a restart, including while disabled.
++    // Loading local tokens does not authenticate or request provider entitlements.
++    await this.load();
++
+     if (!enabled) {
+       return;
+     }
+ 
+-    // Load tokens from local file and make sure they are valid
+-    await this.load();
+-
+     await this.getEntitlements();
+     
+     // Update linear_channels during initialization
+@@ -478,11 +480,11 @@ class FoxOneHandler {
+           if (data?.data?.items && Array.isArray(data.data.items)) {
+             allContainerData.push(...data.data.items);
+           } else {
+-            console.warn(`No items found in container ${uri}`);
++            console.warn('No items found in FOX One schedule container');
+           }
+ 
+         } catch (err) {
+-          console.warn(`Failed to fetch container ${uri}:`, err);
++          console.warn('Failed to fetch FOX One schedule container:', foxOneErrorSummary(err));
+         }
+       }
+ 
+@@ -557,7 +559,7 @@ class FoxOneHandler {
+       });
+ 
+     } catch (e) {
+-      console.error('Error while loading FoxOne events:', e);
++      console.error('Error while loading FoxOne events:', foxOneErrorSummary(e));
+     }
+     return events;
+   };
+@@ -568,7 +570,7 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+     //console.log('getStationMap call to this.stationMap:', this.stationMap);
+     return this.stationMap;
+   } catch (e) {
+-    console.error('getStationMap failed:', e);
++    console.error('getStationMap failed:', foxOneErrorSummary(e));
+     throw e;
+   }
+ };
+@@ -600,23 +602,8 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+         await this.getAppConfig();
+       }
+ 
+-      try {
+-        const response = await axios.put(
+-          'https://ent.fox.com/user-preferences/v1/home-location',
+-          { home_zip_code: this.platform_zip },
+-          {
+-            headers: {
+-              'user-agent': androidFoxOneUserAgent,
+-              'authorization': `bearer ${this.adobe_auth.accessToken}`,
+-              'x-api-key': this.appConfig.network.apikey,
+-              'content-type': 'application/json'
+-            }
+-          }
+-        );
+-      } catch (error) {
+-        console.error('Error updating zip code:', error.response?.data || error.message);
+-        throw error;
+-      }
++      // Read the account's existing home preferences. A server-side tune must
++      // not overwrite the subscriber's home with the server's IP location.
+       const { data: userEnt } = await axios.get<any>(
+         'https://ent.fox.com/user-preferences/v1/preferences',
+         {
+@@ -665,7 +652,7 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+       }
+ 
+     } catch (e) {
+-      console.error('Error in getUserEntitlements:', e);
++      console.error('Error in getUserEntitlements:', foxOneErrorSummary(e));
+     }
+   }
+ 
+@@ -700,39 +687,13 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+       const entries = await this.getEvents();
+       await parseAirings(entries);
+     } catch (e) {
+-      console.error(e);
+-      console.log('Could not parse FOX One events');
++      console.error('Could not parse FOX One events:', foxOneErrorSummary(e));
+     }
+   };
+ 
+   public getEventData = async (eventId: string): Promise<TChannelPlaybackInfo> => {
+     try {
+-      if (!this.appConfig) {
+-        await this.getAppConfig();
+-      }
+-
+-      let cdn = '';  ///// leaving cdn blank here and in the while loop will select the first stream offered up.  Changing to akamai, fastly or cloudfront here and as !== in the while loop will default to that cdn
+-      let data;
+-
+-      while (cdn === '') { ///// If only want one use (cdn !== 'selected cdn of choice') can be akamai, cloudfront or fastly
+-        data = await this.getStreamData(eventId);
+-        cdn = data.stream.cdn;
+-      }
+-
+-      if (!data || !data?.stream?.playbackUrl) {
+-        throw new Error('Could not get stream data. Event might be upcoming, ended, or in blackout...');
+-      }
+-
+-      const playURL = data.stream.playbackUrl;
+-      
+-      ///////////////// Debugging CDNs////////////////////
+-      // console.log('Playback Info:', {
+-      //   PlaybackURL: data.stream.playbackUrl,
+-      //   CDN: data.stream.cdn})
+-
+-      if (!playURL) {
+-        throw new Error('Could not get stream data. Event might be upcoming, ended, or in blackout...');
+-      }
++      const playURL = await resolveFoxOnePlayback(request => this.getStreamData(eventId, request));
+ 
+       return [
+         playURL,
+@@ -744,12 +705,11 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+         },
+       ];
+     } catch (e) {
+-      console.error(e);
+-      console.log('Could not get stream information!');
++      console.error('Could not get FOX One stream information:', foxOneErrorSummary(e));
+     }
+   };
+ 
+-  private getStreamData = async (eventId: string): Promise<any> => {
++  private getStreamData = async (eventId: string, request: FoxOneTuneRequest): Promise<any> => {
+     const {meta} = await db.providers.findOneAsync<IProvider<any, IFoxOneMeta>>({name: 'foxone'});
+     const {uhd} = meta;
+ 
+@@ -762,10 +722,11 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+     }
+ 
+     if (!this.appConfig) {
+-      await this.getAppConfig();
++      await this.getAppConfig(request);
+     }
+ 
+     let watchData;
++    let lastError: unknown;
+ 
+     for (let a = resIndex; a < streamOrder.length; a++) {
+       let deviceCapabilities: string;
+@@ -776,6 +737,9 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+       }
+ 
+       try {
++        if (request.signal.aborted) {
++          throw new Error('FOX One tune aborted');
++        }
+         const {data} = await axios.post(
+           'https://prod.api.digitalvideoplatform.com/foxdtc/v3.0/watchlive',
+           {
+@@ -794,6 +758,7 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+             }
+           },
+           {
++            ...request,
+             headers: {
+               'Accept-Encoding': 'gzip, deflate, br, zstd',
+               'User-Agent': androidFoxOneUserAgent,
+@@ -808,23 +773,33 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+         watchData = data;
+         break;
+       } catch (e) {
++        lastError = e;
++        if (request.signal.aborted) {
++          throw e;
++        }
+         console.log(
+           `Could not get stream data for ${streamOrder[a]}. ${
+             streamOrder[a + 1] ? `Trying to get ${streamOrder[a + 1]} next...` : ''
+           }`,
++          foxOneErrorSummary(e),
+         );
+       }
+     }
++    if (!watchData && lastError) {
++      throw lastError;
++    }
+     return watchData;
+   };
+ 
+-  private getAppConfig = async () => {
++  private getAppConfig = async (request?: FoxOneTuneRequest) => {
+     try {
+-      const {data} = await axios.get<IAppConfig>(FOXONE_APP_CONFIG);
++      const {data} = await axios.get<IAppConfig>(FOXONE_APP_CONFIG, request);
+       this.appConfig = data;
+     } catch (e) {
+-      console.error(e);
+-      console.log('Could not load API app config');
++      console.error('Could not load FOX One API app config:', foxOneErrorSummary(e));
++      if (request) {
++        throw e;
++      }
+     }
+   };
+ 
+@@ -883,7 +858,7 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+         this.contentEnt = finalEntitlements;
+       }
+     } catch (e) {
+-      console.error(e);
++      console.error('Could not load FOX One entitlements:', foxOneErrorSummary(e));
+     }
+   };
+ 
+@@ -910,8 +885,7 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+       this.adobe_prelim_auth_token = data;
+       await this.save();
+     } catch (e) {
+-      console.error(e);
+-      console.log('Could not get information to start Fox One login flow');
++      console.error('Could not get information to start Fox One login flow:', foxOneErrorSummary(e));
+     }
+   };
+ 
+@@ -941,12 +915,10 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+           },
+         },
+       );
+-      console.log(data.code)
+ 
+       return data.code;
+     } catch (e) {
+-      console.error(e);
+-      console.log('Could not start the authentication process for Fox One!');
++      console.error('Could not start the authentication process for Fox One:', foxOneErrorSummary(e));
+     }
+   };
+ 
+@@ -977,12 +949,10 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+       if (e.response?.status !== 404) {
+         if (showAuthnError) {
+           if (e.response?.status === 410) {
+-            console.error(e);
+-            console.log('Adobe AuthN token has expired for FOX One');
++            console.error('Adobe AuthN token has expired for FOX One:', foxOneErrorSummary(e));
+           }
+         } else if (e.response?.status !== 410) {
+-          console.error(e);
+-          console.log('Could not get provider token data for Fox One!');
++          console.error('Could not get provider token data for Fox One:', foxOneErrorSummary(e));
+         }
+       }
+ 
+@@ -1015,4 +985,4 @@ public getStationMap = async (): Promise<typeof this.stationMap> => {
+ }
+ 
+ export type TFoxOneTokens = ClassTypeWithoutMethods<FoxOneHandler>;
+-export const foxOneHandler = new FoxOneHandler();
+\ No newline at end of file
++export const foxOneHandler = new FoxOneHandler();
+diff --git a/services/providers/foxone/views/CardBody.tsx b/services/providers/foxone/views/CardBody.tsx
+index 636d27c..aa50ccc 100644
+--- a/services/providers/foxone/views/CardBody.tsx
++++ b/services/providers/foxone/views/CardBody.tsx
+@@ -10,9 +10,7 @@ interface IFoxOneBodyProps {
+   channels: IProviderChannel[];
+ }
+ 
+-export const FoxOneBody: FC<IFoxOneBodyProps> = ({enabled, tokens, open, channels}) => {
+-  const parsedTokens = JSON.stringify(tokens, undefined, 2);
+-
++export const FoxOneBody: FC<IFoxOneBodyProps> = ({enabled, open, channels}) => {
+   if (!enabled) {
+     return <></>;
+   }
+@@ -49,9 +47,9 @@ export const FoxOneBody: FC<IFoxOneBodyProps> = ({enabled, tokens, open, channel
+         </tbody>
+       </table>
+       <details open={open}>
+-        <summary>Tokens</summary>
++        <summary>TV provider sign-in</summary>
+         <div>
+-          <pre>{parsedTokens}</pre>
++          <p>Provider sign-in is stored privately on this server.</p>
+           <form hx-put="/providers/foxone/reauth" hx-trigger="submit">
+             <button id="foxone-reauth">Re-Authenticate</button>
+           </form>
+diff --git a/services/foxone-safety.ts b/services/foxone-safety.ts
+new file mode 100644
+index 0000000..6602e1d
+--- /dev/null
++++ b/services/foxone-safety.ts
+@@ -0,0 +1,87 @@
++// Local hardening for EPlusTV. The upstream MIT license remains in LICENSE.
++
++export interface FoxOneTuneRequest {
++  signal: AbortSignal;
++  timeout: number;
++}
++
++interface FoxOneTuneLimits {
++  attempts: number;
++  timeoutMs: number;
++  requestTimeoutMs: number;
++}
++
++const TUNE_LIMITS: FoxOneTuneLimits = {attempts: 3, timeoutMs: 20000, requestTimeoutMs: 8000};
++
++class FoxOneTuneError extends Error {
++  constructor(public readonly reason: 'playback-timeout' | 'invalid-playback-response') {
++    super(reason);
++  }
++}
++
++// Bound malformed-response retries and the entire tune, including DNS/connect waits.
++// Axios receives the same abort signal so timeout does not leave requests running.
++export const resolveFoxOnePlayback = async (
++  resolve: (request: FoxOneTuneRequest) => Promise<any>,
++  limits: FoxOneTuneLimits = TUNE_LIMITS,
++): Promise<string> => {
++  const controller = new AbortController();
++  const deadline = Date.now() + limits.timeoutMs;
++  let timer: ReturnType<typeof setTimeout>;
++  const expired = new Promise<never>((_, reject) => {
++    timer = setTimeout(() => {
++      reject(new FoxOneTuneError('playback-timeout'));
++      controller.abort();
++    }, limits.timeoutMs);
++  });
++
++  const tune = async () => {
++    for (let attempt = 0; attempt < limits.attempts; attempt++) {
++      if (controller.signal.aborted || Date.now() >= deadline) {
++        throw new FoxOneTuneError('playback-timeout');
++      }
++      const data = await resolve({
++        signal: controller.signal,
++        timeout: Math.max(1, Math.min(limits.requestTimeoutMs, deadline - Date.now())),
++      });
++      const url = data?.stream?.playbackUrl;
++      if (typeof url === 'string' && url.trim()) {
++        return url;
++      }
++    }
++    throw new FoxOneTuneError('invalid-playback-response');
++  };
++
++  try {
++    return await Promise.race([tune(), expired]);
++  } finally {
++    clearTimeout(timer);
++    controller.abort();
++  }
++};
++
++// Never stringify provider bodies, Axios configs, URLs, or messages: any may
++// contain authorization tokens, account details, or signed playback URLs.
++export const foxOneErrorSummary = (error: unknown): string => {
++  if (error instanceof FoxOneTuneError) {
++    return error.reason;
++  }
++  const failure = error as {response?: {status?: unknown}; code?: unknown} | null;
++  const status = failure?.response?.status;
++  if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) {
++    const reasons: Record<number, string> = {
++      400: 'request rejected',
++      401: 'authentication required',
++      403: 'authorization refused',
++      404: 'not found',
++      410: 'authorization expired',
++      429: 'rate limited',
++    };
++    return `HTTP ${status}: ${reasons[status] || (status >= 500 ? 'upstream unavailable' : 'request failed')}`;
++  }
++  const codes = ['ECONNABORTED', 'ETIMEDOUT', 'ERR_CANCELED', 'ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET'];
++  if (typeof failure?.code === 'string' && codes.includes(failure.code)) {
++    return failure.code;
++  }
++  return 'request failed';
++};
+diff --git a/tests/foxone-safety.test.cjs b/tests/foxone-safety.test.cjs
+new file mode 100644
+index 0000000..cb27ceb
+--- /dev/null
++++ b/tests/foxone-safety.test.cjs
+@@ -0,0 +1,230 @@
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const vm = require('node:vm');
++const {createRequire} = require('node:module');
++const {test} = require('node:test');
++const http = require('node:http');
++const ts = require('typescript');
++const axios = require('axios');
++
++const root = path.resolve(__dirname, '..');
++const sentinel = 'TEST_ONLY_SECRET_SENTINEL';
++
++function loadSource(relative, overrides = {}, logger = console) {
++  const filename = path.join(root, relative);
++  const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
++    compilerOptions: {
++      target: ts.ScriptTarget.ES2020,
++      module: ts.ModuleKind.CommonJS,
++      esModuleInterop: true,
++      jsx: ts.JsxEmit.ReactJSX,
++      jsxImportSource: 'hono/jsx',
++    },
++  }).outputText;
++  const module = {exports: {}};
++  const localRequire = createRequire(filename);
++  const getModule = name => Object.hasOwn(overrides, name) ? overrides[name] : localRequire(name);
++  vm.runInThisContext(`(function(require,module,exports,console){${compiled}\n})`, {filename})(
++    getModule, module, module.exports, logger,
++  );
++  return module.exports;
++}
++
++const safety = loadSource('services/foxone-safety.ts');
++
++function makeHandler(client, uhd = false, storedProvider) {
++  const logs = [];
++  const logger = Object.fromEntries(['log', 'warn', 'error'].map(level => [level, (...args) => logs.push(args)]));
++  const database = {providers: {
++    findOneAsync: async () => storedProvider || ({meta: {uhd}, tokens: {}, enabled: true}),
++    countAsync: async () => 1,
++    updateAsync: async () => {},
++  }};
++  const {foxOneHandler: handler} = loadSource('services/foxone-handler.ts', {
++    axios: client,
++    './user-agent': {androidFoxOneUserAgent: 'fixture-agent'},
++    './config': {configPath: '/unused-fixture'},
++    './networks': {},
++    './adobe-helpers': {},
++    './shared-helpers': {getRandomHex: () => '0123456789abcdef0123456789abcdef'},
++    './shared-interfaces': {},
++    './database': {db: database},
++    './debug': {},
++    './misc-db-service': {},
++    './foxone-safety': safety,
++  }, logger);
++  handler.appConfig = {network: {apikey: sentinel, identity: {regcodeUrl: '/register'}}};
++  handler.adobe_auth = {accessToken: sentinel};
++  handler.adobe_prelim_auth_token = {accessToken: sentinel};
++  return {handler, logs};
++}
++
++test('a valid playback URL does not require CDN metadata or repeat a request', async () => {
++  const calls = [];
++  const {handler} = makeHandler({post: async (...args) => {
++    calls.push(args);
++    return {data: {stream: {cdn: '', playbackUrl: 'https://media.example/stream.m3u8'}}};
++  }});
++  const result = await handler.getEventData('event-1');
++  assert.equal(result[0], 'https://media.example/stream.m3u8');
++  assert.equal(result[1]['User-Agent'], 'fixture-agent');
++  assert.equal(calls.length, 1);
++  assert.equal(calls[0][1].asset.id, 'event-1');
++  assert.equal(calls[0][2].headers.authorization, sentinel);
++  assert.equal(calls[0][2].headers['x-device-capabilities'], 'color/SDR,maxRes/HD');
++  assert.ok(calls[0][2].timeout > 0 && calls[0][2].timeout <= 8000);
++  assert.ok(calls[0][2].signal instanceof AbortSignal);
++});
++
++test('malformed responses stop after three attempts instead of looping', async () => {
++  let calls = 0;
++  const {handler, logs} = makeHandler({post: async () => {
++    calls++;
++    return {data: {stream: {cdn: ''}}};
++  }});
++  assert.equal(await handler.getEventData('event-1'), undefined);
++  assert.equal(calls, 3);
++  assert.match(JSON.stringify(logs), /invalid-playback-response/);
++});
++
++test('an authorization refusal retains safe HTTP status and is not retried as a missing CDN', async () => {
++  let calls = 0;
++  const {handler, logs} = makeHandler({post: async () => {
++    calls++;
++    throw {response: {status: 403, data: {message: sentinel}}, config: {headers: {authorization: sentinel}}};
++  }});
++  assert.equal(await handler.getEventData('event-1'), undefined);
++  assert.equal(calls, 1);
++  const logged = JSON.stringify(logs);
++  assert.match(logged, /HTTP 403: authorization refused/);
++  assert.ok(!logged.includes(sentinel));
++});
++
++test('existing UHD to HD fallback and authorization headers are preserved', async () => {
++  const capabilities = [];
++  const {handler} = makeHandler({post: async (_url, _body, request) => {
++    capabilities.push(request.headers['x-device-capabilities']);
++    assert.equal(request.headers.authorization, sentinel);
++    if (capabilities.length === 1) throw {response: {status: 503}};
++    return {data: {stream: {playbackUrl: 'https://media.example/hd.m3u8'}}};
++  }}, true);
++  assert.equal((await handler.getEventData('event-1'))[0], 'https://media.example/hd.m3u8');
++  assert.deepEqual(capabilities, ['color/HDR,maxRes/UHD', 'color/SDR,maxRes/HD']);
++});
++
++test('tuning deadline aborts a real stalled HTTP request', async () => {
++  const sockets = new Set();
++  const server = http.createServer(() => {});
++  server.on('connection', socket => {
++    sockets.add(socket);
++    socket.on('close', () => sockets.delete(socket));
++  });
++  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
++  let signal;
++  let calls = 0;
++  const start = Date.now();
++  try {
++    await assert.rejects(safety.resolveFoxOnePlayback(request => {
++      calls++;
++      signal = request.signal;
++      return axios.get(`http://127.0.0.1:${server.address().port}/stall`, request);
++    }, {attempts: 3, timeoutMs: 40, requestTimeoutMs: 1000}), error => {
++      assert.equal(safety.foxOneErrorSummary(error), 'playback-timeout');
++      return true;
++    });
++    assert.equal(signal.aborted, true);
++    assert.equal(calls, 1);
++    assert.ok(Date.now() - start < 1000);
++  } finally {
++    for (const socket of sockets) socket.destroy();
++    await new Promise(resolve => server.close(resolve));
++  }
++});
++
++test('safe failure summaries omit all arbitrary provider fields and messages', () => {
++  const malicious = {
++    response: {status: 401, data: {reason: sentinel, accessToken: sentinel}},
++    config: {url: `https://example.test/?token=${sentinel}`, headers: {authorization: sentinel}},
++    request: {headers: sentinel},
++    message: sentinel,
++    code: sentinel,
++  };
++  assert.equal(safety.foxOneErrorSummary(malicious), 'HTTP 401: authentication required');
++  assert.equal(safety.foxOneErrorSummary({...malicious, response: undefined}), 'request failed');
++  assert.equal(safety.foxOneErrorSummary({code: 'ECONNRESET'}), 'ECONNRESET');
++  assert.equal(safety.foxOneErrorSummary(null), 'request failed');
++});
++
++test('device-code auth returns the code without logging it', async () => {
++  const {handler, logs} = makeHandler({post: async (_url, body) => {
++    assert.equal(body.isMvpd, true);
++    return {data: {code: sentinel}};
++  }});
++  handler.getPrelimToken = async () => {};
++  assert.equal(await handler.getAuthCode(), sentinel);
++  assert.ok(!JSON.stringify(logs).includes(sentinel));
++});
++
++test('a disabled provider restores pending device-code auth after restart without network requests', async () => {
++  const savedDevice = 'fixture-pending-device';
++  const savedPrelim = {accessToken: sentinel, tokenExpiration: Date.now() + 86400000};
++  let networkRequests = 0;
++  const {handler} = makeHandler(new Proxy({}, {
++    get: (_target, method) => method === '__esModule' ? false : async () => {networkRequests++; throw new Error('Unexpected network request');},
++  }), false, {enabled: false, meta: {}, tokens: {
++    adobe_device_id: savedDevice,
++    adobe_prelim_auth_token: savedPrelim,
++  }});
++  handler.adobe_device_id = undefined;
++  handler.adobe_prelim_auth_token = undefined;
++  handler.adobe_auth = undefined;
++  await handler.initialize();
++  assert.equal(handler.adobe_device_id, savedDevice);
++  assert.equal(handler.adobe_prelim_auth_token, savedPrelim);
++  assert.equal(handler.adobe_auth, undefined);
++  assert.equal(networkRequests, 0);
++});
++
++test('auth polling keeps its false result and logs only safe provider status', async () => {
++  const {handler, logs} = makeHandler({get: async () => {
++    throw {response: {status: 401, data: sentinel}, config: {headers: {authorization: sentinel}}};
++  }});
++  assert.equal(await handler.authenticateRegCode(false), false);
++  assert.match(JSON.stringify(logs), /HTTP 401/);
++  assert.ok(!JSON.stringify(logs).includes(sentinel));
++});
++
++test('home preferences are read from FOX without any account update', async () => {
++  const calls = [];
++  const {handler} = makeHandler({
++    put: async () => {throw new Error('Home preferences must not be written');},
++    get: async url => {
++      calls.push(['GET', url]);
++      return {data: {data: {results: [{key: 'HOME_LOCATION', value: {home_zip_code: '11111', home_metro_code: 'original-dma'}}]}}};
++    },
++    post: async (url, body) => {
++      calls.push(['POST', url]);
++      assert.deepEqual(body, {user_entitlement: ['original-entitlement']});
++      return {data: {data: {headers: [{key: 'x-fox-content-entitlement', value: 'entitlement-header'}]}}};
++    },
++  });
++  handler.getLocation = async () => {handler.platform_zip = '22222';};
++  handler.contentEnt = {user_entitlement: ['original-entitlement']};
++  await handler.getUserEntitlements();
++  assert.equal(handler.homeZipCode, '11111');
++  assert.equal(handler.homeMetroCode, 'original-dma');
++  assert.deepEqual(calls, [
++    ['GET', 'https://ent.fox.com/user-preferences/v1/preferences'],
++    ['POST', 'https://api.fox.com/dtc/product/config/v1/keygen/secondary_info'],
++  ]);
++});
++
++test('FOX One admin HTML never renders token values', async () => {
++  const {FoxOneBody} = loadSource('services/providers/foxone/views/CardBody.tsx');
++  const body = FoxOneBody({enabled: true, open: true, channels: [], tokens: {adobe_auth: {accessToken: sentinel}}});
++  const html = await body.toString();
++  assert.ok(!html.includes(sentinel));
++  assert.match(html, /TV provider sign-in/);
++  assert.match(html, /Re-Authenticate/);
++});

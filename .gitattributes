@@ -5,3 +5,5 @@
 *.ttf binary
 *.jar binary
 *.mp4 binary
+# Unified patch context must retain upstream whitespace exactly.
+backend/tve/*.patch -whitespace

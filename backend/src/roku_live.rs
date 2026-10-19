@@ -202,6 +202,16 @@ impl Session {
         self.cancelled.store(true, Ordering::Release);
         self.cancel.notify_one();
     }
+    /// A replacement may reuse this worker's slot only after its child and files
+    /// are gone. Cancellation alone is asynchronous.
+    pub(crate) async fn cancel_and_wait(&self, timeout: Duration) -> bool {
+        self.cancel();
+        tokio::time::timeout(timeout, async {
+            while !self.finished.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.is_ok()
+    }
     pub(crate) async fn ready(&self, timeout: Duration) -> Result<()> {
         let result = tokio::time::timeout(timeout, async {
             loop {
@@ -274,7 +284,7 @@ impl Session {
         Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
     }
 }
-async fn run_worker(session: Arc<Session>, mut child: Child, _permit: OwnedSemaphorePermit) {
+async fn run_worker(session: Arc<Session>, mut child: Child, permit: OwnedSemaphorePermit) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
@@ -302,6 +312,7 @@ async fn run_worker(session: Arc<Session>, mut child: Child, _permit: OwnedSemap
     let _ = child.kill().await;
     let _ = child.wait().await;
     let _ = tokio::fs::remove_dir_all(&session.dir).await;
+    drop(permit);
     session.finished.store(true, Ordering::Release);
 }
 
@@ -385,6 +396,24 @@ mod tests {
         assert!(value.finished.load(Ordering::Acquire));
         assert!(!dir.exists());
         assert_eq!(slots.available_permits(), 1);
+    }
+    #[tokio::test]
+    async fn timed_out_worker_releases_its_slot_before_fallback_with_other_viewers_active() {
+        let dir = std::env::temp_dir().join(format!("velvet-roku-live-retry-{}", std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let value = session(dir.clone());
+        let slots = Arc::new(Semaphore::new(3));
+        let _other_viewer_1 = slots.clone().acquire_owned().await.unwrap();
+        let _other_viewer_2 = slots.clone().acquire_owned().await.unwrap();
+        let permit = slots.clone().acquire_owned().await.unwrap();
+        let child = Command::new("sleep").arg("20").kill_on_drop(true).spawn().unwrap();
+        let worker = tokio::spawn(run_worker(value.clone(), child, permit));
+        assert!(value.ready(Duration::from_millis(5)).await.is_err());
+        assert!(value.cancel_and_wait(Duration::from_secs(2)).await);
+        let _fallback_slot = slots.clone().try_acquire_owned().expect("cancelled direct worker must release its own slot before fallback");
+        assert_eq!(slots.available_permits(), 0, "the other two viewers keep their slots");
+        assert!(!dir.exists());
+        worker.await.unwrap();
     }
     #[tokio::test]
     async fn unused_worker_expires_without_another_request() {

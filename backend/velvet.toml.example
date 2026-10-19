@@ -39,6 +39,11 @@ source_name = "Live TV"
 upstream_url = "http://live-bridge:5589"
 lineup_path = "/playlist?service=spectrum"
 guide_enabled = false
+# Optional direct EPlusTV origin. Dedicated linear channels and proxied segments
+# must be enabled there. Only reviewed national feeds use it; Spectrum stays the
+# full lineup, guide identity, and fallback. Leave unset until authenticated and
+# tested. Provider logins belong in the bridge's private runtime storage.
+# direct_tve_url = "http://velvet-tve:8000"
 
 # Optional external event discovery/embed adapter; no channels are bundled.
 [live_sports]

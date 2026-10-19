@@ -49,6 +49,8 @@ pub struct LiveTv {
     pub upstream_url: String,
     pub lineup_path: String,
     pub guide_enabled: bool,
+    /// Optional private EPlusTV origin. Spectrum remains the lineup and fallback.
+    pub direct_tve_url: Option<String>,
 }
 
 impl Default for LiveTv {
@@ -59,6 +61,7 @@ impl Default for LiveTv {
             upstream_url: "http://velvet-prismcast:5589".into(),
             lineup_path: "/playlist?service=spectrum".into(),
             guide_enabled: false,
+            direct_tve_url: None,
         }
     }
 }
@@ -158,6 +161,7 @@ mod tests {
         assert!(cfg.providers.iter().all(|p| p.username.is_empty() && p.password.is_empty()));
         assert!(cfg.indexers.iter().all(|i| i.api_key.is_empty()));
         assert!(!cfg.category_ai.enabled && !cfg.live_tv.enabled && !cfg.live_sports.enabled);
+        assert!(cfg.live_tv.direct_tve_url.is_none());
         assert_eq!(cfg.public_base_url.as_deref(), Some("https://velvet.example.com"));
     }
 
