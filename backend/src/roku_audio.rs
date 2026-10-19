@@ -349,9 +349,16 @@ async fn start(
         }
     })
     .await;
-    if !matches!(ready, Ok(Ok(()))) {
-        session.cancel();
-        return Err(AudioError(StatusCode::BAD_GATEWAY, "audio_start_timeout"));
+    match ready {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            session.cancel();
+            return Err(error);
+        }
+        Err(_) => {
+            session.cancel();
+            return Err(AudioError(StatusCode::BAD_GATEWAY, "audio_start_timeout"));
+        }
     }
     *session.touched.lock().unwrap() = Instant::now();
     Ok(Json(info))
@@ -607,7 +614,9 @@ fn encoder(
             "-c:s",
             "webvtt",
             "-var_stream_map",
-            "v:0,a:0,s:0,sgroup:subs,sname:Subtitles",
+            // `sname` is unavailable in FFmpeg 5/6 (including the Docker base).
+            // Keep the portable map; the served master gets its friendly label.
+            "v:0,a:0,s:0,sgroup:subs",
         ]);
     } else {
         command.arg("-sn");
@@ -823,6 +832,12 @@ fn rewrite_master_bitrates(text: &str, bandwidth: u64, average: u64) -> String {
                     start = index + 1;
                 }
             }
+        } else if line.starts_with("#EXT-X-MEDIA:TYPE=SUBTITLES,") {
+            output.push_str(&line.replacen(
+                ",NAME=\"subtitle_0\",",
+                ",NAME=\"Subtitles\",",
+                1,
+            ));
         } else {
             output.push_str(line);
         }
@@ -1468,6 +1483,7 @@ mod tests {
             .await
             .unwrap();
         assert!(master.contains("TYPE=SUBTITLES"));
+        assert!(master.contains("NAME=\"Subtitles\""));
         let advertised = master
             .split("BANDWIDTH=")
             .nth(1)
