@@ -2,6 +2,8 @@
 
 <p align="center">
   <a href="#get-started">Get started</a> ·
+  <a href="#on-the-big-screen">Screenshots</a> ·
+  <a href="#velour-your-velvet-home-screen">Velour</a> ·
   <a href="#the-apps">The apps</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="SECURITY.md">Security</a> ·
@@ -10,9 +12,31 @@
 
 Velvet is a self-hosted media system built around a simple idea: browsing, playback, and moving between screens should feel like one experience. A Rust backend connects your own services to native TV and mobile apps, with shared profiles, personal categories, playback handoff, and an admin portal that shows how your server is being used.
 
-The interface puts artwork, readable type, responsive remote navigation, and translucent controls first. **Velour**, the optional Android TV launcher, brings that same visual language to your TV's home screen.
+The interface puts artwork, readable type, responsive remote navigation, and translucent controls first. **Velour is the companion launcher for Velvet**: the recommended home screen for a Shield or Android TV, with your apps, Continue Watching, and favorite teams brought together in the same visual language.
 
 This repository contains the backend, Android TV app, iPhone/iPad app, **Roku alpha**, and Velour launcher. It is a clean source release: bring your own server, credentials, subscriptions, and signing setup. No hosted account, media library, or preconfigured service access is included.
+
+## On the big screen
+
+**Velvet for Shield and Android TV.** Cinematic artwork, a floating glass dock, and episode collections with Play all and Shuffle.
+
+[![Velvet home with cinematic artwork, the glass dock, and the Monstober episode collection](docs/screenshots/velvet-tv-home.png)](docs/screenshots/velvet-tv-home.png)
+
+**A closer look.** Full title artwork, an expandable description, and cast browsing.
+
+[![Dune: Part Two detail page with artwork, description, playback controls, and cast](docs/screenshots/velvet-tv-details.png)](docs/screenshots/velvet-tv-details.png)
+
+*Actual app captures from a 1080p Android TV emulator, using a demonstration profile. Continue Watching entries shown below are staged. Artwork and third-party app marks belong to their respective owners. Click an image for full resolution.*
+
+## Velour: your Velvet home screen
+
+Start with a dark wallpaper, softly animated glass highlights, and a simple app grid. Your current Velvet profile's **Continue Watching** sits just below it. Select a movie or episode there to resume in Velvet, without browsing through the app first. The profile button opens Velvet's profile picker, so the home screen follows the person watching.
+
+Choose your favorite **NBA, MLB, and NFL teams** in Velour's settings. Their games appear in the unobtrusive **Today** strip. With Live Sports configured in Velvet, selecting a card opens that game's player when a fresh matching event is available. When a match is not available yet, Velvet opens the relevant sports view so you can browse the available events. The schedule can show today's games independently of stream availability.
+
+[![Velour companion launcher with a Today game shortcut, favorite apps, and Velvet Continue Watching](docs/screenshots/velour-home.png)](docs/screenshots/velour-home.png)
+
+Velour and Velvet are designed to be used together. Build and install both with the **same signing certificate** to enable the protected profile, Continue Watching, and sports integration, then choose Velour as your device's Home application where supported. Velvet also works as a standalone app. [Set up the companion launcher →](launcher/README.md)
 
 ## The apps
 
@@ -21,7 +45,7 @@ This repository contains the backend, Android TV app, iPhone/iPad app, **Roku al
 | **Velvet for Android TV** | Kotlin, Compose for TV, Media3, GeckoView | Remote-first browsing and playback, glass dock, profiles, category queues, stream/track controls, and playback handoff. Developed around NVIDIA Shield. | [Android guide](clients/android/README.md) |
 | **Velvet for iPhone and iPad** | SwiftUI, VLCKit | Touch browsing and playback, iPad landscape support, shared watch state, categories, and Send to TV. | [iOS guide](clients/ios/README.md) |
 | **Velvet for Roku — ALPHA** | BrightScript, SceneGraph | Native browsing, profiles, categories, player controls, live views, and reporting. Requires per-device developer-mode sideloading; hardware and feature differences remain. | [Roku guide and limitations](clients/roku/README.md) |
-| **Velour** | Kotlin, Compose | Android TV home launcher with an app grid, wallpapers, Continue Watching, weather, favorite-team cards, and an ambient clock. | [Launcher guide](launcher/README.md) |
+| **Velour — Velvet's companion launcher** | Kotlin, Compose | Android TV home screen with an app grid, wallpapers, Velvet resume shortcuts, game cards that open Live Sports, weather, and an ambient clock. | [Launcher guide](launcher/README.md) |
 | **Velvet backend + admin** | Rust, Tokio, Axum, SQLite | Resolution and streaming, synchronization, compatibility processing, optional integrations, and private reporting. | [Server guide](backend/README.md) |
 
 The apps share the same backend model, but playback support and visual effects depend on the platform. Roku remains alpha even when its automated checks pass. This repository does not provide a public Roku Channel Store listing, App Store/TestFlight invitation, or signed Android release.
@@ -123,7 +147,7 @@ The example binds to loopback. Configure your own trusted network access or HTTP
 
 Follow the platform guide in [the apps table](#the-apps). Set your backend URL and matching client token in the app. Android and iOS also need your own TMDB key in Settings. Select or create a profile.
 
-Use your own signing identity for device builds. If you install Velour, sign it and the Android TV client with the same certificate so their protected local integration works. Do not redistribute a build containing personal credentials.
+Use your own signing identity for device builds. For the complete Android TV experience, build Velvet and Velour as a pair and sign them with the same certificate so their protected local integration works. Do not redistribute a build containing personal credentials.
 
 ### 3. Open reporting
 
@@ -137,7 +161,7 @@ Keep that key private. Configure your NNTP connection limit to match your provid
 
 ### 4. Enable optional features
 
-Start with the basic catalog and playback working. Then configure [AI categories, live sources, and guide data](backend/README.md#optional-integrations), or install [Velour](launcher/README.md) as a companion launcher. Back up your private configuration and persistent data volume separately from the source tree.
+Start with the basic catalog and playback working. Then configure [AI categories, live sources, and guide data](backend/README.md#optional-integrations). Enabling Live Sports also lets [Velour's Today cards](launcher/README.md#watch-from-your-home-screen) open matching games in Velvet. Back up your private configuration and persistent data volume separately from the source tree.
 
 ## Repository map
 
