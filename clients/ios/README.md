@@ -17,9 +17,9 @@ Open `Velvet.xcodeproj` in Xcode to choose a Simulator and run the app. The gene
 
 ## Connect your services
 
-1. Open Settings and enter your own **TMDB API key**. Discovery, artwork, and search require it; there is no bundled fallback credential. Get a key for your own application from [TMDB](https://developer.themoviedb.org/docs/getting-started).
-2. Enter your own **Backend URL**, such as `https://backend.example.com`, and its optional access token. A new installation has no backend selected and sync is initially disabled.
-3. Enable sync and select or create your own profile. Backend features, live sources, and AI categories depend on how you configure your server.
+1. Configure your backend’s TMDB key, then enter its **Backend URL**, such as `https://backend.example.com`, and optional access token in the app’s Settings. Discovery and search use the backend’s metadata service; its TMDB credential stays on the server. Artwork loads from TMDB’s public image CDN.
+2. Select or create your own profile. Entering the backend URL enables sync. Backend features, live sources, and AI categories depend on how you configure your server.
+3. For standalone discovery without a backend, Settings offers an optional personal **TMDB API key** field. A connected app ignores that local key and never falls back to it if the server is unavailable. Public builds contain no bundled credential.
 
 Credentials entered in Settings are device-local app preferences. An app built with a credential embedded in code or build settings is not a secret store; do not redistribute such a build. Use HTTPS for connections outside a trusted LAN. No bundled media or live-service subscription is supplied.
 

@@ -33,6 +33,12 @@ The shared token protects supported app APIs; it is not a blanket access-control
 
 Provider limits belong to your provider plan. Set `NNTP_CONNS` accordingly; idle reusable connections do not consume the dashboard's *busy* connection count.
 
+## Metadata for every client
+
+Configure `VELVET_TMDB_KEY` once in the backend's private runtime environment. Updated Android and iOS clients use `GET /metadata/tmdb/{path}` for their TMDB v3 discovery, search, details, season, and IMDb lookup requests; Roku uses the backend's `/catalog` endpoints. Clients need the backend URL and shared app token, not a copy of the TMDB key. Restart the backend after rotating its runtime key.
+
+The metadata endpoint accepts only supported read-only paths and query parameters, authenticates each request with the same shared Bearer token as `/catalog`, and returns TMDB-compatible JSON. It rejects client-supplied credentials and account operations, uses a fixed upstream host with bounded requests, and never returns the backend key or credential-bearing upstream errors. Responses use `Cache-Control: private, no-store` so shared proxies cannot serve authenticated results to other callers. A missing backend key returns HTTP 503 with a configuration message.
+
 ## Admin portal
 
 Open `/admin` on your backend. Admin access uses a separate random key, created on first startup in the data volume. Read it locally:

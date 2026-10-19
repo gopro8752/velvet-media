@@ -19,6 +19,7 @@ mod roku_audio;
 mod roku_live;
 mod catalog;
 mod catalog_browse;
+mod metadata;
 mod saved_categories;
 mod category_queue;
 mod categories;
@@ -150,6 +151,7 @@ async fn serve() -> anyhow::Result<()> {
     let app = axum::Router::new()
         .merge(admin::router(&cfg, pool.clone(), db.clone())?)
         .merge(catalog::router(http.clone(), cfg.token.clone(), cfg.category_ai.clone(), db.clone()))
+        .merge(metadata::router(cfg.token.clone())?)
         .merge(live_router)
         .merge(sports::router_with_bridge(cfg.live_sports.clone(), cfg.token.clone(), sports_bridge)?)
         .merge(sync::router(db.clone(), cfg.token.clone(), Some(warm_tx), stream_state.clone(), public_base))

@@ -8,9 +8,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import tv.velvet.data.model.CastMember
 import tv.velvet.data.model.Episode
 import tv.velvet.data.model.MediaDetails
@@ -44,13 +42,14 @@ import java.util.TimeZone
  * episodes ~30 min TTL (airing shows gain episodes).
  */
 class TmdbRepositoryImpl(
-    private val client: OkHttpClient,
+    client: OkHttpClient,
     private val json: Json,
     private val settings: SettingsRepository,
 ) : TmdbRepository {
 
+    private val metadataClient = tmdbMetadataClient(client)
+
     private companion object {
-        const val BASE = "https://api.themoviedb.org/3"
         const val IMG = "https://image.tmdb.org/t/p"
         const val ROW_TTL_MS = 30L * 60L * 1000L
         const val SHOW_DETAILS_TTL_MS = ROW_TTL_MS * 8 // 4 h
@@ -759,16 +758,12 @@ class TmdbRepositoryImpl(
     // ── http ─────────────────────────────────────────────────────────────────
 
     private suspend fun httpGet(path: String, params: Map<String, String>): String {
-        val apiKey = settings.settings.first().tmdbApiKey
-        if (apiKey.isBlank()) throw IOException("Add your TMDB API key in Settings.")
-        val urlBuilder = "$BASE/$path".toHttpUrl().newBuilder()
-            .addQueryParameter("api_key", apiKey)
-            .addQueryParameter("language", "en-US")
-        params.forEach { (key, value) -> urlBuilder.addQueryParameter(key, value) }
-        val request = Request.Builder().url(urlBuilder.build()).get().build()
+        // Resolve configuration for every request, including requests made after editing
+        // the server URL/token. A configured backend always owns TMDB authentication.
+        val request = tmdbMetadataRequest(settings.settings.first(), path, params)
         // Cancellable enqueue-based call: cancelling the row/details coroutine cancels
         // the socket instead of pinning an IO thread for up to the 20 s read timeout.
-        return client.await(request).use { response ->
+        return metadataClient.await(request).use { response ->
             if (!response.isSuccessful) {
                 throw IOException("TMDB /$path failed: HTTP ${response.code}")
             }

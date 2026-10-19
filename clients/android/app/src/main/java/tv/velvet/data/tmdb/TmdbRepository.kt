@@ -9,7 +9,8 @@ import tv.velvet.data.model.RowSpec
  * Native TMDB-backed discovery. Implementation: TmdbRepositoryImpl in this package.
  *
  * Contract notes for the implementation:
- *  - All requests use api.themoviedb.org/3 with the api_key query param from SettingsRepository.
+ *  - A configured backend proxies TMDB reads and keeps the TMDB credential server-side.
+ *    Without a backend, a user-supplied local key enables standalone metadata browsing.
  *  - Image URLs are built as https://image.tmdb.org/t/p/{size}{path}
  *    (posters w500, backdrops w1280, logos w500 preferring PNG, stills w400, profiles w185).
  *  - Every MediaItem MUST have title/year/rating populated — cards always show them.

@@ -8,9 +8,10 @@ This repository contains the client software, not a media library, provider subs
 
 Open **Settings** from the dock. Configure:
 
-1. **TMDB → API key**: your own TMDB v3 API key for catalog metadata. The public build has no embedded key. The home catalog will be empty until this is configured; Settings remains available.
-2. **Backend → Backend URL**: the base URL of your Velvet backend, for example `https://backend.example.com`. This also configures its stream-source and sync endpoints.
-3. **Backend → Token (optional)**: the backend's bearer token, if your server requires one. Use HTTPS for a backend reached over the internet.
+1. **Backend → Backend URL**: the base URL of your Velvet backend, for example `https://backend.example.com`. This configures metadata, streaming, and sync. TMDB requests go through your backend, so its TMDB key stays on the server.
+2. **Backend → Token (optional)**: the backend's bearer token, if your server requires one. Use HTTPS for a backend reached over the internet.
+
+Without a backend, **Metadata → Standalone TMDB API key** allows browsing with your own key. Connected clients never fall back to a local TMDB key.
 
 Live TV, sports, AI categories, cross-device sync, and reporting depend on the matching backend capabilities and configuration. Configure upstream credentials on your own server. Neither the client nor this source distribution grants access to any third-party service.
 

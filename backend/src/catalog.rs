@@ -60,9 +60,12 @@ pub fn router(http: reqwest::Client, token: String, ai: crate::config::CategoryA
 }
 
 async fn auth(State(st): State<Arc<CatalogState>>, req: Request, next: Next) -> Response {
-    let authorized = st.token.is_empty() || req.headers().get("authorization")
-        .and_then(|v| v.to_str().ok()).is_some_and(|v| v == format!("Bearer {}", st.token));
-    if authorized { next.run(req).await } else { error(StatusCode::UNAUTHORIZED, "unauthorized") }
+    if authorized(&st.token, req.headers()) { next.run(req).await } else { error(StatusCode::UNAUTHORIZED, "unauthorized") }
+}
+
+pub(crate) fn authorized(token: &str, headers: &axum::http::HeaderMap) -> bool {
+    token.is_empty() || headers.get("authorization")
+        .and_then(|v| v.to_str().ok()).is_some_and(|v| v == format!("Bearer {token}"))
 }
 
 pub fn error(status: StatusCode, message: &str) -> Response {

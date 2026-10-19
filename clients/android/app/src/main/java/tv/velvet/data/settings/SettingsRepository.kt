@@ -36,7 +36,7 @@ data class VelvetSettings(
     val syncUrl: String = SettingsRepository.DEFAULT_SYNC_URL,
     val syncToken: String = "",
     /**
-     * The single velvet-backend URL that powers BOTH streaming and sync. Setting it
+     * The single velvet-backend URL that powers metadata, streaming, and sync. Setting it
      * (via [SettingsRepository.setBackendUrl]) writes the stream source AND the sync
      * URL together, so the user types one link. Falls back to the legacy syncUrl for
      * installs that predate this field.
@@ -175,7 +175,7 @@ class SettingsRepository(private val context: Context, private val json: Json) {
         context.dataStore.edit { it[Keys.SYNC_TOKEN] = token.trim() }
 
     /**
-     * The one URL the user types. Points the stream resolver AND watch-state sync
+     * The one URL the user types. Points metadata, the stream resolver, and watch-state sync
      * at the same velvet-backend, so there's a single field instead of two. Writes
      * the stream source list (one "Velvet Backend" entry) and the sync url/enabled
      * flag atomically; a blank url clears the source and turns sync off.

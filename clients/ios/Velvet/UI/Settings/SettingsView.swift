@@ -133,7 +133,7 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Backend")
         } footer: {
-            footerText("One URL for streaming and watch-state sync, e.g. https://backend.example.com. Leave the token empty unless your backend requires one.")
+            footerText("One URL for discovery, streaming and watch-state sync, e.g. https://backend.example.com. Leave the token empty unless your backend requires one.")
         }
     }
 
@@ -353,29 +353,38 @@ struct SettingsView: View {
 
     private var tmdbSection: some View {
         Section {
-            TextField("TMDB API key", text: $tmdbKeyDraft)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(VelvetColors.textPrimary)
-                .tint(VelvetColors.textPrimary)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .keyboardType(.asciiCapable)
-                .focused($tmdbKeyFocused)
-                .onSubmit { commitTmdbKey() }
-                .onChange(of: tmdbKeyFocused) { _, focused in
-                    if !focused { commitTmdbKey() }
-                }
-                .listRowBackground(VelvetColors.surfaceElevated)
+            if !settings.backendUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Label("Managed by your backend", systemImage: "checkmark.shield")
+                    .foregroundStyle(VelvetColors.textPrimary)
+                    .listRowBackground(VelvetColors.surfaceElevated)
+            } else {
+                SecureField("TMDB API key (standalone)", text: $tmdbKeyDraft)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(VelvetColors.textPrimary)
+                    .tint(VelvetColors.textPrimary)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.asciiCapable)
+                    .focused($tmdbKeyFocused)
+                    .onSubmit { commitTmdbKey() }
+                    .onChange(of: tmdbKeyFocused) { _, focused in
+                        if !focused { commitTmdbKey() }
+                    }
+                    .listRowBackground(VelvetColors.surfaceElevated)
+            }
         } header: {
-            sectionHeader("TMDB")
+            sectionHeader("Discovery & artwork")
         } footer: {
-            footerText("Your own TMDB API key is required for discovery, search and artwork. Clearing this field removes the saved key.")
+            footerText(settings.backendUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                       ? "Connect a Velvet backend to use its metadata service, or enter your own TMDB key for standalone discovery."
+                       : "Discovery and search use your backend’s TMDB connection. Its API key stays on the server; no key is needed on this device.")
         }
     }
 
     /// Commit on submit / focus loss only — never per keystroke. An empty
     /// commit removes the saved key. Public builds have no bundled fallback.
     private func commitTmdbKey() {
+        guard settings.backendUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let trimmed = tmdbKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             settings.tmdbApiKey = SettingsStore.defaultTmdbKey

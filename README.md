@@ -116,7 +116,7 @@ flowchart LR
 
 For on-demand Usenet playback, Velvet searches your configured indexers, resolves a release, retrieves the required articles through pooled NNTP connections, and serves a seekable HTTP stream. The client chooses and plays a compatible source. The backend also exposes a Stremio-compatible resolver, handles sync and handoff, and supplies audio/remux paths when required. It is designed around streaming on demand; it is not a bundled media collection.
 
-Metadata and artwork are loaded at runtime. Your provider credentials stay in the backend's private configuration. Watch state and analytics live on your server. Optional integrations contact the services you enable. See [security and privacy](SECURITY.md) before making a server reachable by other households.
+Metadata and artwork are loaded at runtime. Your provider credentials and TMDB key stay in the backend's private configuration. Updated clients send metadata requests through the backend, so rotating its key does not require changing device settings. Watch state and analytics live on your server. Optional integrations contact the services you enable. See [security and privacy](SECURITY.md) before making a server reachable by other households.
 
 ## Get started
 
@@ -145,7 +145,7 @@ The example binds to loopback. Configure your own trusted network access or HTTP
 
 ### 2. Build a client and connect it
 
-Follow the platform guide in [the apps table](#the-apps). Set your backend URL and matching client token in the app. Android and iOS also need your own TMDB key in Settings. Select or create a profile.
+Follow the platform guide in [the apps table](#the-apps). Set your backend URL and matching client token in the app. Metadata uses the TMDB key configured on your backend; you do not need to enter it again on Android, iOS, or Roku. Select or create a profile.
 
 Use your own signing identity for device builds. For the complete Android TV experience, build Velvet and Velour as a pair and sign them with the same certificate so their protected local integration works. Do not redistribute a build containing personal credentials.
 

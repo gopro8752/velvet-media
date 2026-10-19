@@ -5,7 +5,7 @@ import Combine
 /// same defaults, same semantics. ObservableObject so views react live.
 @MainActor
 final class SettingsStore: ObservableObject {
-    // Supply your own TMDB key in Settings; public builds contain no shared credential.
+    // Standalone discovery only. A configured backend owns its metadata key.
     static let defaultTmdbKey = ""
 
     @Published var tmdbApiKey: String { didSet { defaults.set(tmdbApiKey, forKey: "tmdb_api_key") } }

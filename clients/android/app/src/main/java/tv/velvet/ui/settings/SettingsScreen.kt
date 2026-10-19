@@ -87,8 +87,8 @@ fun SettingsScreen(onBack: () -> Unit) {
         item { SettingsSectionHeader("Backend") }
         item {
             Text(
-                text = "One URL to your Velvet backend — streaming and watch-state " +
-                    "sync both use it.",
+                text = "One URL for metadata, streaming, and watch-state sync. " +
+                    "Your TMDB key stays on the server.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = VelvetColors.TextTertiary,
                 modifier = Modifier.padding(bottom = 2.dp),
@@ -272,38 +272,55 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
 
         // ---------------------------------------------------------------- TMDB
-        item { SettingsSectionHeader("TMDB") }
-        item {
-            SettingsRow(
-                onClick = { showEditKey = true },
-                modifier = Modifier.width(SettingsDefaults.SectionWidth),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "API Key",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = VelvetColors.TextPrimary,
-                    )
-                    Text(
-                        text = if (state.settings.tmdbApiKey.isBlank()) "Not configured" else "Configured",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = VelvetColors.TextTertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+        item { SettingsSectionHeader("Metadata") }
+        if (state.settings.backendUrl.isNotBlank()) {
+            item {
+                Text(
+                    text = "Provided by your Velvet backend. Manage the TMDB key on your server.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = VelvetColors.TextTertiary,
+                )
+            }
+        } else {
+            item {
+                Text(
+                    text = "Connect a backend above, or add your own TMDB key for standalone browsing.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = VelvetColors.TextTertiary,
+                )
+            }
+            item {
+                SettingsRow(
+                    onClick = { showEditKey = true },
+                    modifier = Modifier.width(SettingsDefaults.SectionWidth),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Standalone TMDB API key",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = VelvetColors.TextPrimary,
+                        )
+                        Text(
+                            text = if (state.settings.tmdbApiKey.isBlank()) "Not configured" else "Configured",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = VelvetColors.TextTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit API key",
+                        tint = VelvetColors.TextSecondary,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
-                Spacer(Modifier.width(16.dp))
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = "Edit API key",
-                    tint = VelvetColors.TextSecondary,
-                    modifier = Modifier.size(18.dp),
-                )
             }
         }
     }
 
-    if (showEditKey) {
+    if (showEditKey && state.settings.backendUrl.isBlank()) {
         EditTmdbKeyDialog(
             currentKey = state.settings.tmdbApiKey,
             onSave = { key ->
@@ -317,7 +334,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         EditSyncValueDialog(
             title = "Backend URL",
             hint = "https://backend.example.com",
-            helper = "Your velvet-backend address. Streaming and sync both use this.",
+            helper = "Your velvet-backend address. Metadata, streaming, and sync all use this.",
             initialValue = state.settings.backendUrl,
             onSave = { url ->
                 vm.setBackendUrl(url)

@@ -11,7 +11,6 @@ import Foundation
 /// next visit retries; details() throws so the details screen can show retry.
 final class TmdbClient: TmdbRepository {
 
-    private static let base = "https://api.themoviedb.org/3"
     private static let img = "https://image.tmdb.org/t/p"
     private static let rowTtl: TimeInterval = 30 * 60
     private static let showDetailsTtl: TimeInterval = rowTtl * 8 // 4 h
@@ -52,12 +51,12 @@ final class TmdbClient: TmdbRepository {
         10766: "Soap", 10767: "Talk", 10768: "War & Politics", 37: "Western",
     ]
 
-    init(settings: SettingsStore) {
+    init(settings: SettingsStore, session: URLSession? = nil) {
         self.settings = settings
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 20
         config.httpAdditionalHeaders = ["Accept": "application/json"]
-        self.session = URLSession(configuration: config)
+        self.session = session ?? URLSession(configuration: config, delegate: TmdbRedirectPolicy(), delegateQueue: nil)
     }
 
     /// The home funnel, ranked by intent: seasonal (only inside its window, spec
@@ -657,20 +656,14 @@ final class TmdbClient: TmdbRepository {
     // MARK: - http
 
     private func httpGet(_ path: String, _ params: [(String, String)]) async throws -> Data {
-        let apiKey = await MainActor.run { settings.tmdbApiKey }
-        guard var components = URLComponents(string: "\(Self.base)/\(path)") else {
-            throw URLError(.badURL)
+        // Snapshot settings for every request so backend/token edits apply
+        // immediately, including when discovery runs independently of sync.
+        let connection = await MainActor.run {
+            TmdbConnection(backendURL: settings.backendUrl, syncURL: settings.syncUrl,
+                           token: settings.syncToken, standaloneKey: settings.tmdbApiKey)
         }
-        var items = [
-            URLQueryItem(name: "api_key", value: apiKey),
-            URLQueryItem(name: "language", value: "en-US"),
-        ]
-        for (name, value) in params {
-            items.append(URLQueryItem(name: name, value: value))
-        }
-        components.queryItems = items
-        guard let url = components.url else { throw URLError(.badURL) }
-        let (data, response) = try await session.data(from: url)
+        let request = try connection.request(path: path, params: params)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }

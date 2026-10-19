@@ -49,6 +49,7 @@
 		8075AC2E7D55C2DD7F32BF7D /* LiveTVUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9AC89A85577D9448895FDC6 /* LiveTVUITests.swift */; };
 		8A13E715C4C0AFF2FC05FB6A /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 776278A1F2C5BA7F03F67CC6 /* OrientationLock.swift */; };
 		8A7371433A13FAD47D509FB1 /* LiveSportsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C351310A319C0202CB69B0C0 /* LiveSportsView.swift */; };
+		8D742CA5E9166099466A74EA /* TmdbRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF1704F450D81DD4C5AA42C /* TmdbRequest.swift */; };
 		8F2972E967B79CE2B30B1684 /* LiveSportsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E215B1BBB8FC62B61D6C0434 /* LiveSportsUITests.swift */; };
 		8FF8D7814655C358013E7FC5 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = C25DB225CC7F5BB917E27AD0 /* VLCKitSPM */; };
 		907571A2080413073C53E309 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37B29E630D0C872F1D916415 /* SettingsView.swift */; };
@@ -74,6 +75,7 @@
 		D9B11F98CEEAD798EA209840 /* outfit.ttf in Resources */ = {isa = PBXBuildFile; fileRef = EDDCD8313AC453A8E6DCBF2D /* outfit.ttf */; };
 		D9D0D8225F6B7ED30D4ABB0A /* DetailsSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52A44D2688ACF4F691B68863 /* DetailsSections.swift */; };
 		DD6EAC7AB93E7DBB9980BBA7 /* TVHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = B333E19704CA86542D4B5BB6 /* TVHandoff.swift */; };
+		DDDA388D7C6C23910EC77C4B /* TmdbBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 550F737EADAB77C963827F01 /* TmdbBackendTests.swift */; };
 		DDF1041BDB084610E81402EE /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAE4E96000F5FAF7B6908A08 /* LiveTV.swift */; };
 		DDF4A9C158E10439AF40BCE3 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 003D2FBE11E617C14868EB66 /* Models.swift */; };
 		DF1BD4B70BE22947C702F165 /* PlaybackTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A061A5759A006C5C87A9E10 /* PlaybackTelemetry.swift */; };
@@ -140,6 +142,7 @@
 		513BC75CF247A64964A45464 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		51F17D66F1E718884199AD55 /* StreamLookahead.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamLookahead.swift; sourceTree = "<group>"; };
 		52A44D2688ACF4F691B68863 /* DetailsSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailsSections.swift; sourceTree = "<group>"; };
+		550F737EADAB77C963827F01 /* TmdbBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbBackendTests.swift; sourceTree = "<group>"; };
 		573EDB3ADAF91A7D8AFFEE14 /* PlaybackRecoveryPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackRecoveryPlayerTests.swift; sourceTree = "<group>"; };
 		5A095522A6DB2D151794BB7C /* inter.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = inter.ttf; sourceTree = "<group>"; };
 		5B2B34562D1430F3FDD1D42B /* LivePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePlayerView.swift; sourceTree = "<group>"; };
@@ -184,6 +187,7 @@
 		D54E48BC2DC006C256E4ED14 /* ProfilePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilePickerView.swift; sourceTree = "<group>"; };
 		DA5DDFFFD687B10FE8D02EDC /* HeroBillboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeroBillboard.swift; sourceTree = "<group>"; };
 		DCA4FBD00A1D858E37D72C02 /* TmdbRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbRepository.swift; sourceTree = "<group>"; };
+		DDF1704F450D81DD4C5AA42C /* TmdbRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbRequest.swift; sourceTree = "<group>"; };
 		E17D16AF62BDCDCC5BF48ABB /* StreamTags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamTags.swift; sourceTree = "<group>"; };
 		E215B1BBB8FC62B61D6C0434 /* LiveSportsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSportsUITests.swift; sourceTree = "<group>"; };
 		E906C41CBBB4DB147FBD573A /* HomeCategories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeCategories.swift; sourceTree = "<group>"; };
@@ -403,6 +407,7 @@
 				66628798D6E3E35301B16FA7 /* PlayerControlsVisualTests.swift */,
 				B758C7BD40E00182521C0E54 /* ReleaseGroupBlocksTests.swift */,
 				5B428D2856BFC27098818D86 /* StreamFailoverWatchdogTests.swift */,
+				550F737EADAB77C963827F01 /* TmdbBackendTests.swift */,
 				6F1E8B00AC96935F944E2A15 /* TVHandoffPlayerTests.swift */,
 			);
 			path = VelvetTests;
@@ -446,6 +451,7 @@
 				AC891595CD1E7531E0EFF6A9 /* TmdbClient.swift */,
 				09F6C112D9EC3663C76C975A /* TmdbDtos.swift */,
 				DCA4FBD00A1D858E37D72C02 /* TmdbRepository.swift */,
+				DDF1704F450D81DD4C5AA42C /* TmdbRequest.swift */,
 				94F4DF00CEAFC0D03A752255 /* TmdbRows.swift */,
 				B333E19704CA86542D4B5BB6 /* TVHandoff.swift */,
 				CC764CCCEAD3B28421E93001 /* Sync */,
@@ -657,6 +663,7 @@
 				3543C06D917B7FFB6DF14119 /* TmdbClient.swift in Sources */,
 				D65034F8B0ABDB33342DFEFA /* TmdbDtos.swift in Sources */,
 				04F74C4B9E07ED566733605C /* TmdbRepository.swift in Sources */,
+				8D742CA5E9166099466A74EA /* TmdbRequest.swift in Sources */,
 				3E5DAF700148F877F6939340 /* TmdbRows.swift in Sources */,
 				78D6A53ECA6FD1A94B2BFC4F /* TrackPickerSheet.swift in Sources */,
 				C6B5B61B3BDFA59BFD631ABB /* UpNextOverlay.swift in Sources */,
@@ -677,6 +684,7 @@
 				4E556FD4D168D75CEA6006E3 /* ReleaseGroupBlocksTests.swift in Sources */,
 				712A76BA5AA9D52CB0E3E3CE /* StreamFailoverWatchdogTests.swift in Sources */,
 				C8F58E7242CA3688E3F96DAA /* TVHandoffPlayerTests.swift in Sources */,
+				DDDA388D7C6C23910EC77C4B /* TmdbBackendTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -787,7 +795,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.8.3;
 				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.ios;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.10;
@@ -941,7 +949,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.8.3;
 				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.ios;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.10;

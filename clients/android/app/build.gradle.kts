@@ -15,8 +15,8 @@ android {
         applicationId = "tv.velvet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "1.10.7"
+        versionCode = 28
+        versionName = "1.10.8"
     }
 
     // Keep supported TV architectures without shipping every browser binary to each device.
