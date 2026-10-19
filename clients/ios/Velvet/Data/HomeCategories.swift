@@ -73,6 +73,22 @@ struct CategoryQueueRequest: Encodable {
     }
 }
 
+@MainActor
+protocol HomeCategoryService {
+    func halloweenCategory() async -> HomeCategory?
+    func generateCategory(prompt: String) async throws -> HomeCategory
+}
+
+/// This original curated row belongs to the original viewer. Its metadata may
+/// be cached globally, but other profiles must not display or launch the row.
+enum PersonalHalloweenCategory {
+    static let id = "halloween-nostalgia"
+    static func isVisible(profile: String) -> Bool { profile == "default" }
+    static func canPlay(_ category: HomeCategory, profile: String) -> Bool {
+        category.id != id || isVisible(profile: profile)
+    }
+}
+
 /// Local cache contains catalog metadata only, never subscription credentials.
 /// Generated rows belong to the profile that requested them, even if the active
 /// profile changes while the server is resolving titles.
@@ -80,13 +96,13 @@ enum HomeCategoryCache {
     private static let halloweenKey = "home_halloween_category_v1"
     private static func key(_ profile: String) -> String { "home_generated_categories_v1_" + profile }
 
-    static func halloween() -> HomeCategory? {
-        guard let data = UserDefaults.standard.data(forKey: halloweenKey) else { return nil }
+    static func halloween(defaults: UserDefaults = .standard) -> HomeCategory? {
+        guard let data = defaults.data(forKey: halloweenKey) else { return nil }
         return (try? JSONDecoder().decode(HomeCategory.self, from: data))?.validated
     }
-    static func saveHalloween(_ category: HomeCategory) {
+    static func saveHalloween(_ category: HomeCategory, defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(category) else { return }
-        UserDefaults.standard.set(data, forKey: halloweenKey)
+        defaults.set(data, forKey: halloweenKey)
     }
     static func categories(profile: String) -> [HomeCategory] {
         guard let data = UserDefaults.standard.data(forKey: key(profile)) else { return [] }

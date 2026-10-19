@@ -8,7 +8,7 @@ import Foundation
 /// handoffs use the separate acknowledged v2 client so failures are visible
 /// without breaking local playback.
 @MainActor
-final class CompanionApi {
+final class CompanionApi: HomeCategoryService {
     private let settings: SettingsStore
     private let handoffSession: URLSession
 
@@ -154,6 +154,9 @@ final class CompanionApi {
     }
 
     func categoryQueue(_ category: HomeCategory, shuffle: Bool) async throws -> HomeCategory {
+        guard PersonalHalloweenCategory.canPlay(category, profile: settings.activeProfileId ?? ProfileStore.defaultId) else {
+            throw CategoryError.unavailable
+        }
         guard let cfg = categoryConfig, let url = URL(string: cfg.baseUrl + "/categories/queue") else {
             throw CategoryError.unavailable
         }

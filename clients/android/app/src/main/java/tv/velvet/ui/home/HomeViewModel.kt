@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tv.velvet.data.categories.Category
+import tv.velvet.data.categories.canAccessCategory
+import tv.velvet.data.categories.ownsHalloweenCategory
 import tv.velvet.data.local.DEFAULT_PROFILE_ID
 import tv.velvet.data.local.MyListEntity
 import tv.velvet.data.local.WatchProgressEntity
@@ -90,7 +92,11 @@ class HomeViewModel(container: AppContainer) : ViewModel() {
             .map { it ?: DEFAULT_PROFILE_ID }
             .stateIn(viewModelScope, SharingStarted.Eagerly, DEFAULT_PROFILE_ID)
 
-    val halloween: StateFlow<Category?> = categories.halloween
+    // No default-profile fallback: personal categories stay hidden until the real
+    // selection is loaded. The cached Halloween collection belongs to Me only.
+    val categoryProfileId: StateFlow<String?> = settingsRepository.activeProfileId
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val halloween: StateFlow<Category?> = categories.halloween(categoryProfileId)
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -111,9 +117,10 @@ class HomeViewModel(container: AppContainer) : ViewModel() {
                 // A signed launcher can enter Home before the VM's active-profile
                 // StateFlow has emitted. Read the persisted selection for the queue.
                 val profile = settingsRepository.activeProfileId.first() ?: return@launch
-                val expanded = categories.expandQueue(category, shuffle)
+                val expanded = categories.expandQueue(profile, category, shuffle)
+                if (settingsRepository.activeProfileId.first() != profile) return@launch
                 val target = categoryQueue.start(profile, expanded)
-                navigate(target)
+                if (settingsRepository.activeProfileId.first() == profile) navigate(target)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { queueError.value = error.message?.take(240) ?: "Couldn't prepare the category. Try again." }
             finally { queuePreparing.value = false }
@@ -123,8 +130,13 @@ class HomeViewModel(container: AppContainer) : ViewModel() {
     fun playCategoryById(id: String, shuffle: Boolean, navigate: (PlayTarget) -> Unit) {
         viewModelScope.launch {
             val profile = settingsRepository.activeProfileId.first() ?: return@launch
-            val category = (listOfNotNull(categories.halloween.first()) + categories.generated(profile).first())
+            if (!canAccessCategory(profile, id)) {
+                queueError.value = "This category belongs to another profile."
+                return@launch
+            }
+            val category = (listOfNotNull(categories.halloween(profile).first()) + categories.generated(profile).first())
                 .firstOrNull { it.id == id }
+            if (settingsRepository.activeProfileId.first() != profile) return@launch
             if (category == null) queueError.value = "This category is no longer saved. Choose another category."
             else playCategory(category, shuffle, navigate)
         }
@@ -142,10 +154,14 @@ class HomeViewModel(container: AppContainer) : ViewModel() {
 
     fun refreshHalloween() {
         viewModelScope.launch {
+            val profile = settingsRepository.activeProfileId.first() ?: return@launch
+            if (!ownsHalloweenCategory(profile)) return@launch
             halloweenFailed.value = false
-            try { categories.refreshHalloween() }
+            try { categories.refreshHalloween(profile) }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { halloweenFailed.value = true }
+            catch (_: Exception) {
+                if (settingsRepository.activeProfileId.first() == profile) halloweenFailed.value = true
+            }
         }
     }
 
@@ -365,7 +381,12 @@ class HomeViewModel(container: AppContainer) : ViewModel() {
                 runCatching { container.launcherFeaturedCache.remember(profile, items) }
             }
         }
-        refreshHalloween()
+        viewModelScope.launch {
+            categoryProfileId.collect { profile ->
+                dismissQueuePreparation()
+                if (ownsHalloweenCategory(profile)) refreshHalloween()
+            }
+        }
         // React to row-order changes from Settings; fetch each (new) row independently.
         viewModelScope.launch {
             settingsRepository.settings

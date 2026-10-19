@@ -6,6 +6,7 @@
   "source/LiveGuidePolicy.brs",
   "source/LivePlaybackPolicy.brs",
   "source/PreferencesPolicy.brs",
+  "source/CategoryPolicy.brs",
   "source/RokuAudioPolicy.brs",
   "source/TelemetryPolicy.brs"
 ]

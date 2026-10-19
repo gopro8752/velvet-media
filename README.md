@@ -71,7 +71,7 @@ Create categories from natural language, with voice entry where the device suppo
 | “Cozy winter movies” | Movies |
 | “Star Wars movies in story order” | Movies in a requested sequence |
 
-Play a category in order or shuffle it into a continuous queue. Category playback is kept out of Continue Watching, and saved categories can be deleted. The catalog also includes a curated Disney/Nickelodeon Halloween episode category. AI-generated selections depend on available metadata and may need checking, particularly for chronology or narrow episode themes.
+Play a category in order or shuffle it into a continuous queue. Category playback is kept out of Continue Watching, and saved categories can be deleted. Collections belong to their profile; the original profile also includes a curated Disney/Nickelodeon Halloween episode category. AI-generated selections depend on available metadata and may need checking, particularly for chronology or narrow episode themes.
 
 AI categories are optional. The backend can invoke the official Codex CLI after you sign in with your own eligible account. Your account's access and usage limits apply; the project includes no shared account or unlimited AI entitlement. See [AI configuration](backend/README.md#optional-integrations).
 

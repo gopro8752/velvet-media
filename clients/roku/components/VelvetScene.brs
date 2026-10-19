@@ -103,6 +103,10 @@ sub onApiResult(event as object)
     if context = invalid then return
     if context.epoch <> m.backendEpoch then return
     kind = context.kind
+    ' A late legacy collection or queue response must not follow a profile switch.
+    if kind = "halloween" or (kind = "queue" and VStr(VGet(context.context, "categoryId")) = "halloween-nostalgia")
+        if not VLegacyHalloweenResponseCurrent(context.context, m.profileId) then return
+    end if
     if Left(kind, 4) = "hand"
         if VBool(VGet(result, "ok"))
             handleHandoffResponse(kind, VGet(result, "data", {}), context.context)
@@ -302,7 +306,7 @@ sub navigate(page as string)
             m.model.busy = true
             requestApi("home", "/catalog/home?date=" + localDate(), "GET", invalid, invalid, 40000)
         end if
-        if m.halloween = invalid then requestApi("halloween", "/catalog/halloween", "GET", invalid, invalid, 90000)
+        if VHasLegacyHalloween(m.profileId) and m.halloween = invalid then requestApi("halloween", "/catalog/halloween", "GET", invalid, {profileId: m.profileId}, 90000)
         if VStr(m.pendingProfileCreate) <> m.profileId then requestApi("savedCategories", "/categories/saved?profileId=" + VEncode(m.profileId), "GET", invalid, {profileId: m.profileId})
     else if page = "live"
         m.model.busy = false
@@ -366,12 +370,7 @@ end sub
 
 function categoryRows() as object
     rows = []
-    all = []
-    if m.halloween <> invalid then all.Push(m.halloween)
-    for each category in m.categories
-        all.Push(category)
-    end for
-    for each category in all
+    for each category in VProfileCategories(m.categories, m.halloween, m.profileId)
         rows.Push({id: category.id, categoryId: category.id, title: category.title, style: "landscape", items: VArray(VGet(category, "items")), category: true})
     end for
     return rows
@@ -674,10 +673,7 @@ function isBackgroundRequest(kind as string) as boolean
 end function
 
 function findCategory(id as string) as dynamic
-    if m.halloween <> invalid
-        if m.halloween.id = id then return m.halloween
-    end if
-    for each category in m.categories
+    for each category in VProfileCategories(m.categories, m.halloween, m.profileId)
         if category.id = id then return category
     end for
     return invalid
@@ -699,7 +695,7 @@ sub prepareCategory(id as string, shuffle as boolean)
     m.model.busy = true
     m.model.message = "Preparing your playlist…"
     publishModel()
-    requestApi("queue", "/categories/queue", "POST", {title: category.title, items: category.items, shuffle: shuffle}, {playId: m.playGeneration}, 150000)
+    requestApi("queue", "/categories/queue", "POST", {title: category.title, items: category.items, shuffle: shuffle}, {playId: m.playGeneration, categoryId: id, profileId: m.profileId}, 150000)
 end sub
 
 sub deleteCategory(id as string)

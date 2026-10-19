@@ -74,6 +74,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import tv.velvet.VelvetApp
 import tv.velvet.data.categories.Category
+import tv.velvet.data.categories.ownsHalloweenCategory
 import tv.velvet.data.categories.CategoryItem
 import tv.velvet.data.local.ProfileEntity
 import tv.velvet.data.model.MediaItem
@@ -107,7 +108,11 @@ fun HomeScreen(
         factory = viewModelFactory { initializer { HomeViewModel(app.container) } }
     )
 
-    val halloween by vm.halloween.collectAsStateWithLifecycle()
+    val categoryProfileId by vm.categoryProfileId.collectAsStateWithLifecycle()
+    val halloweenSnapshot by vm.halloween.collectAsStateWithLifecycle()
+    val showHalloween = ownsHalloweenCategory(categoryProfileId)
+    // A retained StateFlow emission cannot flash Me's rail on another profile.
+    val halloween = halloweenSnapshot.takeIf { showHalloween }
     val generatedCategories by vm.generatedCategories.collectAsStateWithLifecycle()
     val queuePreparing by vm.queuePreparing.collectAsStateWithLifecycle()
     val queueError by vm.queueError.collectAsStateWithLifecycle()
@@ -123,11 +128,11 @@ fun HomeScreen(
         }
         onLauncherRequestHandled()
     }
-    var categoryActions by remember { mutableStateOf<Pair<Category, CategoryItem>?>(null) }
-    var categoryToDelete by remember { mutableStateOf<Category?>(null) }
-    var categoryDeleting by remember { mutableStateOf(false) }
-    var categoryDeleteError by remember { mutableStateOf<String?>(null) }
-    var restoreCreateFocus by remember { mutableStateOf(false) }
+    var categoryActions by remember(categoryProfileId) { mutableStateOf<Pair<Category, CategoryItem>?>(null) }
+    var categoryToDelete by remember(categoryProfileId) { mutableStateOf<Category?>(null) }
+    var categoryDeleting by remember(categoryProfileId) { mutableStateOf(false) }
+    var categoryDeleteError by remember(categoryProfileId) { mutableStateOf<String?>(null) }
+    var restoreCreateFocus by remember(categoryProfileId) { mutableStateOf(false) }
     val createCategoryFocus = remember { FocusRequester() }
     LaunchedEffect(restoreCreateFocus, categoryToDelete) {
         if (restoreCreateFocus && categoryToDelete == null) {
@@ -199,7 +204,7 @@ fun HomeScreen(
             backdropUrl = hero?.backdropUrl ?: hero?.posterUrl,
             visible = !scrolledPastHero,
         )
-        if (homeUnavailable && halloweenFailed && halloween == null && generatedCategories.isEmpty()) {
+        if (homeUnavailable && (!showHalloween || halloweenFailed) && halloween == null && generatedCategories.isEmpty()) {
             HomeUnavailableState(
                 onRetry = { vm.retryFailedRows(); vm.refreshHalloween() },
                 modifier = Modifier.align(Alignment.Center),
@@ -249,13 +254,13 @@ fun HomeScreen(
                         onLongClick = { categoryActions = category to it })
                 }
             }
-            if (halloween == null && !halloweenFailed) {
+            if (showHalloween && halloween == null && !halloweenFailed) {
                 item(key = "halloween_loading") {
                     HomeRow(title = "Monstober & Nick Halloween", style = RowStyle.LANDSCAPE,
                         state = RowUiState.Loading, onItemClick = {})
                 }
             }
-            if (halloween == null && halloweenFailed) {
+            if (showHalloween && halloween == null && halloweenFailed) {
                 item(key = "halloween_retry") {
                     Button(onClick = vm::refreshHalloween, colors = velvetButtonColors(),
                         modifier = Modifier.padding(start = 48.dp, top = 22.dp)) {

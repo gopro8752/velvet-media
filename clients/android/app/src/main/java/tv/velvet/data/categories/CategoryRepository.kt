@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -16,6 +18,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import tv.velvet.data.local.DEFAULT_PROFILE_ID
 import tv.velvet.data.model.MediaItem
 import tv.velvet.data.model.MediaType
 import tv.velvet.data.model.PlayTarget
@@ -64,7 +67,17 @@ internal fun Category.queueBody(shuffle: Boolean) = QueueBody(title,
 @Serializable private data class GenerateBody(val prompt: String)
 @Serializable private data class CategoryError(val error: String = "Couldn't create this category. Try again.")
 
-/** Saved categories are private to a viewer. The shared Halloween rail is cached separately. */
+internal const val HALLOWEEN_CATEGORY_ID = "halloween-nostalgia"
+
+/** The original hand-curated collection belongs to the original (Me) profile. */
+internal fun ownsHalloweenCategory(profile: String?): Boolean = profile == DEFAULT_PROFILE_ID
+internal fun canAccessCategory(profile: String?, categoryId: String): Boolean =
+    !profile.isNullOrBlank() && (categoryId != HALLOWEEN_CATEGORY_ID || ownsHalloweenCategory(profile))
+
+internal fun Flow<Category?>.halloweenForProfile(profiles: Flow<String?>): Flow<Category?> =
+    combine(profiles, this) { profile, category -> category.takeIf { ownsHalloweenCategory(profile) } }
+
+/** Saved categories are private to a viewer; the original Halloween cache is retained for its owner. */
 class CategoryRepository(
     private val context: Context,
     private val settings: SettingsRepository,
@@ -74,9 +87,12 @@ class CategoryRepository(
     private val client = client.newBuilder().callTimeout(150, TimeUnit.SECONDS)
         .readTimeout(150, TimeUnit.SECONDS).build()
     private val halloweenKey = stringPreferencesKey("halloween")
-    val halloween = context.categoryStore.data.map { preferences ->
+    private val cachedHalloween = context.categoryStore.data.map { preferences ->
         preferences[halloweenKey]?.let { runCatching { json.decodeFromString(Category.serializer(), it).validated() }.getOrNull() }
     }
+    fun halloween(profiles: Flow<String?>): Flow<Category?> = cachedHalloween.halloweenForProfile(profiles)
+    fun halloween(profile: String?): Flow<Category?> = cachedHalloween.map { it.takeIf { ownsHalloweenCategory(profile) } }
+
     private fun profileKey(profile: String) = stringPreferencesKey("generated_" +
         MessageDigest.getInstance("SHA-256").digest(profile.toByteArray())
             .joinToString("") { "%02x".format(it) })
@@ -87,7 +103,8 @@ class CategoryRepository(
         runCatching { json.decodeFromString(ListSerializer(Category.serializer()), it).map(Category::validated) }.getOrNull()
     } ?: emptyList()
 
-    suspend fun refreshHalloween() {
+    suspend fun refreshHalloween(profile: String) {
+        require(ownsHalloweenCategory(profile)) { "This category belongs to another profile." }
         val category = request("/catalog/halloween").validated()
         // Keep a useful cached rail through upstream failures/empty catalog responses.
         require(category.items.isNotEmpty()) { "Halloween episodes aren't available yet." }
@@ -116,8 +133,10 @@ class CategoryRepository(
         }
     }
 
-    suspend fun expandQueue(category: Category, shuffle: Boolean): Category = request("/categories/queue", queue =
-        category.queueBody(shuffle)).validated()
+    suspend fun expandQueue(profile: String, category: Category, shuffle: Boolean): Category {
+        require(canAccessCategory(profile, category.id)) { "This category belongs to another profile." }
+        return request("/categories/queue", queue = category.queueBody(shuffle)).validated()
+    }
 
     private suspend fun request(path: String, prompt: String? = null, queue: QueueBody? = null): Category = withContext(Dispatchers.IO) {
         val config = settings.settings.first()

@@ -103,7 +103,10 @@ final class HomeViewModel: ObservableObject {
     @Published private(set) var generatedCategories: [HomeCategory] = []
     @Published private(set) var isGeneratingCategory = false
     @Published var categoryError: String?
-    private let companion: CompanionApi
+    private let companion: any HomeCategoryService
+    private let categoryDefaults: UserDefaults
+    private var halloweenProfileId: String
+    private var halloweenRequestId = UUID()
     private var halloweenTask: Task<Void, Never>?
     private var categoryTask: Task<Void, Never>?
     private var lastHalloweenFetch: Date?
@@ -145,13 +148,24 @@ final class HomeViewModel: ObservableObject {
     /// 14s — long enough to actually read the overview (same as Android).
     private static let heroRotationNanos: UInt64 = 14_000_000_000
 
-    init(tmdb: TmdbRepository, settings: SettingsStore, playback: PlaybackStore, companion: CompanionApi) {
+    init(tmdb: TmdbRepository, settings: SettingsStore, playback: PlaybackStore,
+         companion: any HomeCategoryService, categoryDefaults: UserDefaults = .standard) {
         self.tmdb = tmdb
         self.playback = playback
         self.settings = settings
         self.companion = companion
-        halloweenCategory = HomeCategoryCache.halloween()
+        self.categoryDefaults = categoryDefaults
+        halloweenProfileId = playback.activeProfileId()
+        halloweenCategory = PersonalHalloweenCategory.isVisible(profile: halloweenProfileId)
+            ? HomeCategoryCache.halloween(defaults: categoryDefaults) : nil
         generatedCategories = HomeCategoryCache.categories(profile: playback.activeProfileId())
+        // The publisher carries the incoming ID before SettingsStore's stored
+        // property changes. Clear the old row during the switch itself.
+        settings.$activeProfileId
+            .map { $0 ?? ProfileStore.defaultId }
+            .removeDuplicates()
+            .sink { [weak self] profile in self?.selectHalloweenProfile(profile) }
+            .store(in: &cancellables)
         refreshHalloween()
 
         hiddenKeys = playback.discoveryHiddenKeys()
@@ -285,16 +299,47 @@ final class HomeViewModel: ObservableObject {
         generatedCategories = HomeCategoryCache.categories(profile: playback.activeProfileId())
     }
 
+    private func selectHalloweenProfile(_ profile: String) {
+        guard halloweenProfileId != profile else { return }
+        halloweenProfileId = profile
+        halloweenRequestId = UUID()
+        halloweenTask?.cancel()
+        halloweenTask = nil
+        halloweenLoading = false
+        halloweenCategory = PersonalHalloweenCategory.isVisible(profile: profile)
+            ? HomeCategoryCache.halloween(defaults: categoryDefaults) : nil
+        refreshHalloween()
+    }
+
+    func halloweenCategory(for profile: String) -> HomeCategory? {
+        PersonalHalloweenCategory.isVisible(profile: profile) && halloweenProfileId == profile
+            ? halloweenCategory : nil
+    }
+
+    func canPlayCategory(_ category: HomeCategory) -> Bool {
+        PersonalHalloweenCategory.canPlay(category, profile: playback.activeProfileId())
+    }
+
     func refreshHalloween(force: Bool = false) {
-        guard halloweenTask == nil else { return }
+        guard PersonalHalloweenCategory.isVisible(profile: halloweenProfileId), halloweenTask == nil else { return }
         if !force, let lastHalloweenFetch, Date().timeIntervalSince(lastHalloweenFetch) < 1_800 { return }
+        let profile = halloweenProfileId
+        let requestId = UUID()
+        halloweenRequestId = requestId
         halloweenLoading = halloweenCategory == nil
         halloweenTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.halloweenLoading = false; self.halloweenTask = nil }
-            if let category = await self.companion.halloweenCategory(), !Task.isCancelled {
+            defer {
+                if self.halloweenRequestId == requestId {
+                    self.halloweenLoading = false
+                    self.halloweenTask = nil
+                }
+            }
+            if let category = await self.companion.halloweenCategory(), !Task.isCancelled,
+               self.halloweenRequestId == requestId, self.halloweenProfileId == profile,
+               self.playback.activeProfileId() == profile {
                 self.halloweenCategory = category
-                HomeCategoryCache.saveHalloween(category)
+                HomeCategoryCache.saveHalloween(category, defaults: self.categoryDefaults)
                 self.lastHalloweenFetch = Date()
             }
         }

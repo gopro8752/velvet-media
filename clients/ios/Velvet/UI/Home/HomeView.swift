@@ -69,11 +69,14 @@ private struct HomeContent: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var profiles: ProfileStore
 
+    private let activeProfileId: String
+
     @Query private var progressRows: [WatchProgress]
     @Query private var myListRows: [MyListItem]
 
     init(viewModel: HomeViewModel, activeProfileId: String) {
         self.viewModel = viewModel
+        self.activeProfileId = activeProfileId
         // Profile-scoped, freshest first — only the active profile's rows.
         _progressRows = Query(
             filter: #Predicate<WatchProgress> { $0.profileId == activeProfileId },
@@ -261,9 +264,9 @@ private struct HomeContent: View {
                 myListMenu(for: item)
             }
         }
-        if let category = viewModel.halloweenCategory {
+        if let category = viewModel.halloweenCategory(for: activeProfileId) {
             categoryRow(category)
-        } else if viewModel.halloweenLoading {
+        } else if PersonalHalloweenCategory.isVisible(profile: activeProfileId), viewModel.halloweenLoading {
             HStack(spacing: 10) {
                 ProgressView()
                 Text("Loading Monstober & Nick Halloween…")
@@ -299,6 +302,7 @@ private struct HomeContent: View {
 
     private func categoryRow(_ category: HomeCategory, removable: Bool = false) -> some View {
         HomeCategoryRow(category: category, onPlay: { entry in
+            guard viewModel.canPlayCategory(category) else { return }
             playbackQueue = nil
             playTarget = categoryTarget(entry)
         }, onPlayAll: {
@@ -306,7 +310,10 @@ private struct HomeContent: View {
         }, onShuffle: {
             startCategory(category, shuffle: true)
         }) { entry in
-            Button { playTarget = categoryTarget(entry) } label: { Label("Play", systemImage: "play.fill") }
+            Button {
+                guard viewModel.canPlayCategory(category) else { return }
+                playTarget = categoryTarget(entry)
+            } label: { Label("Play", systemImage: "play.fill") }
             Button { detailsItem = entry.item } label: {
                 Label(entry.type == .show ? "Go to show" : "Go to movie", systemImage: "info.circle")
             }
@@ -323,7 +330,7 @@ private struct HomeContent: View {
     }
 
     private func startCategory(_ category: HomeCategory, shuffle: Bool) {
-        guard !queueLoading else { return }
+        guard !queueLoading, viewModel.canPlayCategory(category) else { return }
         let profile = settings.activeProfileId
         queueLoading = true
         queueLoadTask = Task { @MainActor in
