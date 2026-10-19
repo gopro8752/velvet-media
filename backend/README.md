@@ -57,7 +57,7 @@ All optional integrations default to disabled. The public repository includes no
 
 ## Run from source
 
-Use a current stable Rust toolchain and install FFmpeg plus Chromaprint (`fpcalc`) if you need transcoding or intro detection.
+Use a current stable Rust toolchain. The full test suite requires FFmpeg and `ffprobe`; playback compatibility uses the same tools. Chromaprint (`fpcalc`) supplies intro detection. On Debian/Ubuntu, install these with `sudo apt-get install ffmpeg libchromaprint-tools` before running the commands below.
 
 ```sh
 cargo test --locked
