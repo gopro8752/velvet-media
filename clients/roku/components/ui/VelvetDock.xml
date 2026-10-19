@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetDock" extends="Group" visible="false">
+  <interface>
+    <field id="opened" type="boolean" onChange="openChanged" />
+    <field id="activeRoute" type="string" value="home" onChange="routeChanged" />
+    <field id="backdropUri" type="uri" onChange="backdropChanged" />
+    <field id="action" type="assocarray" alwaysNotify="true" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ui/VelvetDock.brs" />
+  <children>
+    <Group id="surface" opacity="0">
+      <Poster translation="[-32,-24]" width="1231" height="208" uri="pkg:/images/dock-shadow.png" />
+      <MaskGroup id="glassSample" maskUri="pkg:/images/dock-mask.png" maskSize="[1167,144]" clippingRect="[0,0,1167,144]" opacity="0.38" visible="false">
+        <Poster id="glassArt" width="1920" height="1080" loadWidth="64" loadHeight="36" loadDisplayMode="scaleToZoom" />
+      </MaskGroup>
+      <Poster width="1167" height="144" uri="pkg:/images/dock.png" />
+      <Poster id="focusPill" translation="[27,12]" width="150" height="114" uri="pkg:/images/dock-focus.9.png" />
+      <Group id="items" translation="[27,12]" />
+    </Group>
+    <Animation id="reveal" duration="0.24" easeFunction="outCubic">
+      <FloatFieldInterpolator id="fade" key="[0,1]" keyValue="[0,1]" fieldToInterp="surface.opacity" />
+      <Vector2DFieldInterpolator id="slide" key="[0,1]" keyValue="[[0,18],[0,0]]" fieldToInterp="surface.translation" />
+    </Animation>
+    <Animation id="focusMove" duration="0.16" easeFunction="outCubic">
+      <Vector2DFieldInterpolator id="focusSlide" key="[0,1]" fieldToInterp="focusPill.translation" />
+    </Animation>
+  </children>
+</component>

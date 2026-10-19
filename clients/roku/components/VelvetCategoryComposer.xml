@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetCategoryComposer" extends="Group">
+  <interface>
+    <field id="action" type="assocarray" alwaysNotify="true" />
+    <field id="draft" type="string" value="" onChange="draftChanged" />
+    <field id="busy" type="boolean" value="false" onChange="stateChanged" />
+    <field id="message" type="string" value="" onChange="stateChanged" />
+    <function name="open" />
+    <function name="restoreFocus" />
+    <function name="pauseVoice" />
+  </interface>
+  <script type="text/brightscript" uri="VelvetCategoryComposer.brs" />
+  <children>
+    <Rectangle width="1920" height="1080" color="0x03050BAB" />
+    <Poster translation="[340,180]" width="1240" height="720" uri="pkg:/images/player/sheet.9.png" />
+    <Label translation="[400,234]" width="1120" height="64" text="Create a category" color="0xF3F2FAFF">
+      <Font role="font" uri="pkg:/fonts/Outfit-SemiBold.ttf" size="44" />
+    </Label>
+    <Label translation="[400,318]" width="1120" height="116" text="Shows, movies, or specific episodes. Try “Disney Halloween episodes” or “Star Wars movies in story order”. A year is optional." color="0xB7BDCCFF" wrap="true" maxLines="3">
+      <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="28" />
+    </Label>
+    <Poster id="inputRim" translation="[396,460]" width="1128" height="104" uri="pkg:/images/button-focus.9.png" opacity="0.8" />
+    <VoiceTextEditBox id="voice" translation="[420,478]" width="1080" height="74" maxTextLength="500" voiceEntryType="generic" voiceEnabled="false" clearOnDownKey="false" textColor="0xF4F3FAFF" fontUri="pkg:/fonts/Inter-Regular.ttf" fontSize="30" />
+    <Label id="hint" translation="[400,592]" width="1120" height="88" wrap="true" maxLines="2" color="0xABB3C6FF">
+      <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="27" />
+    </Label>
+    <VelvetButton id="create" translation="[400,738]" width="280" height="80" label="Create" primary="true" centered="true" />
+    <VelvetButton id="type" translation="[704,738]" width="340" height="80" label="Type instead" centered="true" />
+    <VelvetButton id="cancel" translation="[1068,738]" width="240" height="80" label="Close" centered="true" />
+    <Timer id="voiceFocusTimer" duration="0.08" repeat="false" />
+  </children>
+</component>

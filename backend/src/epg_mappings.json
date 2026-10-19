@@ -1,0 +1,657 @@
+[
+  {
+    "channelId": "a-wealth-of-entertainment",
+    "name": "A Wealth of Entertainment",
+    "xmltvId": "AWE.A.Wealth.of.Entertainment.HD.us2"
+  },
+  {
+    "channelId": "ae",
+    "name": "A&E",
+    "xmltvId": "A.and.E.HD.East.us2"
+  },
+  {
+    "channelId": "espnacc",
+    "name": "ACC Network",
+    "xmltvId": "ACC.Network.us2"
+  },
+  {
+    "channelId": "accuweather",
+    "name": "AccuWeather",
+    "xmltvId": "AccuWeather.HD.us2"
+  },
+  {
+    "channelId": "amc",
+    "name": "AMC",
+    "xmltvId": "AMC.HD.us2"
+  },
+  {
+    "channelId": "animal",
+    "name": "Animal Planet",
+    "xmltvId": "Animal.Planet.HD.us2"
+  },
+  {
+    "channelId": "aspire",
+    "name": "ASPiRE",
+    "xmltvId": "ASPiRE.HD.us2"
+  },
+  {
+    "channelId": "axstv",
+    "name": "AXS TV",
+    "xmltvId": "AXS.TV.us2"
+  },
+  {
+    "channelId": "bay-news-9-tampa",
+    "name": "BAY NEWS 9 TAMPA",
+    "xmltvId": "Spectrum.Bay.News.9.Tampa.us2"
+  },
+  {
+    "channelId": "bbcamerica",
+    "name": "BBC America",
+    "xmltvId": "BBC.America.HD.us2"
+  },
+  {
+    "channelId": "bet",
+    "name": "BET",
+    "xmltvId": "BET.HD.us2"
+  },
+  {
+    "channelId": "bigten",
+    "name": "Big 10",
+    "xmltvId": "Big.Ten.Network.HD.us2"
+  },
+  {
+    "channelId": "big-ten-network-overflow",
+    "name": "Big Ten Network Overflow",
+    "xmltvId": "Big.Ten.Network.Overflow.HD.us2"
+  },
+  {
+    "channelId": "bloomberg",
+    "name": "Bloomberg Television",
+    "xmltvId": "Bloomberg.Business.Television.us2"
+  },
+  {
+    "channelId": "bravo",
+    "name": "Bravo",
+    "xmltvId": "Bravo.HD.us2"
+  },
+  {
+    "channelId": "cspan",
+    "name": "C-SPAN",
+    "xmltvId": "CSPAN.us2"
+  },
+  {
+    "channelId": "cspan2",
+    "name": "C-SPAN 2",
+    "xmltvId": "CSPAN2.us2"
+  },
+  {
+    "channelId": "cspan3",
+    "name": "C-SPAN 3",
+    "xmltvId": "CSPAN3.us2"
+  },
+  {
+    "channelId": "cartoon",
+    "name": "Cartoon Network",
+    "xmltvId": "Cartoon.Network.HD.us2"
+  },
+  {
+    "channelId": "cleo-tv",
+    "name": "Cleo TV",
+    "xmltvId": "Cleo.TV.HD.us2"
+  },
+  {
+    "channelId": "cmt",
+    "name": "CMT",
+    "xmltvId": "CMT.HD.us2"
+  },
+  {
+    "channelId": "cnbc",
+    "name": "CNBC",
+    "xmltvId": "CNBC.HD.us2"
+  },
+  {
+    "channelId": "cnn",
+    "name": "CNN",
+    "xmltvId": "CNN.HD.us2"
+  },
+  {
+    "channelId": "comedycentral",
+    "name": "Comedy Central",
+    "xmltvId": "Comedy.Central.HD.us2"
+  },
+  {
+    "channelId": "daystar-tv",
+    "name": "Daystar TV",
+    "xmltvId": "Daystar.Television.Network.HD.[CHARTER].us2"
+  },
+  {
+    "channelId": "discovery",
+    "name": "Discovery",
+    "xmltvId": "Discovery.Channel.HD.us2"
+  },
+  {
+    "channelId": "discoveryturbo",
+    "name": "Discovery Turbo",
+    "xmltvId": "Discovery.Turbo.TV.us2"
+  },
+  {
+    "channelId": "disney",
+    "name": "Disney",
+    "xmltvId": "Disney.Channel.HD.us2"
+  },
+  {
+    "channelId": "earthx",
+    "name": "EarthX",
+    "xmltvId": "EarthX.us2"
+  },
+  {
+    "channelId": "espn",
+    "name": "ESPN",
+    "xmltvId": "ESPN.HD.us2"
+  },
+  {
+    "channelId": "espn2",
+    "name": "ESPN2",
+    "xmltvId": "ESPN2.HD.us2"
+  },
+  {
+    "channelId": "fetv",
+    "name": "FETV",
+    "xmltvId": "Family.Entertainment.Television.us2"
+  },
+  {
+    "channelId": "food",
+    "name": "Food Network",
+    "xmltvId": "Food.Network.HD.us2"
+  },
+  {
+    "channelId": "fbc",
+    "name": "Fox Business",
+    "xmltvId": "Fox.Business.HD.us2"
+  },
+  {
+    "channelId": "fnc",
+    "name": "Fox News",
+    "xmltvId": "Fox.News.Channel.HD.us2"
+  },
+  {
+    "channelId": "fox-sports-1",
+    "name": "Fox Sports 1",
+    "xmltvId": "FS1.Fox.Sports.1.HD.us2"
+  },
+  {
+    "channelId": "freeform",
+    "name": "Freeform",
+    "xmltvId": "Freeform.HD.us2"
+  },
+  {
+    "channelId": "fs2",
+    "name": "FS2",
+    "xmltvId": "FS2.Fox.Sports.2.HD.us2"
+  },
+  {
+    "channelId": "fx",
+    "name": "FX",
+    "xmltvId": "FX.HD.us2"
+  },
+  {
+    "channelId": "fx-movie-channel",
+    "name": "FX Movie Channel",
+    "xmltvId": "FX.Movie.Channel.HD.us2"
+  },
+  {
+    "channelId": "fxx",
+    "name": "FXX",
+    "xmltvId": "FXX.HD.us2"
+  },
+  {
+    "channelId": "galavision",
+    "name": "Galavision",
+    "xmltvId": "Galavision.Cable.Network.HD.us2"
+  },
+  {
+    "channelId": "gems",
+    "name": "Gems",
+    "xmltvId": "GEMS.us2"
+  },
+  {
+    "channelId": "gsn",
+    "name": "GSN",
+    "xmltvId": "Game.Show.Network.HD.us2"
+  },
+  {
+    "channelId": "hallmark",
+    "name": "Hallmark",
+    "xmltvId": "Hallmark.Channel.HD.us2"
+  },
+  {
+    "channelId": "hallmarkmystery",
+    "name": "Hallmark Mystery",
+    "xmltvId": "Hallmark.Mystery.HD.us2"
+  },
+  {
+    "channelId": "hgtv",
+    "name": "HGTV",
+    "xmltvId": "Home.and.Garden.Television.HD.us2"
+  },
+  {
+    "channelId": "history",
+    "name": "History",
+    "xmltvId": "History.HD.us2"
+  },
+  {
+    "channelId": "hln",
+    "name": "HLN",
+    "xmltvId": "HLN.HD.us2"
+  },
+  {
+    "channelId": "hsn",
+    "name": "HSN",
+    "xmltvId": "HSN.Home.Shopping.Network.HD.us2"
+  },
+  {
+    "channelId": "hsn2",
+    "name": "HSN2",
+    "xmltvId": "HSN2.us2"
+  },
+  {
+    "channelId": "ifc",
+    "name": "IFC",
+    "xmltvId": "IFC.HD.us2"
+  },
+  {
+    "channelId": "impact-network",
+    "name": "Impact Network",
+    "xmltvId": "Impact.Network.us2"
+  },
+  {
+    "channelId": "insp",
+    "name": "INSP",
+    "xmltvId": "INSP.HD.us2"
+  },
+  {
+    "channelId": "id",
+    "name": "Investigation Discovery",
+    "xmltvId": "Investigation.Discovery.HD.us2"
+  },
+  {
+    "channelId": "jbs",
+    "name": "JBS",
+    "xmltvId": "JBS.us2"
+  },
+  {
+    "channelId": "jewelry-tv",
+    "name": "Jewelry TV",
+    "xmltvId": "Jewelry.Television.us2"
+  },
+  {
+    "channelId": "lifetime",
+    "name": "Lifetime",
+    "xmltvId": "Lifetime.HD.us2"
+  },
+  {
+    "channelId": "lmn",
+    "name": "Lifetime Movie Network",
+    "xmltvId": "LMN.HD.us2"
+  },
+  {
+    "channelId": "msnow",
+    "name": "MS NOW",
+    "xmltvId": "MS.NOW.HD.us2"
+  },
+  {
+    "channelId": "mtv",
+    "name": "MTV",
+    "xmltvId": "MTV.-.Music.Television.HD.us2"
+  },
+  {
+    "channelId": "natgeo",
+    "name": "National Geographic",
+    "xmltvId": "National.Geographic.HD.us2"
+  },
+  {
+    "channelId": "newsmax-tv",
+    "name": "Newsmax TV",
+    "xmltvId": "Newsmax.TV.HD.us2"
+  },
+  {
+    "channelId": "newsnation",
+    "name": "NewsNation",
+    "xmltvId": "NewsNation.us2"
+  },
+  {
+    "channelId": "nickelodeon",
+    "name": "Nickelodeon",
+    "xmltvId": "Nickelodeon.HD.us2"
+  },
+  {
+    "channelId": "one-america-news-network",
+    "name": "One America News Network",
+    "xmltvId": "One.America.News.Network.HD.us2"
+  },
+  {
+    "channelId": "oxygen",
+    "name": "Oxygen",
+    "xmltvId": "Oxygen.True.Crime.HD.us2"
+  },
+  {
+    "channelId": "paramount",
+    "name": "Paramount Network",
+    "xmltvId": "Paramount.Network.HD.us2"
+  },
+  {
+    "channelId": "phoenix-info-news",
+    "name": "Phoenix Info News",
+    "xmltvId": "Phoenix.Info.News.us2"
+  },
+  {
+    "channelId": "pop",
+    "name": "POP",
+    "xmltvId": "POP.HD.us2"
+  },
+  {
+    "channelId": "qvc",
+    "name": "QVC",
+    "xmltvId": "QVC.HD.us2"
+  },
+  {
+    "channelId": "qvc2",
+    "name": "QVC2",
+    "xmltvId": "QVC2.us2"
+  },
+  {
+    "channelId": "qvc3",
+    "name": "QVC3",
+    "xmltvId": "QVC3.us2"
+  },
+  {
+    "channelId": "revolt",
+    "name": "Revolt",
+    "xmltvId": "Revolt.HD.us2"
+  },
+  {
+    "channelId": "espnsec",
+    "name": "SEC Network",
+    "xmltvId": "SEC.Network.HD.us2"
+  },
+  {
+    "channelId": "stellar-tv",
+    "name": "Stellar TV",
+    "xmltvId": "STELLAR.TV.us2"
+  },
+  {
+    "channelId": "sundancetv",
+    "name": "SundanceTV",
+    "xmltvId": "SundanceTV.HD.us2"
+  },
+  {
+    "channelId": "tbn",
+    "name": "TBN",
+    "xmltvId": "Trinity.Broadcasting.Network.HD.us2"
+  },
+  {
+    "channelId": "tbs",
+    "name": "TBS",
+    "xmltvId": "TBS.HD.us2"
+  },
+  {
+    "channelId": "the-africa-channel",
+    "name": "The Africa Channel",
+    "xmltvId": "The.Africa.Channel.us2"
+  },
+  {
+    "channelId": "weather",
+    "name": "The Weather Channel",
+    "xmltvId": "The.Weather.Channel.HD.us2"
+  },
+  {
+    "channelId": "thegrio",
+    "name": "TheGrio",
+    "xmltvId": "The.Grio.HD.us2"
+  },
+  {
+    "channelId": "tlc",
+    "name": "TLC",
+    "xmltvId": "TLC.HD.(US).us2"
+  },
+  {
+    "channelId": "tnt",
+    "name": "TNT",
+    "xmltvId": "TNT.HD.us2"
+  },
+  {
+    "channelId": "travel",
+    "name": "Travel",
+    "xmltvId": "The.Travel.Channel.HD.us2"
+  },
+  {
+    "channelId": "trutv",
+    "name": "truTV",
+    "xmltvId": "truTV.HD.us2"
+  },
+  {
+    "channelId": "tvland",
+    "name": "TV Land",
+    "xmltvId": "TV.Land.HD.us2"
+  },
+  {
+    "channelId": "tv-one",
+    "name": "TV One",
+    "xmltvId": "TV.ONE.HD.us2"
+  },
+  {
+    "channelId": "unimas",
+    "name": "UniMas",
+    "xmltvId": "UniMas.us2"
+  },
+  {
+    "channelId": "up-tv",
+    "name": "Up TV",
+    "xmltvId": "UPtv.us2"
+  },
+  {
+    "channelId": "usa",
+    "name": "USA Network",
+    "xmltvId": "USA.Network.HD.us2"
+  },
+  {
+    "channelId": "vh1",
+    "name": "VH1",
+    "xmltvId": "VH1.HD.us2"
+  },
+  {
+    "channelId": "wetv",
+    "name": "WE tv",
+    "xmltvId": "WE.tv.HD.us2"
+  },
+  {
+    "channelId": "abc-wews",
+    "name": "ABC (WEWS)",
+    "xmltvId": "WEWS-DT.us_locals1"
+  },
+  {
+    "channelId": "cbs-woio",
+    "name": "CBS (WOIO)",
+    "xmltvId": "WOIO-DT.us_locals1"
+  },
+  {
+    "channelId": "fox-wjw",
+    "name": "FOX (WJW)",
+    "xmltvId": "WJW-DT.us_locals1"
+  },
+  {
+    "channelId": "nbc-wkyc",
+    "name": "NBC (WKYC)",
+    "xmltvId": "WKYC-DT.us_locals1"
+  },
+  {
+    "channelId": "telemundo-wtcl",
+    "name": "Telemundo (WTCL)",
+    "xmltvId": "WTCL-LD.us_locals1"
+  },
+  {
+    "channelId": "univision-wqhs",
+    "name": "Univision (WQHS)",
+    "xmltvId": "WQHS-DT.us_locals1"
+  },
+  {
+    "channelId": "spectrum-oc16",
+    "name": "Spectrum OC16",
+    "xmltvId": "Spectrum.OC16.us_locals1"
+  },
+  {
+    "channelId": "spectrum-news-austin",
+    "name": "SPECTRUM NEWS - AUSTIN",
+    "xmltvId": "Spectrum.News.1.-.Austin.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-carolinas-charlotte",
+    "name": "SPECTRUM NEWS 1 (CAROLINAS) - CHARLOTTE",
+    "xmltvId": "Spectrum.News.1.(Carolinas).-.Charlotte.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-carolinas-coastal",
+    "name": "SPECTRUM NEWS 1 (CAROLINAS) - COASTAL",
+    "xmltvId": "Spectrum.News.1.(Carolinas).-.Coastal.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-carolinas-greensboro",
+    "name": "SPECTRUM NEWS 1 (CAROLINAS) -  GREENSBORO",
+    "xmltvId": "Spectrum.News.1.(Carolinas).-.Greensboro.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-carolinas-mountain",
+    "name": "SPECTRUM NEWS 1 (CAROLINAS) - MOUNTAIN",
+    "xmltvId": "Spectrum.News.1.(Carolinas).-.Mountain.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-carolinas-raleigh",
+    "name": "SPECTRUM NEWS 1 (CAROLINAS) - RALEIGH",
+    "xmltvId": "Spectrum.News.1.(Carolinas).-.Raleigh.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-cincinnati",
+    "name": "SPECTRUM NEWS 1 - CINCINNATI",
+    "xmltvId": "Spectrum.News.1.-.Cincinnati.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-clevelandakron",
+    "name": "SPECTRUM NEWS 1 - CLEVELAND/AKRON",
+    "xmltvId": "Spectrum.News.1.-.Cleveland/Akron.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-columbus",
+    "name": "SPECTRUM NEWS 1 - COLUMBUS",
+    "xmltvId": "Spectrum.News.1.-.Columbus.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-dallas-ft-worth",
+    "name": "SPECTRUM NEWS 1 - DALLAS -FT WORTH",
+    "xmltvId": "Spectrum.News.1.-.Dallas.-.Ft.Worth.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-dayton",
+    "name": "SPECTRUM NEWS 1 - DAYTON",
+    "xmltvId": "Spectrum.News.1.-.Dayton.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-el-paso-texas",
+    "name": "SPECTRUM NEWS 1 - EL PASO TEXAS",
+    "xmltvId": "Spectrum.News.1.-.El.Paso.Texas.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-new-1-green-bayappleton",
+    "name": "SPECTRUM NEW 1 - GREEN BAY/APPLETON",
+    "xmltvId": "Spectrum.News.1.-.Green.Bay/Appleton.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-kentucky-covington",
+    "name": "SPECTRUM NEWS 1 - (KENTUCKY) - COVINGTON",
+    "xmltvId": "Spectrum.News.1.(Kentucky).Covington.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-kentucky-evansville",
+    "name": "SPECTRUM NEWS 1 - (KENTUCKY) - EVANSVILLE",
+    "xmltvId": "Spectrum.News.1.-.(Kentucky).-.Evansville.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-kentucky-lexington",
+    "name": "SPECTRUM NEWS 1 - (KENTUCKY) LEXINGTON",
+    "xmltvId": "Spectrum.News.1.-.(Kentucky).Lexington.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-kentucky-louisville",
+    "name": "SPECTRUM NEWS 1 - (KENTUCKY) LOUISVILLE",
+    "xmltvId": "Spectrum.News.1.-.(Kentucky).Louisville.us2"
+  },
+  {
+    "channelId": "spectrum-new-1-madison",
+    "name": "SPECTRUM NEW 1 - MADISON",
+    "xmltvId": "Spectrum.News.1.-.Madison.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-ma-pittsfield",
+    "name": "SPECTRUM NEWS 1 - (MA) PITTSFIELD",
+    "xmltvId": "Spectrum.News.1.-.(MA).Pittsfield.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-ma-springfield",
+    "name": "SPECTRUM NEWS 1 - (MA) SPRINGFIELD",
+    "xmltvId": "Spectrum.News.1.-.(MA).Springfield.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-new-1-milwaukee",
+    "name": "SPECTRUM NEW 1 - MILWAUKEE",
+    "xmltvId": "Spectrum.News.1.-.Milwaukee.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-san-antonio",
+    "name": "SPECTRUM NEWS - SAN ANTONIO",
+    "xmltvId": "Spectrum.News.1.-.San.Antonio.us2"
+  },
+  {
+    "channelId": "spectrum-news-1-toledolima",
+    "name": "SPECTRUM NEWS 1 - TOLEDO/LIMA",
+    "xmltvId": "Spectrum.News.1.-.Toledo/Lima.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-alabama",
+    "name": "Spectrum News Alabama",
+    "xmltvId": "Spectrum.News.-.Alabama.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-albany-capital-region",
+    "name": "SPECTRUM NEWS - ALBANY CAPITAL REGION",
+    "xmltvId": "Spectrum.News.-.Albany.Capital.Region.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-buffalo",
+    "name": "SPECTRUM NEWS - BUFFALO",
+    "xmltvId": "Spectrum.News.-.Buffalo.-.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-central-ny",
+    "name": "SPECTRUM NEWS - CENTRAL NY",
+    "xmltvId": "Spectrum.News.-.Central.NY.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-hudson-valley",
+    "name": "SPECTRUM NEWS - HUDSON VALLEY",
+    "xmltvId": "Spectrum.News.-.Hudson.Valley.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-michigan",
+    "name": "Spectrum News Michigan",
+    "xmltvId": "Spectrum.News.-.Michigan.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-new-york-rochester",
+    "name": "SPECTRUM NEWS - (NEW YORK) ROCHESTER",
+    "xmltvId": "Spectrum.News.-.(New.York).Rochester.STVA.us2"
+  },
+  {
+    "channelId": "spectrum-news-ny1",
+    "name": "SPECTRUM NEWS - NY1",
+    "xmltvId": "Spectrum.News.-.NY1.-.STVA.us2"
+  }
+]

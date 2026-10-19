@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">Velvet</title>
+  <desc id="desc">Your library. Your screens. Your server. A self-hosted media experience for TV and mobile.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#11121e"/><stop offset="1" stop-color="#21182e"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#8972d8" stop-opacity=".42"/><stop offset="1" stop-color="#8972d8" stop-opacity="0"/></radialGradient>
+    <linearGradient id="glass" x2=".7" y2="1"><stop stop-color="#fff" stop-opacity=".12"/><stop offset="1" stop-color="#fff" stop-opacity=".03"/></linearGradient>
+  </defs>
+  <rect width="1200" height="340" rx="30" fill="url(#bg)"/>
+  <ellipse cx="925" cy="120" rx="390" ry="270" fill="url(#glow)"/>
+  <rect x="1" y="1" width="1198" height="338" rx="29" fill="none" stroke="#ffffff" stroke-opacity=".12"/>
+  <text x="64" y="118" fill="#f8f7ff" font-family="system-ui, sans-serif" font-weight="650" font-size="54" letter-spacing="13">VELVET</text>
+  <text x="66" y="181" fill="#eeebf8" font-family="system-ui, sans-serif" font-size="29">Your library. Your screens. Your server.</text>
+  <text x="66" y="224" fill="#aaa5bd" font-family="system-ui, sans-serif" font-size="18">A self-hosted media experience for TV and mobile.</text>
+  <g fill="url(#glass)" stroke="#d5c5ff" stroke-opacity=".3">
+    <rect x="858" y="72" width="235" height="151" rx="19"/>
+    <rect x="1015" y="147" width="72" height="125" rx="17"/>
+  </g>
+  <path d="m954 117 39 25-39 25z" fill="#e4d8ff"/>
+  <path d="M936 242h69" stroke="#bbaadf" stroke-width="5" stroke-linecap="round"/>
+  <path d="M1040 164h23" stroke="#bbaadf" stroke-width="3" stroke-linecap="round"/>
+  <text x="66" y="285" fill="#c2b1eb" font-family="system-ui, sans-serif" font-size="13" letter-spacing="2">ANDROID TV  /  iOS  /  ROKU ALPHA  /  VELOUR</text>
+</svg>

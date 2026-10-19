@@ -1,0 +1,17 @@
+/target/
+/config/
+/data/
+/velvet.toml
+/.env
+/.env.*
+!/.env.example
+/.codex/
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.pem
+*.key
+*.p8
+auth.json
+.DS_Store

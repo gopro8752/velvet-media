@@ -1,0 +1,24 @@
+{
+  "rootDir": ".",
+  "files": [
+    "manifest",
+    "source/**/*.brs",
+    "source/**/*.bs",
+    "components/**/*.brs",
+    "components/**/*.bs",
+    "components/**/*.xml",
+    "images/**/*.png",
+    "images/**/*.jpg",
+    "images/**/*.jpeg",
+    "fonts/**/*.ttf",
+    "fonts/**/*.otf",
+    "fonts/*-OFL.txt",
+    "locale/**/*"
+  ],
+  "outFile": "dist/velvet-roku.zip",
+  "stagingFolderPath": "dist/staging",
+  "retainStagingFolder": true,
+  "sourceMap": false,
+  "createPackage": true,
+  "deploy": false
+}

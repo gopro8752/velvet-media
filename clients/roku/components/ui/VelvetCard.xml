@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetCard" extends="Group">
+  <interface>
+    <field id="itemContent" type="node" onChange="contentChanged" />
+    <field id="width" type="float" value="246" />
+    <field id="height" type="float" value="420" />
+    <field id="index" type="integer" />
+    <field id="rowIndex" type="integer" />
+    <field id="focusPercent" type="float" onChange="focusChanged" />
+    <field id="rowFocusPercent" type="float" onChange="focusChanged" />
+    <field id="itemHasFocus" type="boolean" onChange="focusChanged" />
+    <field id="gridHasFocus" type="boolean" onChange="focusChanged" />
+    <field id="rowHasFocus" type="boolean" onChange="focusChanged" />
+    <field id="rowListHasFocus" type="boolean" onChange="focusChanged" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ui/VelvetCard.brs" />
+  <children>
+    <Group id="artGroup">
+      <Poster id="well" uri="pkg:/images/card-well.9.png" />
+      <Poster id="art" loadDisplayMode="scaleToZoom" failedBitmapUri="pkg:/images/placeholder.png" />
+      <Poster id="corners" uri="pkg:/images/card-corners.9.png" />
+      <Poster id="focusRing" translation="[-6,-6]" uri="pkg:/images/focus-ring.9.png" opacity="0" />
+      <Poster id="actionIcon" width="54" height="54" uri="pkg:/images/play.png" visible="false" />
+      <Label id="actionLabel" color="0xF2F4F8FF" width="300" height="60" horizAlign="center" visible="false">
+        <Font role="font" uri="pkg:/fonts/Inter-SemiBold.ttf" size="24" />
+      </Label>
+      <Label id="actionHint" color="0xB5BBC9FF" width="300" height="36" horizAlign="center" visible="false">
+        <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="23" />
+      </Label>
+      <Rectangle id="progressTrack" height="6" color="0xFFFFFF33" visible="false" />
+      <Rectangle id="progress" height="6" color="0x46D369FF" visible="false" />
+    </Group>
+    <Label id="title" color="0xCCD1DCFF" height="40" maxLines="1">
+      <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="28" />
+    </Label>
+    <Label id="meta" color="0x969FB1FF" height="32" maxLines="1">
+      <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="23" />
+    </Label>
+  </children>
+</component>

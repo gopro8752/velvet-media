@@ -1,0 +1,13 @@
+title = "Velvet source publication checks"
+
+[extend]
+useDefault = true
+
+# TMDB v3 keys are 32 hex characters and can fall below the generic detector's
+# entropy threshold. Require an API/TMDB key assignment, not a bare checksum.
+[[rules]]
+id = "velvet-literal-hex-api-key"
+description = "Literal 32-character hexadecimal API or TMDB key"
+regex = '''(?i)\b[a-z0-9_]*(?:tmdb[a-z0-9_]*key|api_?key)[a-z0-9_]*["'`]?[ \t]*(?::[ \t]*(?:String|&str))?[ \t]*(?:=|:)[ \t]*["'`]?([a-f0-9]{32})(?:["'`]|\b)'''
+secretGroup = 1
+keywords = ["tmdb", "api_key", "apikey"]

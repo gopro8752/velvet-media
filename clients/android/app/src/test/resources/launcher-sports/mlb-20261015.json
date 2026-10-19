@@ -1,0 +1,150 @@
+{
+  "events": [
+    {
+      "id": "401908025",
+      "date": "2026-10-15T17:00Z",
+      "name": "Tampa Bay Rays at Cleveland Guardians",
+      "season": {
+        "year": 2026,
+        "type": 3,
+        "slug": "post-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0:00",
+        "period": 1,
+        "type": {
+          "id": "1",
+          "name": "STATUS_SCHEDULED",
+          "state": "pre",
+          "completed": false,
+          "description": "Scheduled",
+          "detail": "Scheduled",
+          "shortDetail": "10/15 - 1:00 PM EDT"
+        }
+      },
+      "competitions": [
+        {
+          "id": "401908025",
+          "date": "2026-10-15T17:00Z",
+          "timeValid": true,
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0:00",
+            "period": 1,
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Scheduled",
+              "shortDetail": "10/15 - 1:00 PM EDT"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "team": {
+                "id": "5",
+                "displayName": "Cleveland Guardians",
+                "shortDisplayName": "Guardians",
+                "name": "Guardians",
+                "abbreviation": "CLE",
+                "color": "002b5c",
+                "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/cle.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "0",
+              "team": {
+                "id": "30",
+                "displayName": "Tampa Bay Rays",
+                "shortDisplayName": "Rays",
+                "name": "Rays",
+                "abbreviation": "TB",
+                "color": "092c5c",
+                "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/tb.png"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401908033",
+      "date": "2026-10-16T00:00Z",
+      "name": "Milwaukee Brewers at Los Angeles Dodgers",
+      "season": {
+        "year": 2026,
+        "type": 3,
+        "slug": "post-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0:00",
+        "period": 1,
+        "type": {
+          "id": "1",
+          "name": "STATUS_SCHEDULED",
+          "state": "pre",
+          "completed": false,
+          "description": "Scheduled",
+          "detail": "Scheduled",
+          "shortDetail": "10/15 - 8:00 PM EDT"
+        }
+      },
+      "competitions": [
+        {
+          "id": "401908033",
+          "date": "2026-10-16T00:00Z",
+          "timeValid": true,
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0:00",
+            "period": 1,
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Scheduled",
+              "shortDetail": "10/15 - 8:00 PM EDT"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "team": {
+                "id": "19",
+                "displayName": "Los Angeles Dodgers",
+                "shortDisplayName": "Dodgers",
+                "name": "Dodgers",
+                "abbreviation": "LAD",
+                "color": "005a9c",
+                "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/lad.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "0",
+              "team": {
+                "id": "8",
+                "displayName": "Milwaukee Brewers",
+                "shortDisplayName": "Brewers",
+                "name": "Brewers",
+                "abbreviation": "MIL",
+                "color": "13294b",
+                "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/mil.png"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetPlayer" extends="Group">
+  <interface>
+    <field id="model" type="assocarray" alwaysNotify="true" onChange="modelChanged" />
+    <field id="action" type="assocarray" alwaysNotify="true" />
+    <function name="restoreFocus" />
+    <function name="revealControls" />
+    <function name="resetSession" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/player/VelvetPlayer.brs" />
+  <children>
+    <Group id="preparingBackdrop" visible="false">
+      <Poster id="backdrop" width="1920" height="1080" loadWidth="1280" loadHeight="720" loadDisplayMode="scaleToZoom" />
+      <Rectangle width="1920" height="1080" color="0x060914A0" />
+    </Group>
+    <Group id="surface" opacity="1">
+      <Poster width="1920" height="1080" uri="pkg:/images/player/shade.png" />
+      <Group id="contextAction" translation="[1384,604]" visible="false">
+        <Poster id="contextFill" width="440" height="70" uri="pkg:/images/player/row.9.png" />
+        <Label id="contextLabel" translation="[20,17]" width="400" height="36" horizAlign="center" color="0xF4F2F9FF">
+          <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="25" />
+        </Label>
+        <Group id="contextDismiss" translation="[454,0]" visible="false">
+          <Poster id="dismissFill" width="70" height="70" uri="pkg:/images/player/circle.png" />
+          <Poster id="dismissIcon" translation="[18,18]" width="34" height="34" uri="pkg:/images/player/close.png" />
+          <Label id="dismissHint" translation="[-45,76]" width="160" height="30" horizAlign="center" color="0xE8E2F4FF" text="Dismiss" visible="false">
+            <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="21" />
+          </Label>
+        </Group>
+      </Group>
+      <Group id="controls" translation="[96,704]">
+        <Label id="eyebrow" width="1728" height="39" color="0xBEC2CFFF">
+          <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="26" />
+        </Label>
+        <Label id="title" translation="[0,43]" width="1728" height="56" color="0xF5F5F9FF">
+          <Font role="font" uri="pkg:/fonts/Outfit-SemiBold.ttf" size="43" />
+        </Label>
+        <Group id="timeline" translation="[0,123]">
+          <Rectangle id="track" width="1728" height="5" color="0xFFFFFF40" />
+          <Rectangle id="buffered" width="0" height="5" color="0xFFFFFF50" />
+          <Rectangle id="progress" width="0" height="5" color="0xF4F2FFFF" />
+          <Poster id="thumb" width="19" height="19" translation="[-9,-7]" uri="pkg:/images/player/circle-focus.png" />
+          <Label id="elapsed" translation="[0,19]" width="200" height="31" color="0xB9BECCFF">
+            <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="22" />
+          </Label>
+          <Label id="seekHint" translation="[520,19]" width="688" height="31" horizAlign="center" color="0xD9D0FFFF" text="◀  10 seconds  ▶" visible="false">
+            <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="22" />
+          </Label>
+          <Label id="remaining" translation="[1428,19]" width="300" height="31" horizAlign="right" color="0xB9BECCFF">
+            <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="22" />
+          </Label>
+        </Group>
+        <Group id="buttons" translation="[0,188]" />
+        <Label id="focusLabel" translation="[0,288]" width="1728" height="34" color="0xF3F0FFFF" horizAlign="center">
+          <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="23" />
+        </Label>
+      </Group>
+    </Group>
+    <Group id="noticeGroup" visible="false" translation="[480,60]">
+      <Poster width="960" height="100" uri="pkg:/images/player/sheet.9.png" />
+      <Label id="notice" translation="[32,18]" width="896" height="67" wrap="true" maxLines="2" horizAlign="center" vertAlign="center" color="0xEEEAF7FF">
+        <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="25" />
+      </Label>
+    </Group>
+    <Group id="statusGroup" visible="false" translation="[0,452]">
+      <Poster translation="[900,0]" width="120" height="120" uri="pkg:/images/player/circle.png" />
+      <Poster id="loadingIcon" translation="[928,28]" width="64" height="64" uri="pkg:/images/player/loading.png" opacity="0.9" />
+      <Label id="status" translation="[360,143]" width="1200" height="80" horizAlign="center" wrap="true" color="0xF4F4F8FF">
+        <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="27" />
+      </Label>
+    </Group>
+    <Group id="menuSurface" visible="false" opacity="0">
+      <Rectangle width="1920" height="1080" color="0x00000088" />
+      <Group id="sheet" translation="[1120,42]">
+        <Poster width="752" height="996" uri="pkg:/images/player/sheet.9.png" />
+        <Poster translation="[34,42]" width="36" height="36" uri="pkg:/images/player/back.png" />
+        <Label id="menuTitle" translation="[88,37]" width="620" height="49" color="0xF4F4FAFF">
+          <Font role="font" uri="pkg:/fonts/Outfit-SemiBold.ttf" size="34" />
+        </Label>
+        <Label id="menuSubtitle" translation="[36,104]" width="680" height="65" wrap="true" maxLines="2" color="0xAEB5C6FF">
+          <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="23" />
+        </Label>
+        <Group id="menuRows" translation="[28,185]" />
+        <Label id="menuEmpty" translation="[36,212]" width="680" height="330" wrap="true" color="0xB6BECEFF">
+          <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="27" />
+        </Label>
+        <Label id="menuCount" translation="[36,928]" width="680" height="31" color="0x9BA4B8FF" horizAlign="right">
+          <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="21" />
+        </Label>
+      </Group>
+    </Group>
+    <Animation id="controlsAnimation" duration="0.23" easeFunction="outCubic">
+      <FloatFieldInterpolator id="controlsFade" fieldToInterp="surface.opacity" key="[0,1]" keyValue="[0,1]" />
+      <Vector2DFieldInterpolator id="controlsSlide" fieldToInterp="surface.translation" key="[0,1]" keyValue="[[0,22],[0,0]]" />
+    </Animation>
+    <Animation id="menuAnimation" duration="0.25" easeFunction="outCubic">
+      <FloatFieldInterpolator id="menuFade" fieldToInterp="menuSurface.opacity" key="[0,1]" keyValue="[0,1]" />
+      <Vector2DFieldInterpolator id="menuSlide" fieldToInterp="sheet.translation" key="[0,1]" keyValue="[[1150,42],[1120,42]]" />
+    </Animation>
+    <Animation id="loadingPulse" duration="1.35" repeat="true">
+      <FloatFieldInterpolator fieldToInterp="loadingIcon.opacity" key="[0,0.5,1]" keyValue="[0.38,1,0.38]" />
+    </Animation>
+    <Timer id="hideTimer" duration="5" repeat="false" />
+    <Timer id="seekTimer" duration="0.5" repeat="false" />
+  </children>
+</component>

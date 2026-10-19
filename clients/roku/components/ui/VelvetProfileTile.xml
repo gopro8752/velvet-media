@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetProfileTile" extends="Group">
+  <interface>
+    <field id="itemContent" type="node" onChange="contentChanged" />
+    <field id="width" type="float" />
+    <field id="height" type="float" />
+    <field id="index" type="integer" />
+    <field id="focusPercent" type="float" onChange="focusChanged" />
+    <field id="itemHasFocus" type="boolean" />
+    <field id="gridHasFocus" type="boolean" onChange="focusChanged" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ui/VelvetProfileTile.brs" />
+  <children>
+    <Poster id="fill" translation="[16,16]" width="222" height="222" uri="pkg:/images/profile-tile.png" />
+    <Poster id="ring" translation="[10,10]" width="234" height="234" uri="pkg:/images/profile-focus.png" opacity="0" />
+    <Label id="initial" translation="[16,16]" width="222" height="222" horizAlign="center" vertAlign="center" color="0xFFFFFFFF">
+      <Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="84" />
+    </Label>
+    <Poster id="addIcon" translation="[91,91]" width="72" height="72" uri="pkg:/images/plus.png" visible="false" />
+    <Label id="name" translation="[1,262]" width="252" height="45" horizAlign="center" color="0xC9CFDCFF">
+      <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="28" />
+    </Label>
+  </children>
+</component>

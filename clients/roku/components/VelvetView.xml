@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetView" extends="Group">
+  <interface>
+    <field id="model" type="assocarray" alwaysNotify="true" onChange="modelChanged" />
+    <field id="action" type="assocarray" alwaysNotify="true" />
+    <function name="restoreFocus" />
+    <function name="openDock" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/VelvetView.brs" />
+  <children>
+    <Group id="pageContent">
+    <Poster width="1920" height="1080" uri="pkg:/images/ambient.png" />
+    <Group id="cinema">
+      <Poster id="backdrop" width="1920" height="1080" loadWidth="1280" loadHeight="720" loadDisplayMode="scaleToZoom" opacity="0.96" />
+      <Poster id="nextBackdrop" width="1920" height="1080" loadWidth="1280" loadHeight="720" loadDisplayMode="scaleToZoom" opacity="0" />
+      <Poster id="leftScrim" width="1920" height="1080" uri="pkg:/images/scrim-left.png" />
+      <Poster width="1920" height="1080" uri="pkg:/images/scrim-bottom.png" />
+    </Group>
+    <Group id="header" translation="[0,42]">
+      <Label id="wordmark" translation="[1390,8]" text="V E L V E T" width="270" height="54" color="0xF2F4F8FF">
+        <Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="36" />
+      </Label>
+      <VelvetButton id="createButton" translation="[1650,0]" width="72" height="72" icon="pkg:/images/plus.png" />
+      <VelvetButton id="profileButton" translation="[1752,0]" width="72" height="72" label="M" accent="true" centered="true" />
+      <Label id="headerHint" translation="[1425,84]" width="399" height="36" horizAlign="right" color="0xDCE1EAFF" opacity="0">
+        <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="23" />
+      </Label>
+    </Group>
+    <Group id="hero" translation="[96,80]" visible="false">
+      <Poster id="heroLogo" width="700" height="176" loadWidth="700" loadHeight="176" loadDisplayMode="limitSize" />
+      <Label id="heroTitle" width="1080" height="176" color="0xF2F4F8FF" wrap="true" maxLines="2">
+        <Font role="font" uri="pkg:/fonts/Outfit-SemiBold.ttf" size="68" />
+      </Label>
+      <Label id="heroTagline" translation="[0,196]" width="1120" height="40" color="0xA9B1C2FF" visible="false">
+        <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="27" />
+      </Label>
+      <Label id="heroMeta" translation="[0,196]" width="1200" height="42" color="0xB9C0CEFF">
+        <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="28" />
+      </Label>
+      <Poster id="overviewFocus" translation="[-15,204]" width="960" height="93" uri="pkg:/images/button-focus.9.png" opacity="0" />
+      <Label id="heroOverview" translation="[0,250]" width="1040" height="84" wrap="true" maxLines="2" lineSpacing="0" color="0xAEB7C8FF">
+        <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="28" />
+      </Label>
+      <Group id="heroActions" translation="[0,350]">
+        <VelvetButton id="playButton" width="224" height="80" label="Play" icon="pkg:/images/play.png" primary="true" />
+        <VelvetButton id="secondaryButton" translation="[246,0]" width="250" height="80" label="Details" icon="pkg:/images/info.png" />
+        <VelvetButton id="listButton" translation="[518,0]" width="252" height="80" label="My List" icon="pkg:/images/plus.png" />
+      </Group>
+      <Label id="descriptionHint" width="1000" height="32" color="0xB6BDCDFF" visible="false">
+        <Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="20" />
+      </Label>
+    </Group>
+    <Group id="heading" translation="[96,156]" visible="false">
+      <Label id="pageTitle" width="1650" height="90" color="0xF2F4F8FF">
+        <Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="63" />
+      </Label>
+      <Label id="pageSubtitle" translation="[0,99]" width="1560" height="90" wrap="true" maxLines="2" color="0x9BA3B4FF">
+        <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="27" />
+      </Label>
+    </Group>
+    <VelvetButton id="searchButton" translation="[96,285]" width="1728" height="84" label="Search movies and shows" icon="pkg:/images/search.png" visible="false" />
+    <Group id="listClip" translation="[72,552]" clippingRect="[0,-24,1848,552]" visible="false">
+      <RowList id="rows" translation="[8,0]" itemComponentName="VelvetCard" itemSize="[1760,460]" itemSpacing="[0,20]" numRows="3" rowItemSize="[[260,446]]" rowItemSpacing="[[0,0]]" showRowLabel="[true]" showRowCounter="[false]" rowLabelOffset="[[16,6]]" rowLabelColor="0xF2F4F8FF" drawFocusFeedback="false" rowFocusAnimationStyle="floatingFocus" vertFocusAnimationStyle="fixedFocus">
+        <Font role="rowLabelFont" uri="pkg:/fonts/Outfit-Medium.ttf" size="34" />
+      </RowList>
+    </Group>
+    <MarkupGrid id="grid" translation="[80,389]" itemComponentName="VelvetCard" numColumns="6" numRows="1" itemSize="[290,521]" itemSpacing="[4,10]" drawFocusFeedback="false" horizFocusAnimationStyle="floatingFocus" vertFocusAnimationStyle="fixedFocus" visible="false" />
+    <MarkupGrid id="profiles" translation="[416,422]" itemComponentName="VelvetProfileTile" numColumns="4" numRows="1" itemSize="[254,332]" itemSpacing="[22,28]" drawFocusFeedback="false" horizFocusAnimationStyle="floatingFocus" visible="false" />
+    <Group id="menu" translation="[96,363]" clippingRect="[-8,-8,1744,653]" visible="false">
+      <Group id="menuItems" />
+    </Group>
+    <Label id="empty" translation="[96,582]" width="1500" height="120" wrap="true" maxLines="3" color="0x9BA3B4FF" visible="false">
+      <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="28" />
+    </Label>
+    <Label id="status" translation="[96,117]" width="1728" height="30" color="0xAEB7C8FF">
+      <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="18" />
+    </Label>
+    <Group id="reading" visible="false">
+      <Rectangle width="1920" height="1080" color="0x0A0C12F8" />
+      <Label id="readingTitle" translation="[180,147]" width="1560" height="90" color="0xF2F4F8FF">
+        <Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="54" />
+      </Label>
+      <ScrollableText id="readingText" translation="[180,270]" width="1542" height="570" color="0xC3CAD7FF">
+        <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="33" />
+      </ScrollableText>
+      <Label translation="[180,918]" width="1500" height="42" text="OK to close · Up / Down to read" color="0x9BA3B4FF">
+        <Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="24" />
+      </Label>
+    </Group>
+    </Group>
+    <VelvetDock id="dock" translation="[376.5,900]" />
+    <Group id="choicePanel" visible="false">
+      <Rectangle width="1920" height="1080" color="0x03050BA8" />
+      <Poster id="choiceSurface" translation="[456,210]" width="1008" height="660" uri="pkg:/images/card-well.9.png" />
+      <Label id="choiceTitle" translation="[510,258]" width="900" height="60" color="0xF2F4F8FF">
+        <Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="38" />
+      </Label>
+      <Group id="choiceItems" translation="[510,348]" />
+    </Group>
+    <Animation id="choiceReveal" duration="0.16" easeFunction="outCubic">
+      <FloatFieldInterpolator key="[0,1]" keyValue="[0,1]" fieldToInterp="choicePanel.opacity" />
+    </Animation>
+    <Animation id="artReveal" duration="0.24" easeFunction="outCubic">
+      <FloatFieldInterpolator key="[0,1]" keyValue="[0,0.96]" fieldToInterp="nextBackdrop.opacity" />
+    </Animation>
+    <Animation id="viewportMove" duration="0.22" easeFunction="outCubic">
+      <Vector2DFieldInterpolator id="rowSlide" key="[0,1]" fieldToInterp="listClip.translation" />
+      <Vector2DFieldInterpolator id="heroSlide" key="[0,1]" fieldToInterp="hero.translation" />
+      <FloatFieldInterpolator id="heroFade" key="[0,1]" fieldToInterp="hero.opacity" />
+      <FloatFieldInterpolator id="artFade" key="[0,1]" fieldToInterp="cinema.opacity" />
+    </Animation>
+    <Timer id="artDelay" duration="0.14" repeat="false" />
+    <Animation id="menuMove" duration="0.16" easeFunction="outCubic">
+      <Vector2DFieldInterpolator id="menuSlide" key="[0,1]" fieldToInterp="menuItems.translation" />
+    </Animation>
+  </children>
+</component>

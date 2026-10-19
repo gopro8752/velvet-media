@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="velour_void">#060709</color>
+
+    <style name="Theme.Velour" parent="android:Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/velour_void</item>
+        <item name="android:colorBackground">@color/velour_void</item>
+        <item name="android:navigationBarColor">@color/velour_void</item>
+        <item name="android:statusBarColor">@color/velour_void</item>
+    </style>
+</resources>

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0c0d13">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Velvet · Admin</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/admin/admin.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to reporting</a>
+  <section id="login" class="login-screen" aria-labelledby="login-title" hidden>
+    <div class="login-art" aria-hidden="true"><span></span><span></span></div>
+    <div class="login-card">
+      <div class="brand"><span class="brand-mark">V</span><span>VELVET <small>ADMIN</small></span></div>
+      <div class="login-intro"><p class="eyebrow">A little clarity. A lot of entertainment.</p><h1 id="login-title">Your Velvet,<br>at a glance.</h1><p>See what’s playing, understand your capacity, and make room for everyone.</p></div>
+      <form id="login-form">
+        <label for="access-key">Admin access key</label>
+        <div class="password-field"><input id="access-key" name="token" type="password" autocomplete="current-password" required spellcheck="false" autocapitalize="none"><button id="show-key" class="icon-button" type="button" aria-label="Show access key" aria-pressed="false"></button></div>
+        <p id="login-error" class="form-error" role="alert" hidden></p>
+        <button id="login-submit" class="button button-primary" type="submit">Open dashboard <span aria-hidden="true">↗</span></button>
+      </form>
+      <p class="login-footnote">Private reporting. Access keys stay out of URLs and browser storage.</p>
+    </div>
+  </section>
+  <div id="app" class="app-shell" hidden>
+    <aside class="sidebar" aria-label="Admin navigation">
+      <a href="#overview" class="brand" aria-label="Velvet admin overview"><span class="brand-mark">V</span><span>VELVET <small>ADMIN</small></span></a>
+      <p class="sidebar-caption">YOUR SERVER</p>
+      <nav id="navigation" aria-label="Reporting sections"></nav>
+      <div class="sidebar-bottom"><div class="collection-status"><span class="status-dot"></span><div><strong id="collection-label">Reporting online</strong><span id="collection-since">Gathering your first samples</span></div></div><button id="logout" class="logout-button">Sign out <span aria-hidden="true">↗</span></button></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><span class="breadcrumb">Your server <span aria-hidden="true">/</span> <strong id="breadcrumb-current">Overview</strong></span><div class="topbar-status"><span class="status-dot"></span><span id="refresh-status" role="status">Connecting</span></div></header>
+      <main id="main" tabindex="-1">
+        <section class="page-heading"><div><p class="eyebrow" id="page-eyebrow">THE BIG PICTURE</p><h1 id="page-title">Room for everyone.</h1><p id="page-description">A clear view of your viewers, streams, and server capacity.</p></div><div class="page-actions"><label class="range-picker"><span class="sr-only">Reporting period</span><span id="range-icon" aria-hidden="true"></span><select id="range"><option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label><button class="icon-button refresh-button" id="refresh" aria-label="Refresh report"></button><details class="export-menu"><summary class="button button-secondary">Export <span aria-hidden="true">↓</span></summary><div><a id="export-playback" href="/admin/api/export?days=7&amp;type=playback">Playback CSV</a><a id="export-capacity" href="/admin/api/export?days=7&amp;type=capacity">Capacity CSV</a></div></details></div></section>
+        <div id="error-banner" class="notice notice-error" role="alert" hidden></div>
+        <div id="report-loading" class="report-loading" role="status"><span class="spinner"></span> Getting your report ready…</div>
+        <div id="report-content" hidden></div>
+        <footer class="report-footer"><span id="coverage-footer">Playback reporting begins when compatible clients send activity.</span><span>All dates &amp; hours in UTC</span></footer>
+      </main>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

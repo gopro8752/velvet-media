@@ -1,0 +1,37 @@
+[package]
+name = "velvet-backend"
+version = "0.1.0"
+edition = "2021"
+description = "Velvet's unified self-hosted backend: usenet streaming (NNTP), Stremio-protocol resolver, watch-state sync, and skip-intro detection — one binary."
+license-file = "LICENSE"
+
+[[bin]]
+name = "velvet-backend"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-roots = "0.26"
+axum = "0.7"
+bytes = "1"
+quick-xml = "0.36"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+getrandom = "0.2"
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "1"
+futures = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+flate2 = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

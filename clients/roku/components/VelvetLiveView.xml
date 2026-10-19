@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetLiveView" extends="Group">
+  <interface>
+    <field id="model" type="assocarray" alwaysNotify="true" onChange="modelChanged" />
+    <field id="action" type="assocarray" alwaysNotify="true" />
+    <function name="restoreFocus" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/source/VelvetUtils.brs" />
+  <script type="text/brightscript" uri="pkg:/source/LiveGuidePolicy.brs" />
+  <script type="text/brightscript" uri="pkg:/components/VelvetLiveView.brs" />
+  <children>
+    <Poster width="1920" height="1080" uri="pkg:/images/ambient.png" />
+    <Label translation="[96,66]" text="Live TV" width="1500" height="84" color="0xF2F4F8FF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="60" /></Label>
+    <VelvetButton id="search" translation="[96,170]" width="1390" height="74" label="Search channels and programs" icon="pkg:/images/search.png" />
+    <VelvetButton id="refresh" translation="[1510,170]" width="314" height="74" label="Refresh" centered="true" />
+    <Label id="status" translation="[96,260]" width="1728" height="34" color="0xA9B1C2FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="22" /></Label>
+    <Group id="channels" translation="[96,316]" />
+    <Group id="schedule" translation="[820,316]">
+      <Label id="channelTitle" width="1004" height="58" color="0xF2F4F8FF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="38" /></Label>
+      <VelvetButton id="watch" translation="[0,72]" width="1004" height="74" label="Watch live" icon="pkg:/images/play.png" />
+      <Group id="programs" translation="[0,164]" />
+    </Group>
+    <Label id="footer" translation="[96,1006]" width="1728" height="36" color="0xA9B1C2FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="22" /></Label>
+    <Group id="details" visible="false">
+      <Rectangle width="1920" height="1080" color="0x090B12F5" />
+      <Label id="programTitle" translation="[170,120]" width="1580" height="120" wrap="true" maxLines="2" color="0xF2F4F8FF"><Font role="font" uri="pkg:/fonts/Outfit-Medium.ttf" size="48" /></Label>
+      <Label id="programTime" translation="[170,250]" width="1580" height="45" color="0xBEB5E8FF"><Font role="font" uri="pkg:/fonts/Inter-Medium.ttf" size="26" /></Label>
+      <ScrollableText id="programDescription" translation="[170,320]" width="1580" height="510" color="0xCDD2DEFF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="32" /></ScrollableText>
+      <Label translation="[170,900]" width="1580" height="42" text="Up / Down to read · Back or OK to return · Play to watch live" color="0xA9B1C2FF"><Font role="font" uri="pkg:/fonts/Inter-Regular.ttf" size="24" /></Label>
+    </Group>
+  </children>
+</component>

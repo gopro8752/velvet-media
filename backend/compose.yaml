@@ -1,0 +1,24 @@
+services:
+  backend:
+    build:
+      context: .
+      target: ${VELVET_IMAGE_TARGET:-runtime}
+    image: velvet-backend:local
+    restart: unless-stopped
+    ports:
+      - "${VELVET_BIND_ADDRESS:-127.0.0.1}:${VELVET_PORT:-8799}:8799"
+    environment:
+      VELVET_CONFIG: /config/velvet.toml
+      VELVET_DB: /data/velvet.db
+      VELVET_TOKEN: ${VELVET_TOKEN:?Set a random VELVET_TOKEN in .env}
+      VELVET_PUBLIC_BASE_URL: ${VELVET_PUBLIC_BASE_URL:?Set the URL your apps can reach}
+      VELVET_TMDB_KEY: ${VELVET_TMDB_KEY:?Set your own TMDB API key}
+      NNTP_HOST: ${NNTP_HOST:?Set your NNTP host}
+      NNTP_USER: ${NNTP_USER:?Set your NNTP username}
+      NNTP_PASS: ${NNTP_PASS:?Set your NNTP password}
+      NNTP_CONNS: ${NNTP_CONNS:-10}
+    volumes:
+      - ./config:/config
+      - backend-data:/data
+volumes:
+  backend-data:

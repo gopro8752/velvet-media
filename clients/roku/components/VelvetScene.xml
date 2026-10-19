@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VelvetScene" extends="Scene">
+  <interface><field id="exitRequested" type="boolean" value="false" /></interface>
+  <script type="text/brightscript" uri="pkg:/source/VelvetUtils.brs" />
+  <script type="text/brightscript" uri="pkg:/source/PlaybackPolicy.brs" />
+  <script type="text/brightscript" uri="pkg:/source/RokuAudioPolicy.brs" />
+  <script type="text/brightscript" uri="pkg:/source/PlayerOptionsPolicy.brs" />
+  <script type="text/brightscript" uri="pkg:/source/PreferencesPolicy.brs" />
+  <script type="text/brightscript" uri="pkg:/source/LiveGuidePolicy.brs" />
+  <script type="text/brightscript" uri="VelvetPreferencesController.brs" />
+  <script type="text/brightscript" uri="VelvetLiveController.brs" />
+  <script type="text/brightscript" uri="VelvetSportsController.brs" />
+  <script type="text/brightscript" uri="VelvetCategoryController.brs" />
+  <script type="text/brightscript" uri="VelvetPlayerController.brs" />
+  <script type="text/brightscript" uri="VelvetHandoff.brs" />
+  <script type="text/brightscript" uri="VelvetScene.brs" />
+  <script type="text/brightscript" uri="pkg:/source/TelemetryPolicy.brs" />
+  <script type="text/brightscript" uri="VelvetTelemetry.brs" />
+  <script type="text/brightscript" uri="VelvetPlayback.brs" />
+  <children>
+    <VelvetLiveView id="liveView" visible="false" />
+    <VelvetSportsView id="sportsView" visible="false" />
+    <VelvetView id="view" />
+    <Video id="video" width="1920" height="1080" visible="false" notificationInterval="0.5" enableUI="false" />
+    <VelvetPlayer id="player" visible="false" />
+    <VelvetCategoryComposer id="categoryComposer" visible="false" />
+    <Timer id="playbackTimer" duration="1" repeat="true" />
+    <Timer id="syncTimer" duration="30" repeat="true" />
+  </children>
+</component>

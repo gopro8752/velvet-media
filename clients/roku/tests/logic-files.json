@@ -1,0 +1,10 @@
+[
+  "source/VelvetUtils.brs",
+  "source/PlaybackPolicy.brs",
+  "source/PlayerOptionsPolicy.brs",
+  "components/VelvetHandoff.brs",
+  "source/LiveGuidePolicy.brs",
+  "source/PreferencesPolicy.brs",
+  "source/RokuAudioPolicy.brs",
+  "source/TelemetryPolicy.brs"
+]

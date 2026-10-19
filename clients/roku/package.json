@@ -1,0 +1,21 @@
+{
+  "name": "velvet-roku",
+  "version": "0.3.1",
+  "private": true,
+  "description": "Native Velvet client for Roku",
+  "scripts": {
+    "check": "bsc --project bsconfig.json --create-package false --copy-to-staging false",
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@rokucommunity/brs": "0.47.6",
+    "brighterscript": "0.73.7",
+    "roku-deploy": "3.18.4"
+  },
+  "license": "SEE LICENSE IN ../../LICENSE"
+}

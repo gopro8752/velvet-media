@@ -1,0 +1,15 @@
+# Only build inputs enter the Docker context. Runtime state and secrets stay out.
+**
+!Cargo.toml
+!Cargo.lock
+!Dockerfile
+!.dockerignore
+!src/
+!src/*.rs
+!src/epg_mappings.json
+!admin/
+!admin/*.html
+!admin/*.css
+!admin/*.js
+!LICENSE
+!THIRD_PARTY_NOTICES.md

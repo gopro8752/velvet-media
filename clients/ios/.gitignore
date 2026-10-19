@@ -1,0 +1,13 @@
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.xcarchive/
+*.p12
+*.p8
+*.mobileprovision
+*.xcconfig.local
+.env
+.env.*
+!*.example

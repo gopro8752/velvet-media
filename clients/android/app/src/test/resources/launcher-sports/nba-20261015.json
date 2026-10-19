@@ -1,0 +1,150 @@
+{
+  "events": [
+    {
+      "id": "401908945",
+      "date": "2026-10-15T23:30Z",
+      "name": "Toronto Raptors at New York Knicks",
+      "season": {
+        "year": 2027,
+        "type": 1,
+        "slug": "preseason"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 0,
+        "type": {
+          "id": "1",
+          "name": "STATUS_SCHEDULED",
+          "state": "pre",
+          "completed": false,
+          "description": "Scheduled",
+          "detail": "Thu, October 15th at 7:30 PM EDT",
+          "shortDetail": "10/15 - 7:30 PM EDT"
+        }
+      },
+      "competitions": [
+        {
+          "id": "401908945",
+          "date": "2026-10-15T23:30Z",
+          "timeValid": true,
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 0,
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Thu, October 15th at 7:30 PM EDT",
+              "shortDetail": "10/15 - 7:30 PM EDT"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "team": {
+                "id": "18",
+                "displayName": "New York Knicks",
+                "shortDisplayName": "Knicks",
+                "name": "Knicks",
+                "abbreviation": "NY",
+                "color": "1d428a",
+                "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/ny.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "0",
+              "team": {
+                "id": "28",
+                "displayName": "Toronto Raptors",
+                "shortDisplayName": "Raptors",
+                "name": "Raptors",
+                "abbreviation": "TOR",
+                "color": "d91244",
+                "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/tor.png"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401908622",
+      "date": "2026-10-16T00:30Z",
+      "name": "Oklahoma City Thunder at Houston Rockets",
+      "season": {
+        "year": 2027,
+        "type": 1,
+        "slug": "preseason"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 0,
+        "type": {
+          "id": "1",
+          "name": "STATUS_SCHEDULED",
+          "state": "pre",
+          "completed": false,
+          "description": "Scheduled",
+          "detail": "Thu, October 15th at 8:30 PM EDT",
+          "shortDetail": "10/15 - 8:30 PM EDT"
+        }
+      },
+      "competitions": [
+        {
+          "id": "401908622",
+          "date": "2026-10-16T00:30Z",
+          "timeValid": true,
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 0,
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Thu, October 15th at 8:30 PM EDT",
+              "shortDetail": "10/15 - 8:30 PM EDT"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "team": {
+                "id": "10",
+                "displayName": "Houston Rockets",
+                "shortDisplayName": "Rockets",
+                "name": "Rockets",
+                "abbreviation": "HOU",
+                "color": "ce0e2d",
+                "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/hou.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "0",
+              "team": {
+                "id": "25",
+                "displayName": "Oklahoma City Thunder",
+                "shortDisplayName": "Thunder",
+                "name": "Thunder",
+                "abbreviation": "OKC",
+                "color": "007ac1",
+                "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/okc.png"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

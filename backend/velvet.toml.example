@@ -1,0 +1,45 @@
+# Copy to config/velvet.toml, protect it, and supply your own service details.
+# Docker Compose supplies the public URL, shared token and first provider from .env.
+bind = "0.0.0.0"
+port = 8799
+public_base_url = "https://velvet.example.com"
+token = ""
+db_path = "/data/velvet.db"
+
+# Provider order is failover priority. Match max_connections to your plan.
+# NNTP_HOST, NNTP_USER, NNTP_PASS and NNTP_CONNS override the first provider.
+[[providers]]
+name = "Primary"
+host = "news.example.com"
+port = 563
+tls = true
+username = ""
+password = ""
+max_connections = 10
+
+# Add your own Newznab-compatible indexer(s); remove this block until configured.
+[[indexers]]
+name = "My indexer"
+url = "https://indexer.example.com"
+api_key = ""
+
+# Optional AI categories. Build with --target with-codex and authenticate the
+# official CLI in the private config volume. No credentials are included.
+[category_ai]
+enabled = false
+codex_path = "codex"
+codex_home = "/config/codex"
+# model = "MODEL_AVAILABLE_TO_YOUR_ACCOUNT"
+
+# Optional live-channel bridge, configured and authenticated separately.
+# The bundled adapter supports PrismCast's Spectrum playlist format.
+[live_tv]
+enabled = false
+source_name = "Live TV"
+upstream_url = "http://live-bridge:5589"
+lineup_path = "/playlist?service=spectrum"
+guide_enabled = false
+
+# Optional external event discovery/embed adapter; no channels are bundled.
+[live_sports]
+enabled = false
