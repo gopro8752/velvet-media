@@ -11,6 +11,7 @@
 //! Built streaming-first: every request is independent and fails fast.
 
 mod admin;
+mod admin_recovery;
 mod admin_report;
 mod capacity;
 mod archive;

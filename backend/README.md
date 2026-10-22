@@ -51,6 +51,25 @@ Keep this key private. It can view usage by profile and device, current playback
 
 Playback reports begin when compatible clients send telemetry. Historic playback is not inferred from existing watch progress. The analytics database is separate from watch-state data, defaults to `/data/velvet-analytics.db`, and can be relocated with `VELVET_ANALYTICS_DB`. Capacity samples, usage buckets, and session records are retained for 90 days.
 
+### Recovery reporting for Velvet Beta
+
+The **Recovery** section at `/admin#recovery` reports the separate beta backend’s work. It keeps beta repair and viewing statistics separate from the dashboard’s existing stable capacity and playback reports. Update the beta backend and Android beta app together to enable watch-level attribution and the new source-switch counters.
+
+To view beta reporting through your existing dashboard, configure both values on the **server hosting that dashboard**, using a backend build that supports the recovery report proxy:
+
+```dotenv
+VELVET_RECOVERY_REPORT_URL=https://beta-backend.example
+VELVET_RECOVERY_REPORT_TOKEN=REPLACE_WITH_BETA_ADMIN_KEY
+```
+
+Replace the reserved example origin with the beta backend’s address reachable by the dashboard server. Use a bare HTTP(S) origin, without a path, query, embedded credentials, or fragment. The token is the beta backend’s **admin key**, not its client playback token. Retrieve it privately from the beta data volume; with the beta Compose example, run `docker compose -f compose.beta.yaml exec backend-beta cat /data/velvet-admin-key`. Keep both settings in private deployment configuration and pass them into the dashboard container’s environment. A Compose `.env` file alone does not inject variables unless the service’s `environment` or `env_file` configuration includes them.
+
+Restart the dashboard backend after setting the variables. Your browser uses its existing dashboard admin session; the proxy token stays on the server. The beta backend need only be reachable from that server. Leave the proxy settings unset on the beta backend itself to read its local report directly. An unreachable beta service shows an unavailable state without replacing the stable reporting data.
+
+The report distinguishes provider article rescues, completed and unsuccessful PAR2 jobs with reasons, prepared data without observed playback delivery, and repaired bytes delivered on an active stream. It also shows successful source switches per measured movie/episode watch, manual and automatic attempts, startup, post-start buffering, title breakdowns, session details, and a CSV of the latest 5,000 instrumented sessions. The per-watch average includes watches with zero switches and excludes attempts with no reported playing time; a source is counted as switched only when replacement playback starts.
+
+Collection begins with the updated components. No historic repair activity is reconstructed. A repair started by look-ahead is not proof that it completed before playback reached the missing data; server delivery is not proof that every frame was displayed. Post-start buffering is measured separately. Recovery events are retained for up to 90 days or 250,000 records, whichever limit is reached first; dropped-event warnings identify incomplete collection. See [the beta guide](https://github.com/gopro8752/velvet-media/blob/beta/BETA.md) for isolation, resource limits, and testing.
+
 ## Optional integrations
 
 - **AI categories:** set `VELVET_IMAGE_TARGET=with-codex` in `.env`, set `category_ai.enabled=true`, rebuild, and run `docker compose exec backend codex login --device-auth`. Authentication is stored under the private `config/codex` mount. This integration uses the official CLI's account authentication; service availability and usage limits are determined by the account and upstream service. Never put account credentials into a Dockerfile, image, or repository.
