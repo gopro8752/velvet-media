@@ -28,13 +28,13 @@ class StreamFailoverWatchdogTest {
         assertTrue(watchdog.check(11_000, duration = 100_200))
     }
 
-    @Test fun rebufferAfterPlaybackHasFiveSecondsFromTheStartOfTheStall() {
+    @Test fun rebufferAfterPlaybackLeavesRoomForBoundedTransportRecovery() {
         val watchdog = StreamFailoverWatchdog().apply { reset(0) }
         assertFalse(watchdog.check(1_000, position = 1_000, buffered = 8_000,
             buffering = false, playing = true))
         assertFalse(watchdog.check(2_000, position = 2_000, buffered = 8_000))
-        assertFalse(watchdog.check(6_999, position = 2_000, buffered = 8_000))
-        assertTrue(watchdog.check(7_000, position = 2_000, buffered = 8_000))
+        assertFalse(watchdog.check(16_999, position = 2_000, buffered = 8_000))
+        assertTrue(watchdog.check(17_000, position = 2_000, buffered = 8_000))
     }
 
     @Test fun arrivingBufferDuringRebufferRestartsTheNoProgressBudget() {
@@ -43,8 +43,8 @@ class StreamFailoverWatchdogTest {
             buffering = false, playing = true))
         assertFalse(watchdog.check(2_000, position = 2_000, buffered = 2_000))
         assertFalse(watchdog.check(6_000, position = 2_000, buffered = 3_000))
-        assertFalse(watchdog.check(10_999, position = 2_000, buffered = 3_000))
-        assertTrue(watchdog.check(11_000, position = 2_000, buffered = 3_000))
+        assertFalse(watchdog.check(20_999, position = 2_000, buffered = 3_000))
+        assertTrue(watchdog.check(21_000, position = 2_000, buffered = 3_000))
     }
 
     @Test fun pausedSuppressedAndIneligibleTimeDoesNotCountTowardRecovery() {
@@ -65,8 +65,8 @@ class StreamFailoverWatchdogTest {
         assertFalse(watchdog.check(30_000, buffering = false))
         assertFalse(watchdog.check(60_000, playing = true))
         assertFalse(watchdog.check(90_000))
-        assertFalse(watchdog.check(94_999))
-        assertTrue(watchdog.check(95_000))
+        assertFalse(watchdog.check(104_999))
+        assertTrue(watchdog.check(105_000))
     }
 
     @Test fun sourceChangeOrExplicitSeekDropsOldDeadlineAndStartsFreshGrace() {
@@ -84,7 +84,7 @@ class StreamFailoverWatchdogTest {
         assertFalse(watchdog.check(6_500))
         assertFalse(watchdog.check(7_000, position = 1_000, buffering = false, playing = true))
         assertFalse(watchdog.check(8_000, position = 2_000))
-        assertTrue(watchdog.check(13_000, position = 2_000))
+        assertTrue(watchdog.check(23_000, position = 2_000))
     }
 
     @Test fun unacknowledgedHandoffCannotFailOverButGetsFreshBudgetOnceEligible() {
@@ -94,6 +94,34 @@ class StreamFailoverWatchdogTest {
         assertFalse(watchdog.check(91_000, position = 120_000))
         assertFalse(watchdog.check(96_999, position = 120_000))
         assertTrue(watchdog.check(97_000, position = 120_000))
+    }
+
+    @Test fun inPlaceRetryGetsAFiniteGraceAndCannotDelayStartup() {
+        val startup = StreamFailoverWatchdog().apply { reset(0) }
+        assertTrue(startup.check(6000, retryUntil = Long.MAX_VALUE))
+        val watchdog = StreamFailoverWatchdog().apply { reset(0) }
+        assertFalse(watchdog.check(1000, position = 1000, buffering = false, playing = true))
+        assertFalse(watchdog.check(2000, position = 2000))
+        assertFalse(watchdog.check(17_000, position = 2000, retryUntil = 23_000))
+        assertFalse(watchdog.check(22_999, position = 2000, retryUntil = 23_000))
+        assertTrue(watchdog.check(23_000, position = 2000, retryUntil = 23_000))
+    }
+
+    @Test fun establishedPlaybackSeekRetainsTheMidstreamRetryBudget() {
+        val watchdog = StreamFailoverWatchdog().apply {
+            reset(1000, positionMs = 120_000, establishedPlayback = true)
+        }
+        assertFalse(watchdog.check(7000, position = 120_000, retryUntil = 22_000))
+        assertFalse(watchdog.check(21_999, position = 120_000, retryUntil = 22_000))
+        assertTrue(watchdog.check(22_000, position = 120_000, retryUntil = 22_000))
+    }
+
+    @Test fun evenAnInvalidRetryDeadlineCannotKeepTheSpinnerForever() {
+        val watchdog = StreamFailoverWatchdog().apply { reset(0) }
+        watchdog.check(1000, position = 1000, buffering = false, playing = true)
+        watchdog.check(2000, position = 2000)
+        assertFalse(watchdog.check(31_999, position = 2000, retryUntil = Long.MAX_VALUE))
+        assertTrue(watchdog.check(32_000, position = 2000, retryUntil = Long.MAX_VALUE))
     }
 
     private fun StreamFailoverWatchdog.check(
@@ -106,5 +134,6 @@ class StreamFailoverWatchdogTest {
         playWhenReady: Boolean = true,
         suppressed: Boolean = false,
         eligible: Boolean = true,
-    ) = shouldFailover(now, position, buffered, duration, buffering, playing, playWhenReady, suppressed, eligible)
+        retryUntil: Long = 0,
+    ) = shouldFailover(now, position, buffered, duration, buffering, playing, playWhenReady, suppressed, eligible, retryUntil)
 }

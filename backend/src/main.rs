@@ -41,6 +41,7 @@ mod sevenzip;
 mod sports;
 mod sports_native;
 mod stream;
+mod stream_errors;
 mod sync;
 mod warm;
 mod yenc;

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, Extent};
 use crate::pool::Pool;
+use crate::stream_errors::StreamError;
 use crate::recovery_metrics::{valid_session, Recorder, RecoveryEvent};
 
 // std::sync::Mutex throughout: the guards are only ever held for brief synchronous
@@ -623,6 +624,7 @@ async fn playback(
 struct StreamEntry {
     nzb_url: String,
     loaded: Mutex<Option<Loaded>>,
+    unsupported_at: Mutex<Option<std::time::Instant>>,
     manifest: Mutex<Option<Arc<crate::nzb::Nzb>>>,
     /// Single-flight for the heavy load (NZB download + volume-header fetches):
     /// a serve arriving while a warm is mid-load WAITS for it instead of doing
@@ -633,6 +635,15 @@ struct StreamEntry {
     verification_attempt: Mutex<Option<std::time::Instant>>,
     recovery: Mutex<Recovery>,
     buffer: Mutex<VerifiedBuffer>,
+}
+
+impl StreamEntry {
+    fn unsupported(&self) -> bool {
+        let mut at = self.unsupported_at.lock().unwrap();
+        if at.is_some_and(|when| when.elapsed() < std::time::Duration::from_secs(300)) { return true; }
+        *at = None;
+        false
+    }
 }
 
 #[derive(Default)]
@@ -667,6 +678,8 @@ struct RecoveryHealth {
 #[derive(Serialize)]
 struct StreamHealth {
     status: &'static str,
+    #[serde(rename = "errorCode", skip_serializing_if = "Option::is_none")]
+    error_code: Option<&'static str>,
     recovery: RecoveryHealth,
     #[serde(rename = "exactRecovery")]
     exact_recovery: ExactRecoveryHealth,
@@ -838,6 +851,7 @@ impl StreamState {
     /// its articles are still filling in, so an old verdict earns one re-check
     /// (still bad → re-condemned with a fresh timestamp, costing one failover).
     pub fn is_condemned(&self, nzb_url: &str) -> bool {
+        if self.streams.lock().unwrap().get(&fnv_hex(nzb_url.as_bytes())).is_some_and(|entry| entry.unsupported()) { return true; }
         if self.repair_enabled {
             return false;
         }
@@ -909,6 +923,7 @@ impl StreamState {
         Arc::new(StreamEntry {
             nzb_url,
             loaded: Mutex::new(None),
+            unsupported_at: Mutex::new(None),
             manifest: Mutex::new(None),
             load_lock: tokio::sync::Mutex::new(()),
             verify_lock: tokio::sync::Mutex::new(()),
@@ -998,12 +1013,12 @@ impl StreamState {
             .unwrap()
             .as_ref()
             .and_then(|l| l.complete);
-        let status = match complete {
+        let status = if entry.unsupported() { "unsupported" } else { match complete {
             Some(true) => "complete",
             Some(false) => "incomplete",
             None if entry.verify_lock.try_lock().is_err() => "checking",
             None => "unverified",
-        };
+        }};
         let recovery = entry.recovery.lock().unwrap();
         let ready = recovery.prepared.as_ref().filter(|prepared| {
             prepared.at.elapsed() < std::time::Duration::from_secs(90)
@@ -1023,6 +1038,7 @@ impl StreamState {
                     .all(|id| self.cache.get(id).is_some())
         });
         Some(StreamHealth {
+            error_code: match status { "unsupported" => Some("unsupported_archive"), "incomplete" => Some("missing_articles"), _ => None },
             status,
             exact_recovery: self.buffer_health(&entry),
             recovery: RecoveryHealth {
@@ -1405,7 +1421,7 @@ async fn serve(
     headers: HeaderMap,
 ) -> Response {
     let Some(entry) = st.lookup(&id) else {
-        return (StatusCode::NOT_FOUND, "unknown stream").into_response();
+        return StreamError::UnknownStream.response();
     };
 
     // Ensure the segment map + sizes are loaded (parse NZB, learn part size once).
@@ -1429,15 +1445,15 @@ async fn serve(
     };
     if let Err(e) = ensure_loaded_context(st.clone(), entry.clone(), trigger, loading_session).await
     {
-        tracing::warn!("stream {id}: load failed: {e}");
+        tracing::warn!("stream {id}: preparation failed ({})", StreamError::from_preparation(&e).code());
         if !headers.contains_key("x-velvet-probe") {
             let session = headers
                 .get("x-velvet-playback-session")
                 .and_then(|v| v.to_str().ok())
                 .filter(|v| valid_session(v));
-            st.record_read_failure(&id, session, "source_preparation_failed");
+            st.record_read_failure(&id, session, StreamError::from_preparation(&e).code());
         }
-        return (StatusCode::BAD_GATEWAY, "could not prepare stream").into_response();
+        return StreamError::from_preparation(&e).response();
     }
 
     // Read the cached load info into locals (brief lock, nothing held across await).
@@ -1456,7 +1472,7 @@ async fn serve(
         // Verified holes: refuse so the app fails over at a clean request
         // boundary — never let the parser hit a zero-filled gap mid-scene.
         Some(false) if !st.repair_enabled => {
-            return (StatusCode::BAD_GATEWAY, "source has missing articles").into_response();
+            return StreamError::MissingArticles.response();
         }
         // Not verified yet: serve optimistically (never block byte 0) and let a
         // background verification land the verdict — subsequent range requests
@@ -1475,7 +1491,7 @@ async fn serve(
     // Parse a single Range: `bytes=start-end` (end optional).
     let (start, end) = match parse_range(&headers, total) {
         Some(r) => r,
-        None => return (StatusCode::RANGE_NOT_SATISFIABLE, "bad range").into_response(),
+        None => return StreamError::InvalidRange.response(),
     };
 
     let probe_budget = {
@@ -1556,9 +1572,11 @@ async fn ensure_loaded_context(
         }
         return Ok(());
     }
+    if entry.unsupported() { return Err(StreamError::UnsupportedArchive.into()); }
     // Single-flight: whoever holds the lock does the load; everyone else waits
     // and finds `loaded` populated on re-check.
     let _flight = entry.load_lock.lock().await;
+    if entry.unsupported() { return Err(StreamError::UnsupportedArchive.into()); }
     if entry.loaded.lock().unwrap().is_some() {
         return Ok(());
     }
@@ -1617,11 +1635,11 @@ async fn ensure_loaded_context(
                     }
                     decoded
                 }
-                _ => st
+                failure => st
                     .repair
                     .recover_context(&sid, &first.message_id, trigger, session.as_deref())
                     .await
-                    .map_err(|_| anyhow::anyhow!("initial article could not be recovered"))?,
+                    .map_err(|_| anyhow::Error::from(if matches!(failure, crate::pool::DecodedFetch::Missing) { StreamError::MissingArticles } else { StreamError::UpstreamUnavailable }))?,
             };
             let _ = st.repair.remember(&sid, &first.message_id, &decoded).await;
             let part = decoded.data.len() as u64;
@@ -1635,8 +1653,8 @@ async fn ensure_loaded_context(
             );
             (part, total)
         } else {
-            match st.pool.fetch(&group, &first.message_id).await {
-                crate::pool::Fetched::Found(raw) => {
+            match st.pool.fetch_checked(&group, &first.message_id).await {
+                crate::pool::CheckedFetch::Found(raw) => {
                     let dec = crate::yenc::decode(&raw)?;
                     let part = dec.data.len() as u64;
                     (
@@ -1645,10 +1663,8 @@ async fn ensure_loaded_context(
                             .unwrap_or_else(|| part * segments.len() as u64),
                     )
                 }
-                crate::pool::Fetched::Missing => {
-                    let part = first.bytes.saturating_sub(first.bytes / 40).max(1);
-                    (part, part * segments.len() as u64)
-                }
+                crate::pool::CheckedFetch::Missing => return Err(StreamError::MissingArticles.into()),
+                crate::pool::CheckedFetch::Unavailable => return Err(StreamError::UpstreamUnavailable.into()),
             }
         };
         let extent = Extent {
@@ -1669,7 +1685,10 @@ async fn ensure_loaded_context(
             Err(rar_err) => match crate::sevenzip::build_extents(&st.pool, &parsed.files).await {
                 Ok(res) => res,
                 Err(sz_err) => {
-                    anyhow::bail!("no streamable media (rar: {rar_err}; 7z: {sz_err})")
+                    tracing::warn!("stream {}: archive layout unavailable (rar: {rar_err}; 7z: {sz_err})", fnv_hex(entry.nzb_url.as_bytes()));
+                    let error = crate::stream_errors::archive_failure(&rar_err, &sz_err, vols.is_empty());
+                    if error == StreamError::UnsupportedArchive { *entry.unsupported_at.lock().unwrap() = Some(std::time::Instant::now()); }
+                    return Err(error.into());
                 }
             },
         }
@@ -1955,21 +1974,51 @@ impl StreamGen {
         }
     }
 
+    fn invalid_position(mut self) -> Option<(Result<Bytes, std::io::Error>, StreamGen)> {
+        tracing::warn!(
+            "stream {}: article offsets do not cover media {}, aborting transfer",
+            self.sid, self.media_pos,
+        );
+        self.state.record_read_failure(
+            &self.sid, self.playback_session.as_deref(), "article_corrupt",
+        );
+        self.abort_inflight();
+        self.media_pos = self.end;
+        Some((
+            Err(std::io::Error::other("article offsets do not cover requested range")),
+            self,
+        ))
+    }
+
     async fn step(mut self) -> Option<(Result<Bytes, std::io::Error>, StreamGen)> {
+        // The initial part-size guess is only an estimate. Preserve a shrinking
+        // search interval across retries; resetting the guess here used to loop
+        // forever whenever real yEnc article lengths differed from that estimate.
+        let mut search: Option<(usize, usize)> = None;
         loop {
-            if self.media_pos >= self.end || self.ext_idx >= self.extents.len() {
+            if self.media_pos >= self.end {
                 self.abort_inflight();
                 return None;
             }
-            let ext = self.extents[self.ext_idx].clone();
-            let ext_start = self.ext_media_start[self.ext_idx];
-            let ext_end = ext_start + ext.data_len;
+            let Some(ext) = self.extents.get(self.ext_idx).cloned() else {
+                return self.invalid_position();
+            };
+            let Some(&ext_start) = self.ext_media_start.get(self.ext_idx) else {
+                return self.invalid_position();
+            };
+            let Some(ext_end) = ext_start.checked_add(ext.data_len) else {
+                return self.invalid_position();
+            };
+            if ext.data_start.checked_add(ext.data_len).is_none() || self.media_pos < ext_start {
+                return self.invalid_position();
+            }
             if self.media_pos >= ext_end {
                 // Extent boundary: queued fetches belong to the old extent.
                 self.abort_inflight();
                 self.ext_idx += 1;
                 self.seg_idx = 0;
                 self.positioned = false;
+                search = None;
                 continue;
             }
 
@@ -2025,16 +2074,15 @@ impl StreamGen {
                     }
                 }
             }
-            if !self.positioned {
-                self.seg_idx = ((vol_off / ext.part_size.max(1)) as usize)
-                    .min(ext.segments.len().saturating_sub(1));
+            if !self.positioned && search.is_none() {
+                search = Some((0, ext.segments.len()));
+                self.seg_idx = (vol_off / ext.part_size.max(1))
+                    .min(ext.segments.len().saturating_sub(1) as u64) as usize;
             }
             if self.seg_idx >= ext.segments.len() {
-                self.abort_inflight();
-                self.ext_idx += 1;
-                self.seg_idx = 0;
-                self.positioned = false;
-                continue;
+                // An extent may end only at its declared byte boundary. Running
+                // out of articles earlier must not silently truncate a 206 body.
+                return self.invalid_position();
             }
 
             let fetched = if self.positioned {
@@ -2154,33 +2202,49 @@ impl StreamGen {
                     return Some((Err(std::io::Error::other(error.reason())), self));
                 }
             };
-            let seg_end = seg_start + decoded.len() as u64;
-
-            if !self.positioned {
-                if vol_off < seg_start && self.seg_idx > 0 {
-                    self.seg_idx -= 1;
-                    continue;
-                }
-                if vol_off >= seg_end && self.seg_idx + 1 < ext.segments.len() {
-                    self.seg_idx += 1;
-                    continue;
-                }
-                self.positioned = true;
+            let Some(seg_end) = seg_start.checked_add(decoded.len() as u64) else {
+                return self.invalid_position();
+            };
+            if decoded.is_empty() {
+                return self.invalid_position();
             }
 
-            let from = vol_off.saturating_sub(seg_start) as usize;
-            if from >= decoded.len() {
+            if !self.positioned {
+                let (lo, hi) = search.as_mut().expect("positioning search initialized");
+                if vol_off < seg_start {
+                    *hi = self.seg_idx;
+                } else if vol_off >= seg_end {
+                    *lo = self.seg_idx + 1;
+                } else {
+                    self.positioned = true;
+                }
+                if !self.positioned {
+                    if *lo >= *hi {
+                        // No article covers the requested offset: fail rather
+                        // than oscillate across a hole or emit neighboring data.
+                        return self.invalid_position();
+                    }
+                    self.seg_idx = *lo + (*hi - *lo) / 2;
+                    continue;
+                }
+            } else if vol_off < seg_start {
+                return self.invalid_position();
+            } else if vol_off >= seg_end {
+                // A duplicate/overlapping part can already be fully consumed.
+                // Advancing is finite and preserves the queued segment order.
                 self.seg_idx += 1;
                 continue;
             }
+
+            // Only emit after proving that the requested byte is in this part.
+            let from = (vol_off - seg_start) as usize;
             // Cap the chunk at: end of segment, end of this extent, and the range end.
             let seg_avail = (seg_end - vol_off)
                 .min(ext_end - self.media_pos)
                 .min(self.end - self.media_pos);
             let take = (seg_avail as usize).min(decoded.len() - from);
             if take == 0 {
-                self.seg_idx += 1;
-                continue;
+                return self.invalid_position();
             }
             if let Some(budget) = &self.probe_budget {
                 if budget
@@ -2884,3 +2948,11 @@ mod beta_tests {
         let _ = std::fs::remove_dir_all(path);
     }
 }
+
+#[cfg(test)]
+#[path = "stream_error_tests.rs"]
+mod stream_error_tests;
+
+#[cfg(test)]
+#[path = "stream_position_tests.rs"]
+mod stream_position_tests;
