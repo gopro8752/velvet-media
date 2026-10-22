@@ -6,6 +6,7 @@
 use crate::{
     nzb::Nzb,
     pool::{DecodedFetch, FetchBudget, Pool},
+    recovery_metrics::{Recorder, RecoveryEvent},
     yenc::DecodedSegment,
 };
 use serde::{Deserialize, Serialize};
@@ -108,6 +109,61 @@ pub enum RepairError {
     #[error("recovery file I/O failed")]
     Io,
 }
+impl RepairError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::UnknownSource => "unknown_source",
+            Self::NoParity => "no_parity",
+            Self::FileBudget => "file_budget",
+            Self::CacheBudget => "cache_budget",
+            Self::DownloadBudget => "download_budget",
+            Self::ParityBudget => "parity_budget",
+            Self::LowDisk => "low_disk",
+            Self::Timeout => "deadline",
+            Self::Cancelled => "cancelled",
+            Self::InvalidMetadata => "invalid_metadata",
+            Self::UnsupportedPacket => "unsupported_packet",
+            Self::AmbiguousRange => "ambiguous_range",
+            Self::Unprotected => "unprotected",
+            Self::InsufficientParity => "insufficient_parity",
+            Self::Verification => "verification",
+            Self::Executable => "executable",
+            Self::Io => "io",
+        }
+    }
+    fn outcome(&self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "deadline",
+            Self::FileBudget
+            | Self::CacheBudget
+            | Self::DownloadBudget
+            | Self::ParityBudget
+            | Self::LowDisk => "quota",
+            _ => "failed",
+        }
+    }
+}
+/// Exact uncovered intervals in a fully described protected file. Overlapping
+/// successful article coverage is merged before counting missing bytes.
+fn missing_ranges(size: u64, mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    ranges.sort_unstable();
+    let mut cursor = 0;
+    let mut missing = Vec::new();
+    for (start, end) in ranges {
+        let start = start.min(size);
+        let end = end.min(size);
+        if start > cursor {
+            missing.push((cursor, start));
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < size {
+        missing.push((cursor, size));
+    }
+    missing
+}
 impl From<std::io::Error> for RepairError {
     fn from(_: std::io::Error) -> Self {
         Self::Io
@@ -133,13 +189,18 @@ struct Inner {
     reserved: Arc<AtomicU64>,
     _cache_lock: Option<std::fs::File>,
     cache_error: Option<RepairError>,
+    recorder: std::sync::RwLock<Option<Recorder>>,
 }
 struct Entry {
+    sid: String,
+    job_id: String,
+    provider_rescues: Mutex<HashMap<usize, BTreeMap<u64, (u64, String)>>>,
     nzb: Arc<Nzb>,
     index: HashMap<String, (usize, usize)>,
     dir: PathBuf,
     state: Mutex<EntryState>,
     started: AtomicBool,
+    inputs_frozen: AtomicBool,
     cancelled: AtomicBool,
     cancel: Notify,
     done: Notify,
@@ -167,6 +228,7 @@ struct Ready {
     files: HashMap<usize, ReadyFile>,
 }
 struct ReadyFile {
+    recovered_ranges: Vec<(u64, u64)>,
     path: PathBuf,
     name: String,
     size: u64,
@@ -198,7 +260,16 @@ impl RepairRegistry {
                 reserved: Arc::new(AtomicU64::new(0)),
                 _cache_lock: cache_lock,
                 cache_error,
+                recorder: std::sync::RwLock::new(None),
             }),
+        }
+    }
+    pub fn set_recorder(&self, recorder: Recorder) {
+        *self.inner.recorder.write().unwrap() = Some(recorder);
+    }
+    fn record(&self, event: RecoveryEvent) {
+        if let Some(r) = self.inner.recorder.read().unwrap().as_ref() {
+            r.record(event);
         }
     }
     pub async fn register(&self, sid: &str, nzb: Arc<Nzb>) -> Result<(), RepairError> {
@@ -259,6 +330,9 @@ impl RepairRegistry {
         entries.insert(
             sid.to_owned(),
             Arc::new(Entry {
+                sid: sid.into(),
+                job_id: token,
+                provider_rescues: Mutex::new(HashMap::new()),
                 nzb,
                 index,
                 dir,
@@ -268,6 +342,7 @@ impl RepairRegistry {
                     result: None,
                 }),
                 started: AtomicBool::new(false),
+                inputs_frozen: AtomicBool::new(false),
                 cancelled: AtomicBool::new(false),
                 cancel: Notify::new(),
                 done: Notify::new(),
@@ -312,19 +387,52 @@ impl RepairRegistry {
         read_article(&entry, id).await.ok()
     }
     pub async fn recover(&self, sid: &str, id: &str) -> Result<DecodedSegment, RepairError> {
-        self.recover_file(sid, id).await?;
+        self.recover_context(sid, id, "unknown", None).await
+    }
+    pub async fn recover_context(
+        &self,
+        sid: &str,
+        id: &str,
+        trigger: &'static str,
+        session: Option<&str>,
+    ) -> Result<DecodedSegment, RepairError> {
+        self.recover_file_context(sid, id, trigger, session).await?;
         let entry = self.entry(sid).await?;
         read_article(&entry, id).await
     }
     pub async fn recover_file(&self, sid: &str, id: &str) -> Result<(), RepairError> {
+        self.recover_file_context(sid, id, "unknown", None).await
+    }
+    pub async fn recover_file_context(
+        &self,
+        sid: &str,
+        id: &str,
+        trigger: &'static str,
+        session: Option<&str>,
+    ) -> Result<(), RepairError> {
         let entry = self.entry(sid).await?;
         if !entry.index.contains_key(id) {
             return Err(RepairError::UnknownSource);
         }
+        if let Some(session) = session.filter(|s| crate::recovery_metrics::valid_session(s)) {
+            let mut event = RecoveryEvent::new(
+                "repair_job_watch",
+                sid,
+                &format!("{}:{session}", entry.job_id),
+                trigger,
+            );
+            event.job_id = Some(entry.job_id.clone());
+            event.playback_session_id = Some(session.into());
+            self.record(event);
+        }
         if !entry.started.swap(true, Ordering::AcqRel) {
+            let mut event = RecoveryEvent::new("repair_job_started", sid, &entry.job_id, trigger);
+            event.job_id = Some(entry.job_id.clone());
+            self.record(event);
             let inner = self.inner.clone();
             let job = entry.clone();
             tokio::spawn(async move {
+                let started = Instant::now();
                 let deadline = Duration::from_secs(inner.cfg.max_job_seconds.max(1));
                 let work = async {
                     let _slot = inner
@@ -341,6 +449,31 @@ impl RepairRegistry {
                 if result.is_err() {
                     let _ = fs::remove_dir_all(job.dir.join("staging")).await;
                     let _ = fs::remove_dir_all(job.dir.join("verified-next")).await;
+                }
+                let mut event = RecoveryEvent::new("repair_job", &job.sid, &job.job_id, trigger);
+                event.job_id = Some(job.job_id.clone());
+                event.duration_ms =
+                    Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+                event.charged_download_bytes = Some(job.download_budget.used());
+                match &result {
+                    Ok(ready) => {
+                        event.outcome = Some("success".into());
+                        event.recovered_bytes = Some(
+                            ready
+                                .files
+                                .values()
+                                .flat_map(|f| &f.recovered_ranges)
+                                .map(|(a, b)| b - a)
+                                .sum(),
+                        );
+                    }
+                    Err(error) => {
+                        event.outcome = Some(error.outcome().into());
+                        event.reason = Some(error.code().into());
+                    }
+                }
+                if let Some(recorder) = inner.recorder.read().unwrap().as_ref() {
+                    recorder.record(event);
                 }
                 let mut state = job.state.lock().await;
                 state.phase = if result.is_ok() { "ready" } else { "failed" };
@@ -410,6 +543,91 @@ impl RepairRegistry {
         fs::symlink_metadata(&file.path)
             .await
             .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() == file.size)
+    }
+    /// A successful fallback provider supplied the *same* checksummed article.
+    pub async fn provider_rescue(
+        &self,
+        sid: &str,
+        id: &str,
+        segment: &DecodedSegment,
+        trigger: &str,
+        duration_ms: u64,
+    ) {
+        let Ok(entry) = self.entry(sid).await else {
+            return;
+        };
+        let Some(&(fi, _)) = entry.index.get(id) else {
+            return;
+        };
+        let begin = segment.part_begin.unwrap_or(1).saturating_sub(1);
+        entry
+            .provider_rescues
+            .lock()
+            .await
+            .entry(fi)
+            .or_default()
+            .insert(
+                begin,
+                (begin.saturating_add(segment.data.len() as u64), id.into()),
+            );
+        let mut event = RecoveryEvent::new("provider_rescue", sid, &format!("{sid}:{id}"), trigger);
+        event.outcome = Some("success".into());
+        event.duration_ms = Some(duration_ms);
+        event.recovered_bytes = Some(segment.data.len() as u64);
+        self.record(event);
+    }
+    /// Count benefit only when reconstructed bytes are yielded to an identified
+    /// viewer's HTTP response. Probes, cache warming and health reads never call
+    /// this. A seek or multiple HTTP ranges cannot multiply a watch/job benefit.
+    pub async fn served(&self, sid: &str, id: &str, offset: u64, len: usize, session: &str) {
+        if !crate::recovery_metrics::valid_session(session) {
+            return;
+        }
+        let Ok(entry) = self.entry(sid).await else {
+            return;
+        };
+        let Some(&(fi, _)) = entry.index.get(id) else {
+            return;
+        };
+        let end = offset.saturating_add(len as u64);
+        let state = entry.state.lock().await;
+        if let Some(Ok(ready)) = &state.result {
+            if ready.files.get(&fi).is_some_and(|file| {
+                file.recovered_ranges
+                    .get(file.recovered_ranges.partition_point(|&(_, b)| b <= offset))
+                    .is_some_and(|&(a, _)| a < end)
+            }) {
+                let mut event = RecoveryEvent::new(
+                    "repaired_read",
+                    sid,
+                    &format!("{}:{session}", entry.job_id),
+                    "foreground",
+                );
+                event.job_id = Some(entry.job_id.clone());
+                event.playback_session_id = Some(session.into());
+                event.outcome = Some("delivered".into());
+                self.record(event);
+            }
+        }
+        drop(state);
+        let rescues = entry.provider_rescues.lock().await;
+        if let Some(ranges) = rescues.get(&fi) {
+            for (_, (_, article)) in ranges
+                .range(..end)
+                .rev()
+                .take_while(|(_, (b, _))| *b > offset)
+            {
+                let mut event = RecoveryEvent::new(
+                    "provider_rescue_read",
+                    sid,
+                    &format!("{sid}:{article}:{session}"),
+                    "foreground",
+                );
+                event.playback_session_id = Some(session.into());
+                event.outcome = Some("delivered".into());
+                self.record(event);
+            }
+        }
     }
     pub async fn status(&self, sid: &str) -> Option<RepairStatus> {
         let e = self.entry(sid).await.ok()?;
@@ -543,6 +761,12 @@ async fn remember(
         return Err(RepairError::InvalidMetadata);
     }
     let mut state = e.state.lock().await;
+    // Once staging starts, inputs form an immutable snapshot. A concurrent
+    // foreground article still enters the memory cache, but must not race the
+    // bounded copy or change which byte intervals the PAR2 job reconstructs.
+    if e.inputs_frozen.load(Ordering::Acquire) {
+        return Ok(());
+    }
     if let Some(file) = state.files.get(&fi) {
         if file.name != name || file.size != size {
             return Err(RepairError::InvalidMetadata);
@@ -709,15 +933,47 @@ async fn fetch(
     let article = &file.segments[si];
     let group = file.groups.first().map(String::as_str).unwrap_or("");
     let _background = inner.pool.background_permit().await;
+    let started = Instant::now();
     match tokio::time::timeout(
         Duration::from_secs(inner.cfg.max_article_seconds.max(1)),
         inner
             .pool
-            .fetch_decoded_budgeted(group, &article.message_id, &e.download_budget),
+            .fetch_decoded_budgeted_observed(group, &article.message_id, &e.download_budget),
     )
     .await
     {
-        Ok(Ok(DecodedFetch::Found(seg))) => Ok(Some(seg)),
+        Ok(Ok((DecodedFetch::Found(seg), rescued))) => {
+            if rescued {
+                let begin = seg.part_begin.unwrap_or(1).saturating_sub(1);
+                e.provider_rescues
+                    .lock()
+                    .await
+                    .entry(fi)
+                    .or_default()
+                    .insert(
+                        begin,
+                        (
+                            begin.saturating_add(seg.data.len() as u64),
+                            article.message_id.clone(),
+                        ),
+                    );
+                let mut event = RecoveryEvent::new(
+                    "provider_rescue",
+                    &e.sid,
+                    &format!("{}:{}", e.sid, article.message_id),
+                    "supporting",
+                );
+                event.outcome = Some("success".into());
+                event.duration_ms =
+                    Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+                event.recovered_bytes = Some(seg.data.len() as u64);
+                event.job_id = Some(e.job_id.clone());
+                if let Some(recorder) = inner.recorder.read().unwrap().as_ref() {
+                    recorder.record(event);
+                }
+            }
+            Ok(Some(seg))
+        }
         Ok(Err(_)) => Err(RepairError::DownloadBudget),
         _ => Ok(None),
     }
@@ -1137,6 +1393,26 @@ async fn run_repair(inner: &Arc<Inner>, e: &Arc<Entry>) -> Result<Ready, RepairE
     if mapping.is_empty() {
         return Err(RepairError::Unprotected);
     }
+    let recovered_ranges = {
+        let state = e.state.lock().await;
+        e.inputs_frozen.store(true, Ordering::Release);
+        mapping
+            .iter()
+            .map(|(&fi, d)| {
+                let ranges = state
+                    .files
+                    .get(&fi)
+                    .map(|f| {
+                        f.articles
+                            .values()
+                            .map(|r| (r.begin, r.begin + r.len))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (fi, missing_ranges(d.size, ranges))
+            })
+            .collect::<HashMap<_, _>>()
+    };
     // Large disk copies must not hold the cache mutex: foreground playback
     // can keep reading its verified buffer while staging the repair input.
     for (from, to) in copies {
@@ -1227,6 +1503,7 @@ async fn run_repair(inner: &Arc<Inner>, e: &Arc<Entry>) -> Result<Ready, RepairE
                 (
                     fi,
                     ReadyFile {
+                        recovered_ranges: recovered_ranges.get(&fi).cloned().unwrap_or_default(),
                         path: e.dir.join("verified").join(&d.name),
                         name: d.name,
                         size: d.size,
@@ -1437,6 +1714,86 @@ mod tests {
             .unwrap();
         assert_eq!(full, f.original);
         assert_eq!(reg.status("test").await.unwrap().phase, "ready");
+    }
+    #[test]
+    fn missing_byte_intervals_merge_overlapping_coverage_and_never_count_full_file() {
+        assert_eq!(
+            missing_ranges(100, vec![(50, 90), (0, 20), (10, 40)]),
+            vec![(40, 50), (90, 100)]
+        );
+        assert_eq!(missing_ranges(100, vec![]), vec![(0, 100)]);
+        assert!(missing_ranges(100, vec![(0, 150)]).is_empty());
+    }
+    #[tokio::test]
+    async fn recovery_metrics_count_one_job_and_only_actual_repaired_byte_delivery_per_watch() {
+        let Some(f) = fixture() else {
+            return;
+        };
+        let db = crate::db::open(":memory:").unwrap();
+        let reg = RepairRegistry::new(config(&f.root), Pool::new(&[]));
+        reg.set_recorder(Recorder::new(db.clone()).unwrap());
+        let missing = "episode.mkv-4@fixture.invalid";
+        remember_except(&reg, &f, &[missing], None).await;
+        let (a, b) = tokio::join!(
+            reg.recover_context("test", missing, "ahead", Some("watch-a")),
+            reg.recover_context("test", missing, "foreground", Some("watch-b"))
+        );
+        a.unwrap();
+        b.unwrap();
+        let expected = &f.segments.iter().find(|(id, _)| id == missing).unwrap().1;
+        for _ in 0..20 {
+            reg.status("test").await;
+            reg.served("test", missing, 0, 1, "watch-a").await;
+        }
+        for _ in 0..20 {
+            reg.served(
+                "test",
+                missing,
+                expected.part_begin.unwrap() - 1,
+                expected.data.len(),
+                "watch-a",
+            )
+            .await;
+        }
+        reg.served(
+            "test",
+            missing,
+            expected.part_begin.unwrap() - 1,
+            1,
+            "watch-b",
+        )
+        .await;
+        for _ in 0..100 {
+            let n: i64 = db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM recovery_events WHERE kind='repaired_read'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            if n == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let conn = db.lock().unwrap();
+        let count = |kind: &str| {
+            conn.query_row(
+                "SELECT count(*) FROM recovery_events WHERE kind=?1",
+                [kind],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(count("repair_job_started"), 1);
+        assert_eq!(count("repair_job"), 1);
+        assert_eq!(count("repair_job_watch"), 2);
+        assert_eq!(count("repaired_read"), 2);
+        let bytes:i64 = conn.query_row("SELECT json_extract(payload,'$.recoveredBytes') FROM recovery_events WHERE kind='repair_job'",[],|r|r.get(0)).unwrap();
+        assert_eq!(bytes as usize, expected.data.len());
+        assert_eq!(count("stream_read_failed"), 0);
     }
     #[tokio::test]
     async fn consecutive_holes_require_exact_file_range_not_guessed_article_size() {

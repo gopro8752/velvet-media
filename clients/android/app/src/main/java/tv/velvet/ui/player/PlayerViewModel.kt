@@ -48,6 +48,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tv.velvet.VelvetApp
 import tv.velvet.BuildConfig
+import tv.velvet.data.telemetry.PlaybackSessionInterceptor
+import tv.velvet.data.telemetry.SourceSwitchReason
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import tv.velvet.data.local.DEFAULT_PROFILE_ID
 import tv.velvet.data.local.WatchProgressEntity
 import tv.velvet.data.local.WatchedEpisodeEntity
@@ -267,7 +270,6 @@ class PlayerViewModel(
     private var preparedFallback: StreamOption? = null
     private var recoveryPrepareRequested = false
     private var recoveryRevision = 0L
-    private val recoverySessionId = java.util.UUID.randomUUID().toString()
 
     /**
      * Ordered fallback list for THIS media: ranked streams with release-group continuity
@@ -333,6 +335,9 @@ class PlayerViewModel(
     private val playbackHttpClient = container.okHttpClient.newBuilder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)
+        .apply {
+            if (BuildConfig.RECOVERY_BETA) addNetworkInterceptor(PlaybackSessionInterceptor { settings.syncUrl })
+        }
         .build()
     private val httpDataSourceFactory = OkHttpDataSource.Factory(playbackHttpClient)
     private val loadErrorHandlingPolicy = DefaultLoadErrorHandlingPolicy(0)
@@ -390,6 +395,14 @@ class PlayerViewModel(
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _state.update { it.copy(isPlaying = isPlaying) }
             telemetry.observe()
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (BuildConfig.RECOVERY_BETA) telemetry.observe()
+        }
+
+        override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+            if (BuildConfig.RECOVERY_BETA) telemetry.observe()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -754,7 +767,7 @@ class PlayerViewModel(
         )
     }
 
-    private fun play(stream: StreamOption) {
+    private fun play(stream: StreamOption, reason: SourceSwitchReason = SourceSwitchReason.AUTOMATIC) {
         if (handoffAborted || (handoffFinished && !handoffAccepted)) return
         val lease = handoffLease
         if (lease != null && !handoffFinished) {
@@ -767,23 +780,33 @@ class PlayerViewModel(
                         abortHandoff("Send to TV is no longer active.")
                     } else {
                         if (status.state == "started") acceptHandoff()
-                        prepareStream(stream)
+                        prepareStream(stream, reason)
                     }
                 } catch (cancelled: CancellationException) { throw cancelled
                 } catch (_: Exception) { abortHandoff("Couldn't confirm Send to TV. Please try again.") }
             }
-        } else prepareStream(stream)
+        } else prepareStream(stream, reason)
     }
 
-    private fun prepareStream(stream: StreamOption) {
-        if (currentStream != null && currentStream?.url != stream.url) telemetry.sourceSwitch()
+    private fun prepareStream(stream: StreamOption, reason: SourceSwitchReason) {
         if (handoffAccepted && isBlocked(stream)) return
         if (handoffAborted || (handoffFinished && !handoffAccepted)) return
+        if (BuildConfig.RECOVERY_BETA) telemetry.sourcePrepared(stream.url, reason)
+        else if (currentStream != null && currentStream?.url != stream.url) telemetry.sourceSwitch()
         currentStream = stream
         failoverWatchdog.reset(android.os.SystemClock.elapsedRealtime())
         stream.bingeGroup?.let { lastBingeGroup = it }
         if (target.type == MediaType.SHOW && handoffAccepted) reportPlayAndWatchForIntro(stream)
-        httpDataSourceFactory.setDefaultRequestProperties(stream.headers)
+        val mediaHeaders = if (BuildConfig.RECOVERY_BETA) {
+            val headers = stream.headers.filterKeys { !it.equals(PlaybackSessionInterceptor.HEADER, true) }.toMutableMap()
+            val url = stream.url.toHttpUrlOrNull()
+            val watchId = telemetry.sessionId
+            if (watchId != null && url != null && PlaybackSessionInterceptor.allowsAttribution(settings.syncUrl, url)) {
+                headers[PlaybackSessionInterceptor.HEADER] = watchId
+            }
+            headers
+        } else stream.headers
+        httpDataSourceFactory.setDefaultRequestProperties(mediaHeaders)
         val explicitStart = pendingSeek?.takeIf { !it.guardNearEnd }
         if (explicitStart != null) {
             // Begin loading at the transferred position, without briefly playing from zero.
@@ -870,7 +893,9 @@ class PlayerViewModel(
      * the candidates are exhausted (or [MAX_AUTO_RETRIES] auto-swaps have been spent).
      */
     private fun handlePlayerError(error: PlaybackException) {
-        telemetry.error()
+        if (!BuildConfig.RECOVERY_BETA || !(swapping || queueAdvancing || queueDetached || queueClosed || hostStopped)) {
+            telemetry.error()
+        }
         if (handoffLease != null && !handoffFinished) {
             Log.w("Handoff", "The phone's exact stream failed on TV (${error.errorCodeName})")
             abortHandoff("The phone's stream couldn't play on this TV. Playback can continue on your phone.")
@@ -927,6 +952,9 @@ class PlayerViewModel(
         if (!handoffAccepted) return
         recoveryJob?.cancel()
         requestRecoveryPreparation()
+        // Capture this watch before launching: a late stop from the old episode
+        // must never cancel or attribute bytes to the next episode's session.
+        val recoverySessionId = telemetry.sessionId
         recoveryJob = viewModelScope.launch {
             var lastPrepareAt = 0L
             var prepareJob: Job? = null
@@ -950,7 +978,7 @@ class PlayerViewModel(
                         requestedFraction = fraction.coerceIn(0.0, 0.999)
                         prepareJob = launch { container.streamRecoveryApi.prepare(stream, fraction) }
                     }
-                    if (BuildConfig.RECOVERY_BETA) {
+                    if (BuildConfig.RECOVERY_BETA && recoverySessionId != null) {
                         val sample = RecoveryPlaybackPosition(
                             positionMs = position.coerceAtLeast(0),
                             // Only measured player duration belongs in the server's timing map.
@@ -963,7 +991,7 @@ class PlayerViewModel(
                         lastPlayback = sample
                         container.streamRecoveryApi.playback(stream, sample)
                     }
-                    val health = container.streamRecoveryApi.health(stream, recoverySessionId.takeIf { BuildConfig.RECOVERY_BETA })
+                    val health = container.streamRecoveryApi.health(stream, recoverySessionId?.takeIf { BuildConfig.RECOVERY_BETA })
                     if (currentStream?.url != stream.url) break
                     // A seek while the request was in flight invalidates the old warm point.
                     if (revision != recoveryRevision) continue
@@ -999,13 +1027,13 @@ class PlayerViewModel(
     }
 
     /** Swap to [next] at the last known position, showing the brief non-blocking pill. */
-    private fun failoverTo(next: StreamOption) {
+    private fun failoverTo(next: StreamOption, reason: SourceSwitchReason = SourceSwitchReason.AUTOMATIC) {
         val shouldPlay = player.playWhenReady
         val resumeAt = player.currentPosition.takeIf { it > 1_000 } ?: lastKnownPositionMs
         if (resumeAt > 1_000) pendingSeek = PendingSeek(resumeAt, guardNearEnd = false)
         endedHandled = false
         _state.update { it.copy(switchingSource = true, errorMessage = null) }
-        play(next)
+        play(next, reason)
         player.playWhenReady = shouldPlay
     }
 
@@ -1038,7 +1066,9 @@ class PlayerViewModel(
         val wasEnded = player.playbackState == Player.STATE_ENDED
         val dur = player.duration.takeIf { it > 0 }
         val clamped = positionMs.coerceIn(0L, dur ?: Long.MAX_VALUE)
+        if (BuildConfig.RECOVERY_BETA) telemetry.seek(clamped)
         player.seekTo(clamped)
+        if (BuildConfig.RECOVERY_BETA) telemetry.seekDispatched()
         resetStallDeadline()
         requestRecoveryPreparation()
         // Seeking out of the ended/credits zone resumes playback (playWhenReady is true):
@@ -1127,7 +1157,7 @@ class PlayerViewModel(
         val pos = player.currentPosition.takeIf { it > 0 } ?: lastKnownPositionMs
         if (pos > 1_000) pendingSeek = PendingSeek(pos, guardNearEnd = false)
         endedHandled = false
-        play(option)
+        play(option, SourceSwitchReason.MANUAL)
     }
 
     private fun isBlocked(stream: StreamOption) = target.type == MediaType.SHOW && stream.isReleaseGroupBlocked(blockedGroups)
@@ -1165,7 +1195,7 @@ class PlayerViewModel(
                 _state.update { it.copy(groupActionError = null) }
                 if (currentStream?.let(::isBlocked) == true) {
                     val next = candidates.firstOrNull { it.url !in blacklistedUrls && !isBlocked(it) }
-                    if (next != null) failoverTo(next)
+                    if (next != null) failoverTo(next, SourceSwitchReason.MANUAL)
                     else { saveProgressNow(); player.stop(); showError("This release is blocked for this show. Choose another stream or reset blocked releases in Playback options.", true) }
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -1311,7 +1341,8 @@ class PlayerViewModel(
         if (identity == telemetryIdentity) return
         telemetryIdentity = identity
         telemetry.start(if (target.type == MediaType.SHOW) "tv" else "movie", target.mediaId.toString(),
-            details?.item?.title ?: _state.value.showTitle, curSeason, curEpisode, activeProfileId) {
+            details?.item?.title ?: _state.value.showTitle, curSeason, curEpisode, activeProfileId,
+            trackRecovery = BuildConfig.RECOVERY_BETA) {
             val status = when {
                 hostStopped -> "paused"
                 player.playerError != null || _state.value.phase == PlayerPhase.ERROR -> "error"
@@ -1320,7 +1351,10 @@ class PlayerViewModel(
                 player.playbackState == Player.STATE_BUFFERING || _state.value.phase == PlayerPhase.LOADING || currentStream == null -> "buffering"
                 else -> "paused"
             }
-            tv.velvet.data.telemetry.PlaybackTelemetry.Sample(status, player.currentPosition)
+            tv.velvet.data.telemetry.PlaybackTelemetry.Sample(status, player.currentPosition,
+                sourceId = player.currentMediaItem?.localConfiguration?.uri?.toString(),
+                rebufferEligible = player.playWhenReady && !hostStopped && !swapping && !queueAdvancing &&
+                    !queueDetached && !queueClosed && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE)
         }
     }
 

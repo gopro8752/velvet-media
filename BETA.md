@@ -75,6 +75,21 @@ During playback, open **Playback options** for recovery diagnostics. No recovery
 
 This beta's position reporting and testing client are Android TV. iOS and Roku source is retained in this branch, but no separate beta distribution or new client-side recovery UI is supplied for those platforms.
 
+## Measure recovery in the admin dashboard
+
+Use the updated beta backend and Android beta app together, then open **Recovery** at `/admin#recovery`. The beta backend can serve its own report with its own admin key. To bring that report into your existing Velvet dashboard, set `VELVET_RECOVERY_REPORT_URL` to the beta backend’s bare origin and `VELVET_RECOVERY_REPORT_TOKEN` to its admin key on the **dashboard-hosting backend only**. Both are private server configuration; neither belongs in an app, image, repository, or browser URL. A placeholder example is:
+
+```dotenv
+VELVET_RECOVERY_REPORT_URL=https://beta-backend.example
+VELVET_RECOVERY_REPORT_TOKEN=REPLACE_WITH_BETA_ADMIN_KEY
+```
+
+The dashboard server needs a build with the report proxy, network access to the beta backend, and those variables passed into its container environment. Restart it after configuration. Keep the proxy variables unset on the beta backend so it reports its own local database. See [the backend setup instructions](backend/README.md#recovery-reporting-for-velvet-beta) for the admin-key command and deployment details. Existing stable capacity/playback reports remain separate.
+
+Recovery reporting shows provider article rescues, PAR2 outcomes and failure reasons, repair download overhead, prepared-only jobs, and watches that received repaired bytes. It counts **successful replacement starts** separately from manual/automatic source-switch attempts. Switches per watch includes every measured movie or episode watch with positive playing time, including those with no switches; sessions that never start are still available in session details and the CSV. Startup and post-start buffering show the observed viewing experience.
+
+Successful jobs labeled **Started by look-ahead** or **Started by playback request** describe what initiated the repair. They do not establish whether repair finished before the playhead, nor that a stall was prevented. Repaired-byte delivery is observed on the server, not proof of decoded frames. Collection is prospective: prior repair history cannot be reconstructed. Missing or unreachable reporting stays unavailable, and dropped-event warnings identify incomplete collection. Recovery events are retained for up to 90 days or 250,000 records.
+
 ## Validation and reproducible tests
 
 ```sh

@@ -25,19 +25,44 @@ use crate::nntp::{ArticleBody, NntpConn};
 /// Shared byte budget for a repair job, including every provider retry. A BODY
 /// reserves its maximum possible wire payload first. Complete reads refund the
 /// unused reservation; interrupted attempts retain it conservatively.
-pub struct FetchBudget { limit: u64, remaining: std::sync::atomic::AtomicU64 }
+pub struct FetchBudget {
+    limit: u64,
+    remaining: std::sync::atomic::AtomicU64,
+}
 #[derive(Debug)]
 pub struct FetchBudgetExceeded;
 impl FetchBudget {
-    pub fn new(limit: u64) -> Self { Self { limit, remaining: std::sync::atomic::AtomicU64::new(limit) } }
-    pub fn used(&self) -> u64 { self.limit.saturating_sub(self.remaining.load(std::sync::atomic::Ordering::Relaxed)) }
+    pub fn new(limit: u64) -> Self {
+        Self {
+            limit,
+            remaining: std::sync::atomic::AtomicU64::new(limit),
+        }
+    }
+    pub fn used(&self) -> u64 {
+        self.limit
+            .saturating_sub(self.remaining.load(std::sync::atomic::Ordering::Relaxed))
+    }
     fn reserve(&self) -> Result<usize, FetchBudgetExceeded> {
-        self.remaining.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |left| {
-            if left == 0 { None } else { Some(left.saturating_sub(crate::nntp::MAX_ARTICLE_BYTES as u64)) }
-        }).map(|left| left.min(crate::nntp::MAX_ARTICLE_BYTES as u64) as usize).map_err(|_| FetchBudgetExceeded)
+        self.remaining
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |left| {
+                    if left == 0 {
+                        None
+                    } else {
+                        Some(left.saturating_sub(crate::nntp::MAX_ARTICLE_BYTES as u64))
+                    }
+                },
+            )
+            .map(|left| left.min(crate::nntp::MAX_ARTICLE_BYTES as u64) as usize)
+            .map_err(|_| FetchBudgetExceeded)
     }
     fn finish(&self, reserved: usize, used: usize) {
-        self.remaining.fetch_add(reserved.saturating_sub(used) as u64, std::sync::atomic::Ordering::Relaxed);
+        self.remaining.fetch_add(
+            reserved.saturating_sub(used) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 
@@ -101,12 +126,32 @@ impl ProviderMetrics {
 
     fn add(&mut self, other: &Self) {
         macro_rules! sum { ($($field:ident),+ $(,)?) => { $(self.$field = self.$field.saturating_add(other.$field);)+ }; }
-        sum!(capacity, open_connections, connected_connections, opening_connections,
-            idle_connections, busy_connections, free_connections, unused_slots,
-            waiters, queue_wait_count, queue_wait_completed, queue_wait_cancelled,
-            queue_wait_micros, connection_attempts, connection_errors,
-            articles_found, articles_missing, article_errors, bytes_downloaded,
-            fallback_attempts, fallback_successes, stat_found, stat_missing, stat_errors);
+        sum!(
+            capacity,
+            open_connections,
+            connected_connections,
+            opening_connections,
+            idle_connections,
+            busy_connections,
+            free_connections,
+            unused_slots,
+            waiters,
+            queue_wait_count,
+            queue_wait_completed,
+            queue_wait_cancelled,
+            queue_wait_micros,
+            connection_attempts,
+            connection_errors,
+            articles_found,
+            articles_missing,
+            article_errors,
+            bytes_downloaded,
+            fallback_attempts,
+            fallback_successes,
+            stat_found,
+            stat_missing,
+            stat_errors
+        );
     }
 }
 
@@ -116,7 +161,10 @@ struct Metrics(StdMutex<ProviderMetrics>);
 
 impl Metrics {
     fn new(capacity: usize) -> Arc<Self> {
-        let mut value = ProviderMetrics { capacity: capacity as u64, ..Default::default() };
+        let mut value = ProviderMetrics {
+            capacity: capacity as u64,
+            ..Default::default()
+        };
         value.refresh_capacity();
         Arc::new(Self(StdMutex::new(value)))
     }
@@ -133,7 +181,11 @@ impl Metrics {
 }
 
 #[derive(Clone, Copy)]
-enum SlotState { Opening, Busy, Idle }
+enum SlotState {
+    Opening,
+    Busy,
+    Idle,
+}
 
 /// Follows the socket through connect, checkout, handback, errors and task
 /// cancellation. Dropping an in-flight request therefore cannot leak a gauge.
@@ -150,7 +202,10 @@ impl SlotMetrics {
             m.busy_connections += 1;
             m.connection_attempts += 1;
         });
-        Self { metrics: metrics.clone(), state: SlotState::Opening }
+        Self {
+            metrics: metrics.clone(),
+            state: SlotState::Opening,
+        }
     }
 
     fn connected(&mut self) {
@@ -164,13 +219,19 @@ impl SlotMetrics {
 
     fn checkout(&mut self) {
         debug_assert!(matches!(self.state, SlotState::Idle));
-        self.metrics.update(|m| { m.idle_connections -= 1; m.busy_connections += 1; });
+        self.metrics.update(|m| {
+            m.idle_connections -= 1;
+            m.busy_connections += 1;
+        });
         self.state = SlotState::Busy;
     }
 
     fn checkin(&mut self) {
         debug_assert!(matches!(self.state, SlotState::Busy));
-        self.metrics.update(|m| { m.busy_connections -= 1; m.idle_connections += 1; });
+        self.metrics.update(|m| {
+            m.busy_connections -= 1;
+            m.idle_connections += 1;
+        });
         self.state = SlotState::Idle;
     }
 }
@@ -180,9 +241,18 @@ impl Drop for SlotMetrics {
         self.metrics.update(|m| {
             m.open_connections -= 1;
             match self.state {
-                SlotState::Opening => { m.opening_connections -= 1; m.busy_connections -= 1; }
-                SlotState::Busy => { m.connected_connections -= 1; m.busy_connections -= 1; }
-                SlotState::Idle => { m.connected_connections -= 1; m.idle_connections -= 1; }
+                SlotState::Opening => {
+                    m.opening_connections -= 1;
+                    m.busy_connections -= 1;
+                }
+                SlotState::Busy => {
+                    m.connected_connections -= 1;
+                    m.busy_connections -= 1;
+                }
+                SlotState::Idle => {
+                    m.connected_connections -= 1;
+                    m.idle_connections -= 1;
+                }
             }
         });
     }
@@ -197,12 +267,20 @@ struct QueueWait {
 }
 
 impl QueueWait {
-    fn new(metrics: &Arc<Metrics>) -> Self { Self { metrics: metrics.clone(), started: None } }
+    fn new(metrics: &Arc<Metrics>) -> Self {
+        Self {
+            metrics: metrics.clone(),
+            started: None,
+        }
+    }
 
     fn pending(&mut self) {
         if self.started.is_none() {
             self.started = Some(Instant::now());
-            self.metrics.update(|m| { m.waiters += 1; m.queue_wait_count += 1; });
+            self.metrics.update(|m| {
+                m.waiters += 1;
+                m.queue_wait_count += 1;
+            });
         }
     }
 
@@ -212,14 +290,20 @@ impl QueueWait {
             self.metrics.update(|m| {
                 m.waiters -= 1;
                 m.queue_wait_micros = m.queue_wait_micros.saturating_add(micros);
-                if cancelled { m.queue_wait_cancelled += 1; } else { m.queue_wait_completed += 1; }
+                if cancelled {
+                    m.queue_wait_cancelled += 1;
+                } else {
+                    m.queue_wait_completed += 1;
+                }
             });
         }
     }
 }
 
 impl Drop for QueueWait {
-    fn drop(&mut self) { self.finish(true); }
+    fn drop(&mut self) {
+        self.finish(true);
+    }
 }
 
 /// A live connection carrying its provider-slot permit; dropping it frees the slot.
@@ -241,15 +325,26 @@ impl ProviderPool {
     fn new(provider: Provider) -> Self {
         let sem = Arc::new(Semaphore::new(provider.max_connections.max(1)));
         let metrics = Metrics::new(provider.max_connections.max(1));
-        ProviderPool { provider, sem, idle: Mutex::new(Vec::new()), available: Notify::new(), metrics }
+        ProviderPool {
+            provider,
+            sem,
+            idle: Mutex::new(Vec::new()),
+            available: Notify::new(),
+            metrics,
+        }
     }
 
     fn metrics_identity(&self) -> u64 {
         // Stable FNV-1a identifier over public provider metadata only. Unlike a
         // process-random hasher, it remains usable in persisted history.
         let mut hash = 0xcbf29ce484222325u64;
-        let identity = format!("{}\0{}\0{}\0{}", self.provider.name,
-            self.provider.host.to_ascii_lowercase(), self.provider.port, self.provider.tls);
+        let identity = format!(
+            "{}\0{}\0{}\0{}",
+            self.provider.name,
+            self.provider.host.to_ascii_lowercase(),
+            self.provider.port,
+            self.provider.tls
+        );
         for byte in identity.bytes() {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
@@ -276,7 +371,9 @@ impl ProviderPool {
             tokio::pin!(acquire);
             let acquire = futures::future::poll_fn(|cx| {
                 let result = acquire.as_mut().poll(cx);
-                if result.is_pending() { wait.pending(); }
+                if result.is_pending() {
+                    wait.pending();
+                }
                 result
             });
             tokio::select! {
@@ -323,7 +420,13 @@ impl ProviderPool {
             };
             match conn.inner.stat(message_id).await {
                 Ok(present) => {
-                    self.metrics.update(|m| if present { m.stat_found += 1; } else { m.stat_missing += 1; });
+                    self.metrics.update(|m| {
+                        if present {
+                            m.stat_found += 1;
+                        } else {
+                            m.stat_missing += 1;
+                        }
+                    });
                     self.checkin(conn).await;
                     return Some(present);
                 }
@@ -339,10 +442,17 @@ impl ProviderPool {
     /// Try to fetch one segment from THIS provider. Reconnects once on an I/O
     /// error (a stale pooled socket), then gives up (caller tries next provider).
     async fn fetch(&self, group: &str, message_id: &str) -> ProviderOutcome {
-        self.fetch_budgeted(group, message_id, None).await.unwrap_or(ProviderOutcome::ProviderDown)
+        self.fetch_budgeted(group, message_id, None)
+            .await
+            .unwrap_or(ProviderOutcome::ProviderDown)
     }
 
-    async fn fetch_budgeted(&self, group: &str, message_id: &str, budget: Option<&FetchBudget>) -> Result<ProviderOutcome, FetchBudgetExceeded> {
+    async fn fetch_budgeted(
+        &self,
+        group: &str,
+        message_id: &str,
+        budget: Option<&FetchBudget>,
+    ) -> Result<ProviderOutcome, FetchBudgetExceeded> {
         for attempt in 0..2 {
             let mut conn = match self.checkout().await {
                 Ok(c) => c,
@@ -352,18 +462,29 @@ impl ProviderPool {
                 if let Err(_) = conn.inner.group(group).await {
                     self.metrics.update(|m| m.article_errors += 1);
                     // Broken socket — drop it (frees the slot) and retry fresh once.
-                    if attempt == 0 { continue; }
+                    if attempt == 0 {
+                        continue;
+                    }
                     return Ok(ProviderOutcome::ProviderDown);
                 }
             }
-            let reserved = match budget { Some(budget) => budget.reserve()?, None => crate::nntp::MAX_ARTICLE_BYTES };
+            let reserved = match budget {
+                Some(budget) => budget.reserve()?,
+                None => crate::nntp::MAX_ARTICLE_BYTES,
+            };
             // Bound the entire article, not just each line: a trickling peer
             // cannot keep a foreground request alive indefinitely.
-            let body = tokio::time::timeout(std::time::Duration::from_secs(20), conn.inner.body_with_limit(message_id, reserved))
-                .await.unwrap_or(Err(crate::nntp::NntpError::Timeout));
+            let body = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                conn.inner.body_with_limit(message_id, reserved),
+            )
+            .await
+            .unwrap_or(Err(crate::nntp::NntpError::Timeout));
             match body {
                 Ok(ArticleBody::Found(raw)) => {
-                    if let Some(budget) = budget { budget.finish(reserved, conn.inner.body_wire_bytes()); }
+                    if let Some(budget) = budget {
+                        budget.finish(reserved, conn.inner.body_wire_bytes());
+                    }
                     self.metrics.update(|m| {
                         m.articles_found += 1;
                         m.bytes_downloaded = m.bytes_downloaded.saturating_add(raw.len() as u64);
@@ -372,7 +493,9 @@ impl ProviderPool {
                     return Ok(ProviderOutcome::Found(raw));
                 }
                 Ok(ArticleBody::Missing) => {
-                    if let Some(budget) = budget { budget.finish(reserved, 0); }
+                    if let Some(budget) = budget {
+                        budget.finish(reserved, 0);
+                    }
                     self.metrics.update(|m| m.articles_missing += 1);
                     self.checkin(conn).await;
                     return Ok(ProviderOutcome::Missing);
@@ -380,7 +503,9 @@ impl ProviderPool {
                 Err(_) => {
                     self.metrics.update(|m| m.article_errors += 1);
                     // Drop the broken conn; retry once with a fresh one.
-                    if attempt == 0 { continue; }
+                    if attempt == 0 {
+                        continue;
+                    }
                     return Ok(ProviderOutcome::ProviderDown);
                 }
             }
@@ -430,7 +555,9 @@ pub enum DecodedFetch {
 }
 
 impl Pool {
-    pub fn new(providers: &[Provider]) -> Arc<Pool> { Self::new_verified(providers, false) }
+    pub fn new(providers: &[Provider]) -> Arc<Pool> {
+        Self::new_verified(providers, false)
+    }
 
     pub fn new_verified(providers: &[Provider], strict: bool) -> Arc<Pool> {
         Arc::new(Pool {
@@ -442,28 +569,43 @@ impl Pool {
     }
 
     pub fn total_capacity(&self) -> usize {
-        self.providers.iter().map(|p| p.provider.max_connections.max(1)).sum()
+        self.providers
+            .iter()
+            .map(|p| p.provider.max_connections.max(1))
+            .sum()
     }
 
     /// Safe to sample during traffic. Provider gauges are individually atomic;
     /// the aggregate is their sum, sampled without holding a lock across I/O.
     pub async fn metrics_snapshot(&self) -> PoolMetricsSnapshot {
         let mut total = ProviderMetrics::default();
-        let providers = self.providers.iter().enumerate().map(|(index, pp)| {
-            let metrics = pp.metrics.snapshot();
-            total.add(&metrics);
-            let identity = pp.metrics_identity();
-            let duplicate = self.providers[..index].iter().filter(|prior| prior.metrics_identity() == identity).count();
-            ProviderMetricsSnapshot {
-                id: format!("provider-{identity:016x}-{duplicate}"),
-                name: pp.provider.name.clone(),
-                host: pp.provider.host.clone(),
-                port: pp.provider.port,
-                tls: pp.provider.tls,
-                metrics,
-            }
-        }).collect();
-        PoolMetricsSnapshot { uptime_seconds: self.started.elapsed().as_secs_f64(), total, providers }
+        let providers = self
+            .providers
+            .iter()
+            .enumerate()
+            .map(|(index, pp)| {
+                let metrics = pp.metrics.snapshot();
+                total.add(&metrics);
+                let identity = pp.metrics_identity();
+                let duplicate = self.providers[..index]
+                    .iter()
+                    .filter(|prior| prior.metrics_identity() == identity)
+                    .count();
+                ProviderMetricsSnapshot {
+                    id: format!("provider-{identity:016x}-{duplicate}"),
+                    name: pp.provider.name.clone(),
+                    host: pp.provider.host.clone(),
+                    port: pp.provider.port,
+                    tls: pp.provider.tls,
+                    metrics,
+                }
+            })
+            .collect();
+        PoolMetricsSnapshot {
+            uptime_seconds: self.started.elapsed().as_secs_f64(),
+            total,
+            providers,
+        }
     }
 
     /// Fetch a segment, trying every provider before declaring it missing.
@@ -477,51 +619,106 @@ impl Pool {
     pub async fn fetch_checked(&self, group: &str, message_id: &str) -> CheckedFetch {
         let mut all_missing = !self.providers.is_empty();
         for (index, pp) in self.providers.iter().enumerate() {
-            if index > 0 { pp.metrics.update(|m| m.fallback_attempts += 1); }
+            if index > 0 {
+                pp.metrics.update(|m| m.fallback_attempts += 1);
+            }
             match pp.fetch(group, message_id).await {
                 ProviderOutcome::Found(raw) => {
                     if self.strict && crate::yenc::decode_verified(&raw).is_err() {
                         pp.metrics.update(|m| m.article_errors += 1);
                         continue;
                     }
-                    if index > 0 { pp.metrics.update(|m| m.fallback_successes += 1); }
+                    if index > 0 {
+                        pp.metrics.update(|m| m.fallback_successes += 1);
+                    }
                     return CheckedFetch::Found(raw);
                 }
                 ProviderOutcome::Missing => { /* try next provider */ }
-                ProviderOutcome::ProviderDown => { all_missing = false; }
+                ProviderOutcome::ProviderDown => {
+                    all_missing = false;
+                }
             }
         }
-        if all_missing { CheckedFetch::Missing } else { CheckedFetch::Unavailable }
+        if all_missing {
+            CheckedFetch::Missing
+        } else {
+            CheckedFetch::Unavailable
+        }
     }
 
     pub async fn fetch_decoded(&self, group: &str, message_id: &str) -> DecodedFetch {
-        self.fetch_decoded_inner(group, message_id, None).await.unwrap_or(DecodedFetch::Unavailable)
+        self.fetch_decoded_observed(group, message_id).await.0
     }
 
-    pub async fn fetch_decoded_budgeted(&self, group: &str, message_id: &str, budget: &FetchBudget) -> Result<DecodedFetch, FetchBudgetExceeded> {
-        self.fetch_decoded_inner(group, message_id, Some(budget)).await
+    /// Whether another provider rescued this exact validated article. Kept per
+    /// request rather than inferred by subtracting shared concurrent counters.
+    pub async fn fetch_decoded_observed(
+        &self,
+        group: &str,
+        message_id: &str,
+    ) -> (DecodedFetch, bool) {
+        self.fetch_decoded_inner(group, message_id, None)
+            .await
+            .unwrap_or((DecodedFetch::Unavailable, false))
     }
 
-    async fn fetch_decoded_inner(&self, group: &str, message_id: &str, budget: Option<&FetchBudget>) -> Result<DecodedFetch, FetchBudgetExceeded> {
+    pub async fn fetch_decoded_budgeted(
+        &self,
+        group: &str,
+        message_id: &str,
+        budget: &FetchBudget,
+    ) -> Result<DecodedFetch, FetchBudgetExceeded> {
+        self.fetch_decoded_budgeted_observed(group, message_id, budget)
+            .await
+            .map(|r| r.0)
+    }
+
+    pub async fn fetch_decoded_budgeted_observed(
+        &self,
+        group: &str,
+        message_id: &str,
+        budget: &FetchBudget,
+    ) -> Result<(DecodedFetch, bool), FetchBudgetExceeded> {
+        self.fetch_decoded_inner(group, message_id, Some(budget))
+            .await
+    }
+
+    async fn fetch_decoded_inner(
+        &self,
+        group: &str,
+        message_id: &str,
+        budget: Option<&FetchBudget>,
+    ) -> Result<(DecodedFetch, bool), FetchBudgetExceeded> {
         let mut unavailable = self.providers.is_empty();
         let mut corrupt = false;
         for (index, pp) in self.providers.iter().enumerate() {
-            if index > 0 { pp.metrics.update(|m| m.fallback_attempts += 1); }
+            if index > 0 {
+                pp.metrics.update(|m| m.fallback_attempts += 1);
+            }
             match pp.fetch_budgeted(group, message_id, budget).await? {
                 ProviderOutcome::Found(raw) => match crate::yenc::decode_verified(&raw) {
                     Ok(decoded) => {
-                        if index > 0 { pp.metrics.update(|m| m.fallback_successes += 1); }
-                        return Ok(DecodedFetch::Found(decoded));
+                        if index > 0 {
+                            pp.metrics.update(|m| m.fallback_successes += 1);
+                        }
+                        return Ok((DecodedFetch::Found(decoded), index > 0));
                     }
-                    Err(_) => { corrupt = true; pp.metrics.update(|m| m.article_errors += 1); }
+                    Err(_) => {
+                        corrupt = true;
+                        pp.metrics.update(|m| m.article_errors += 1);
+                    }
                 },
-                ProviderOutcome::Missing => {},
+                ProviderOutcome::Missing => {}
                 ProviderOutcome::ProviderDown => unavailable = true,
             }
         }
-        if unavailable { Ok(DecodedFetch::Unavailable) }
-        else if corrupt { Ok(DecodedFetch::Corrupt) }
-        else { Ok(DecodedFetch::Missing) }
+        if unavailable {
+            Ok((DecodedFetch::Unavailable, false))
+        } else if corrupt {
+            Ok((DecodedFetch::Corrupt, false))
+        } else {
+            Ok((DecodedFetch::Missing, false))
+        }
     }
 
     pub async fn background_permit(&self) -> tokio::sync::SemaphorePermit<'_> {
@@ -536,11 +733,15 @@ impl Pool {
         for pp in &self.providers {
             match pp.stat(message_id).await {
                 Some(true) => return Some(true),
-                Some(false) => {},
+                Some(false) => {}
                 None => all_missing = false,
             }
         }
-        if all_missing { Some(false) } else { None }
+        if all_missing {
+            Some(false)
+        } else {
+            None
+        }
     }
 
     /// STAT every segment to verify the whole file is present before playback.
@@ -572,7 +773,6 @@ impl Pool {
     }
 }
 
-
 /// Result of a completeness check.
 pub struct Completeness {
     pub total: usize,
@@ -591,15 +791,19 @@ impl Completeness {
         self.total > 0 && self.present == self.total
     }
     pub fn fraction(&self) -> f64 {
-        if self.total == 0 { 0.0 } else { self.present as f64 / self.total as f64 }
+        if self.total == 0 {
+            0.0
+        } else {
+            self.present as f64 / self.total as f64
+        }
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     /// Real local NNTP sockets exercise pooling/handback and protocol status
     /// handling without contacting configured providers or reading credentials.
@@ -613,7 +817,9 @@ pub(crate) mod tests {
                     socket.get_mut().write_all(b"200 test\r\n").await.unwrap();
                     loop {
                         let mut line = String::new();
-                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 { break; }
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 {
+                            break;
+                        }
                         let response = if line.starts_with("AUTHINFO") {
                             "281 accepted\r\n".to_string()
                         } else if line.starts_with("GROUP") {
@@ -621,16 +827,33 @@ pub(crate) mod tests {
                         } else if line.starts_with("BODY") && code == 223 {
                             // An article can pass STAT but contain invalid yEnc.
                             "222 body\r\ninvalid media\r\n.\r\n".to_string()
-                        } else { format!("{code} fixture\r\n") };
-                        if socket.get_mut().write_all(response.as_bytes()).await.is_err() { break; }
+                        } else {
+                            format!("{code} fixture\r\n")
+                        };
+                        if socket
+                            .get_mut()
+                            .write_all(response.as_bytes())
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 });
             }
         });
-        (Provider {
-            name: "fixture".into(), host: "127.0.0.1".into(), port, tls: false,
-            username: "fixture".into(), password: "fixture".into(), max_connections: 1,
-        }, server)
+        (
+            Provider {
+                name: "fixture".into(),
+                host: "127.0.0.1".into(),
+                port,
+                tls: false,
+                username: "fixture".into(),
+                password: "fixture".into(),
+                max_connections: 1,
+            },
+            server,
+        )
     }
 
     #[tokio::test]
@@ -640,11 +863,20 @@ pub(crate) mod tests {
         let connection = pool.checkout().await.unwrap();
         let waiting_pool = pool.clone();
         let mut waiter = tokio::spawn(async move { waiting_pool.checkout().await });
-        assert!(tokio::time::timeout(Duration::from_millis(20), &mut waiter).await.is_err());
+        assert!(tokio::time::timeout(Duration::from_millis(20), &mut waiter)
+            .await
+            .is_err());
         pool.checkin(connection).await;
-        let reused = tokio::time::timeout(Duration::from_secs(1), waiter).await
-            .expect("idle handback must wake the blocked checkout").unwrap().unwrap();
-        assert_eq!(pool.sem.available_permits(), 0, "the socket still owns its permit");
+        let reused = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("idle handback must wake the blocked checkout")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pool.sem.available_permits(),
+            0,
+            "the socket still owns its permit"
+        );
         pool.checkin(reused).await;
         server.abort();
     }
@@ -654,13 +886,18 @@ pub(crate) mod tests {
         let (first, server) = fake_provider(223).await;
         let mut second = first.clone();
         second.name = "backup".into();
-        let before = Pool::new(&[first.clone(), second.clone(), first.clone()]).metrics_snapshot().await;
+        let before = Pool::new(&[first.clone(), second.clone(), first.clone()])
+            .metrics_snapshot()
+            .await;
         let mut larger = first;
         larger.max_connections = 50;
         let after = Pool::new(&[second, larger]).metrics_snapshot().await;
         assert_eq!(before.providers[0].id, after.providers[1].id);
         assert_eq!(before.providers[1].id, after.providers[0].id);
-        assert_ne!(before.providers[0].id, before.providers[2].id, "duplicate endpoints still need distinct sample keys");
+        assert_ne!(
+            before.providers[0].id, before.providers[2].id,
+            "duplicate endpoints still need distinct sample keys"
+        );
         server.abort();
     }
 
@@ -671,18 +908,61 @@ pub(crate) mod tests {
         let pp = &pool.providers[0];
         let conn = pp.checkout().await.unwrap();
         let busy = pool.metrics_snapshot().await.total;
-        assert_eq!((busy.capacity, busy.open_connections, busy.connected_connections), (1, 1, 1));
-        assert_eq!((busy.busy_connections, busy.idle_connections, busy.free_connections, busy.unused_slots), (1, 0, 0, 0));
-        assert_eq!(busy.queue_wait_count, 0, "an immediately acquired slot did not queue");
+        assert_eq!(
+            (
+                busy.capacity,
+                busy.open_connections,
+                busy.connected_connections
+            ),
+            (1, 1, 1)
+        );
+        assert_eq!(
+            (
+                busy.busy_connections,
+                busy.idle_connections,
+                busy.free_connections,
+                busy.unused_slots
+            ),
+            (1, 0, 0, 0)
+        );
+        assert_eq!(
+            busy.queue_wait_count, 0,
+            "an immediately acquired slot did not queue"
+        );
         pp.checkin(conn).await;
         let idle = pool.metrics_snapshot().await.total;
-        assert_eq!((idle.busy_connections, idle.idle_connections, idle.free_connections, idle.unused_slots), (0, 1, 1, 0));
-        assert_eq!(pp.sem.available_permits(), 0, "retained sockets still consume open permits");
+        assert_eq!(
+            (
+                idle.busy_connections,
+                idle.idle_connections,
+                idle.free_connections,
+                idle.unused_slots
+            ),
+            (0, 1, 1, 0)
+        );
+        assert_eq!(
+            pp.sem.available_permits(),
+            0,
+            "retained sockets still consume open permits"
+        );
         let conn = pp.checkout().await.unwrap();
-        assert_eq!(pool.metrics_snapshot().await.total.connection_attempts, 1, "reuse must not count as a new connection");
+        assert_eq!(
+            pool.metrics_snapshot().await.total.connection_attempts,
+            1,
+            "reuse must not count as a new connection"
+        );
         drop(conn);
         let dropped = pool.metrics_snapshot().await.total;
-        assert_eq!((dropped.open_connections, dropped.connected_connections, dropped.busy_connections, dropped.free_connections, dropped.unused_slots), (0, 0, 0, 1, 1));
+        assert_eq!(
+            (
+                dropped.open_connections,
+                dropped.connected_connections,
+                dropped.busy_connections,
+                dropped.free_connections,
+                dropped.unused_slots
+            ),
+            (0, 0, 0, 1, 1)
+        );
         server.abort();
     }
 
@@ -694,22 +974,53 @@ pub(crate) mod tests {
         let other = pool.clone();
         let waiter = tokio::spawn(async move { other.providers[0].checkout().await });
         tokio::time::timeout(Duration::from_secs(1), async {
-            while pool.metrics_snapshot().await.total.waiters != 1 { tokio::task::yield_now().await; }
-        }).await.unwrap();
+            while pool.metrics_snapshot().await.total.waiters != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         waiter.abort();
         let _ = waiter.await;
         let cancelled = pool.metrics_snapshot().await.total;
-        assert_eq!((cancelled.waiters, cancelled.queue_wait_count, cancelled.queue_wait_cancelled, cancelled.queue_wait_completed), (0, 1, 1, 0));
-        assert_eq!(cancelled.busy_connections, 1, "cancelling a waiter cannot release someone else's socket");
+        assert_eq!(
+            (
+                cancelled.waiters,
+                cancelled.queue_wait_count,
+                cancelled.queue_wait_cancelled,
+                cancelled.queue_wait_completed
+            ),
+            (0, 1, 1, 0)
+        );
+        assert_eq!(
+            cancelled.busy_connections, 1,
+            "cancelling a waiter cannot release someone else's socket"
+        );
         let other = pool.clone();
         let waiter = tokio::spawn(async move { other.providers[0].checkout().await });
         tokio::time::timeout(Duration::from_secs(1), async {
-            while pool.metrics_snapshot().await.total.waiters != 1 { tokio::task::yield_now().await; }
-        }).await.unwrap();
+            while pool.metrics_snapshot().await.total.waiters != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         pool.providers[0].checkin(conn).await;
-        let reused = tokio::time::timeout(Duration::from_secs(1), waiter).await.unwrap().unwrap().unwrap();
+        let reused = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let completed = pool.metrics_snapshot().await.total;
-        assert_eq!((completed.waiters, completed.queue_wait_count, completed.queue_wait_cancelled, completed.queue_wait_completed), (0, 2, 1, 1));
+        assert_eq!(
+            (
+                completed.waiters,
+                completed.queue_wait_count,
+                completed.queue_wait_cancelled,
+                completed.queue_wait_completed
+            ),
+            (0, 2, 1, 1)
+        );
         drop(reused);
         assert_eq!(pool.metrics_snapshot().await.total.free_connections, 1);
         server.abort();
@@ -726,12 +1037,32 @@ pub(crate) mod tests {
         let checkout = tokio::spawn(async move { other.providers[0].checkout().await });
         let (_socket, _) = listener.accept().await.unwrap(); // Hold greeting, keeping NNTP setup pending.
         let opening = pool.metrics_snapshot().await.total;
-        assert_eq!((opening.open_connections, opening.opening_connections, opening.connected_connections, opening.busy_connections), (1, 1, 0, 1));
+        assert_eq!(
+            (
+                opening.open_connections,
+                opening.opening_connections,
+                opening.connected_connections,
+                opening.busy_connections
+            ),
+            (1, 1, 0, 1)
+        );
         checkout.abort();
         let _ = checkout.await;
         let cancelled = pool.metrics_snapshot().await.total;
-        assert_eq!((cancelled.open_connections, cancelled.opening_connections, cancelled.busy_connections, cancelled.free_connections), (0, 0, 0, 1));
-        assert_eq!((cancelled.connection_attempts, cancelled.connection_errors), (1, 0), "caller cancellation is not a provider failure");
+        assert_eq!(
+            (
+                cancelled.open_connections,
+                cancelled.opening_connections,
+                cancelled.busy_connections,
+                cancelled.free_connections
+            ),
+            (0, 0, 0, 1)
+        );
+        assert_eq!(
+            (cancelled.connection_attempts, cancelled.connection_errors),
+            (1, 0),
+            "caller cancellation is not a provider failure"
+        );
     }
 
     #[tokio::test]
@@ -747,9 +1078,23 @@ pub(crate) mod tests {
         let pool = Pool::new(&[provider]);
         assert!(pool.providers[0].checkout().await.is_err());
         let failed = pool.metrics_snapshot().await.total;
-        assert_eq!((failed.connection_attempts, failed.connection_errors), (1, 1));
-        assert_eq!((failed.open_connections, failed.opening_connections, failed.busy_connections, failed.free_connections), (0, 0, 0, 1));
-        assert_eq!(failed.articles_missing, 0, "an unavailable server is not a missing article");
+        assert_eq!(
+            (failed.connection_attempts, failed.connection_errors),
+            (1, 1)
+        );
+        assert_eq!(
+            (
+                failed.open_connections,
+                failed.opening_connections,
+                failed.busy_connections,
+                failed.free_connections
+            ),
+            (0, 0, 0, 1)
+        );
+        assert_eq!(
+            failed.articles_missing, 0,
+            "an unavailable server is not a missing article"
+        );
         server.await.unwrap();
     }
 
@@ -764,10 +1109,35 @@ pub(crate) mod tests {
         };
         assert_eq!(pool.present_anywhere("segment").await, Some(true));
         let snapshot = pool.metrics_snapshot().await;
-        assert_eq!((snapshot.total.articles_missing, snapshot.total.articles_found, snapshot.total.bytes_downloaded), (1, 1, raw.len() as u64));
-        assert_eq!((snapshot.total.stat_missing, snapshot.total.stat_found), (1, 1));
-        assert_eq!((snapshot.providers[0].metrics.fallback_attempts, snapshot.providers[1].metrics.fallback_attempts, snapshot.providers[1].metrics.fallback_successes), (0, 1, 1));
-        assert_eq!((snapshot.total.capacity, snapshot.total.busy_connections, snapshot.total.idle_connections, snapshot.total.free_connections), (2, 0, 2, 2));
+        assert_eq!(
+            (
+                snapshot.total.articles_missing,
+                snapshot.total.articles_found,
+                snapshot.total.bytes_downloaded
+            ),
+            (1, 1, raw.len() as u64)
+        );
+        assert_eq!(
+            (snapshot.total.stat_missing, snapshot.total.stat_found),
+            (1, 1)
+        );
+        assert_eq!(
+            (
+                snapshot.providers[0].metrics.fallback_attempts,
+                snapshot.providers[1].metrics.fallback_attempts,
+                snapshot.providers[1].metrics.fallback_successes
+            ),
+            (0, 1, 1)
+        );
+        assert_eq!(
+            (
+                snapshot.total.capacity,
+                snapshot.total.busy_connections,
+                snapshot.total.idle_connections,
+                snapshot.total.free_connections
+            ),
+            (2, 0, 2, 2)
+        );
         let serialized = serde_json::to_string(&snapshot).unwrap();
         assert!(!serialized.contains("password") && !serialized.contains("username"));
         missing_server.abort();
@@ -778,11 +1148,29 @@ pub(crate) mod tests {
     async fn provider_protocol_failures_count_retries_without_leaking_connections() {
         let (provider, server) = fake_provider(451).await;
         let pool = Pool::new(&[provider]);
-        assert!(matches!(pool.fetch_checked("", "segment").await, CheckedFetch::Unavailable));
+        assert!(matches!(
+            pool.fetch_checked("", "segment").await,
+            CheckedFetch::Unavailable
+        ));
         assert_eq!(pool.present_anywhere("segment").await, None);
         let failed = pool.metrics_snapshot().await.total;
-        assert_eq!((failed.article_errors, failed.stat_errors, failed.connection_attempts), (2, 2, 4));
-        assert_eq!((failed.articles_missing, failed.open_connections, failed.busy_connections, failed.free_connections), (0, 0, 0, 1));
+        assert_eq!(
+            (
+                failed.article_errors,
+                failed.stat_errors,
+                failed.connection_attempts
+            ),
+            (2, 2, 4)
+        );
+        assert_eq!(
+            (
+                failed.articles_missing,
+                failed.open_connections,
+                failed.busy_connections,
+                failed.free_connections
+            ),
+            (0, 0, 0, 1)
+        );
         server.abort();
     }
 
@@ -793,13 +1181,19 @@ pub(crate) mod tests {
         let (present, present_server) = fake_provider(223).await;
         let mixed = Pool::new(&[missing.clone(), temporary.clone()]);
         assert_eq!(mixed.present_anywhere("segment").await, None);
-        assert!(matches!(mixed.fetch_checked("", "segment").await, CheckedFetch::Unavailable));
+        assert!(matches!(
+            mixed.fetch_checked("", "segment").await,
+            CheckedFetch::Unavailable
+        ));
         let health = mixed.completeness(&["segment".into()]).await;
         assert_eq!(health.missing, 0);
         assert!(!health.is_complete());
         let absent = Pool::new(&[missing]);
         assert_eq!(absent.present_anywhere("segment").await, Some(false));
-        assert!(matches!(absent.fetch_checked("", "segment").await, CheckedFetch::Missing));
+        assert!(matches!(
+            absent.fetch_checked("", "segment").await,
+            CheckedFetch::Missing
+        ));
         let available = Pool::new(&[temporary, present]);
         assert_eq!(available.present_anywhere("segment").await, Some(true));
         missing_server.abort();
@@ -816,17 +1210,28 @@ pub(crate) mod verified_fixtures {
     pub(crate) fn article(data: &[u8], begin: u64, total: u64, number: usize) -> Vec<u8> {
         let mut body = format!("=ybegin part={number} line=128 size={total} name=fixture.mp4\r\n=ypart begin={begin} end={}\r\n", begin + data.len() as u64 - 1).into_bytes();
         body.extend(crate::yenc::encode_data(data, 128));
-        body.extend(format!("=yend size={} part={number} pcrc32={:08x}\r\n", data.len(), crate::yenc::crc32(data)).as_bytes());
+        body.extend(
+            format!(
+                "=yend size={} part={number} pcrc32={:08x}\r\n",
+                data.len(),
+                crate::yenc::crc32(data)
+            )
+            .as_bytes(),
+        );
         // NNTP dot-stuffing is independent of yEnc escaping.
         let mut stuffed = Vec::new();
         for line in body.split_inclusive(|b| *b == b'\n') {
-            if line.starts_with(b".") { stuffed.push(b'.'); }
+            if line.starts_with(b".") {
+                stuffed.push(b'.');
+            }
             stuffed.extend(line);
         }
         stuffed
     }
 
-    pub(crate) async fn provider(bodies: std::collections::HashMap<String, Vec<u8>>) -> (Provider, tokio::task::JoinHandle<()>) {
+    pub(crate) async fn provider(
+        bodies: std::collections::HashMap<String, Vec<u8>>,
+    ) -> (Provider, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let bodies = Arc::new(bodies);
@@ -835,38 +1240,84 @@ pub(crate) mod verified_fixtures {
                 let bodies = bodies.clone();
                 tokio::spawn(async move {
                     let mut socket = BufReader::new(socket);
-                    if socket.get_mut().write_all(b"200 fixture\r\n").await.is_err() { return; }
+                    if socket
+                        .get_mut()
+                        .write_all(b"200 fixture\r\n")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
                     loop {
                         let mut line = String::new();
-                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 { break; }
-                        let id = line.trim().split(' ').nth(1).unwrap_or("").trim_matches(['<', '>']);
-                        let response = if line.starts_with("AUTHINFO") { b"281 accepted\r\n".to_vec() }
-                        else if line.starts_with("GROUP") { b"211 test\r\n".to_vec() }
-                        else if let Some(body) = bodies.get(id) {
-                            if line.starts_with("BODY") { [b"222 body\r\n".as_slice(), body, b".\r\n"].concat() }
-                            else { b"223 present\r\n".to_vec() }
-                        } else { b"430 missing\r\n".to_vec() };
-                        if socket.get_mut().write_all(&response).await.is_err() { break; }
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 {
+                            break;
+                        }
+                        let id = line
+                            .trim()
+                            .split(' ')
+                            .nth(1)
+                            .unwrap_or("")
+                            .trim_matches(['<', '>']);
+                        let response = if line.starts_with("AUTHINFO") {
+                            b"281 accepted\r\n".to_vec()
+                        } else if line.starts_with("GROUP") {
+                            b"211 test\r\n".to_vec()
+                        } else if let Some(body) = bodies.get(id) {
+                            if line.starts_with("BODY") {
+                                [b"222 body\r\n".as_slice(), body, b".\r\n"].concat()
+                            } else {
+                                b"223 present\r\n".to_vec()
+                            }
+                        } else {
+                            b"430 missing\r\n".to_vec()
+                        };
+                        if socket.get_mut().write_all(&response).await.is_err() {
+                            break;
+                        }
                     }
                 });
             }
         });
-        (Provider { name: "fixture".into(), host: "127.0.0.1".into(), port, tls: false, username: "fixture".into(), password: "fixture".into(), max_connections: 8 }, server)
+        (
+            Provider {
+                name: "fixture".into(),
+                host: "127.0.0.1".into(),
+                port,
+                tls: false,
+                username: "fixture".into(),
+                password: "fixture".into(),
+                max_connections: 8,
+            },
+            server,
+        )
     }
 
     #[tokio::test]
     async fn corrupt_primary_retries_secondary_before_returning_verified_original_bytes() {
-        let (primary, pserver) = provider(std::collections::HashMap::from([("part".into(), article(b"damaged", 1, 6, 1))])).await;
-        let (secondary, sserver) = provider(std::collections::HashMap::from([("part".into(), article(b"original", 1, 8, 1))])).await;
+        let (primary, pserver) = provider(std::collections::HashMap::from([(
+            "part".into(),
+            article(b"damaged", 1, 6, 1),
+        )]))
+        .await;
+        let (secondary, sserver) = provider(std::collections::HashMap::from([(
+            "part".into(),
+            article(b"original", 1, 8, 1),
+        )]))
+        .await;
         let pool = Pool::new_verified(&[primary, secondary], true);
         // Primary body is internally consistent CRC but has an end-size/total
         // mismatch. Its successful NNTP reply must never be selected.
-        let decoded = match pool.fetch_decoded("", "part").await { DecodedFetch::Found(d) => d, other => panic!("unexpected {other:?}") };
+        let decoded = match pool.fetch_decoded("", "part").await {
+            DecodedFetch::Found(d) => d,
+            other => panic!("unexpected {other:?}"),
+        };
         assert_eq!(decoded.data, b"original");
         let metrics = pool.metrics_snapshot().await;
         assert_eq!(metrics.providers[1].metrics.fallback_successes, 1);
         assert_eq!(metrics.providers[0].metrics.article_errors, 1);
-        pserver.abort(); sserver.abort();
+        pserver.abort();
+        sserver.abort();
     }
 }
 
@@ -880,15 +1331,32 @@ mod budget_tests {
         bad[crc..crc + 8].copy_from_slice(b"00000000");
         let good = verified_fixtures::article(b"original", 1, 8, 1);
         let expected = bad.len() as u64 + good.len() as u64 + 6; // Both NNTP terminators.
-        let (primary, ps) = verified_fixtures::provider(std::collections::HashMap::from([("part".into(), bad)])).await;
-        let (secondary, ss) = verified_fixtures::provider(std::collections::HashMap::from([("part".into(), good)])).await;
+        let (primary, ps) =
+            verified_fixtures::provider(std::collections::HashMap::from([("part".into(), bad)]))
+                .await;
+        let (secondary, ss) =
+            verified_fixtures::provider(std::collections::HashMap::from([("part".into(), good)]))
+                .await;
         let pool = Pool::new_verified(&[primary, secondary], true);
         let budget = FetchBudget::new(1024 * 1024);
-        assert!(matches!(pool.fetch_decoded_budgeted("", "part", &budget).await.unwrap(), DecodedFetch::Found(_)));
+        assert!(matches!(
+            pool.fetch_decoded_budgeted("", "part", &budget)
+                .await
+                .unwrap(),
+            DecodedFetch::Found(_)
+        ));
         assert_eq!(budget.used(), expected);
         let tiny = FetchBudget::new(20);
-        assert!(pool.fetch_decoded_budgeted("", "part", &tiny).await.is_err());
-        assert_eq!(tiny.used(), 20, "a truncated attempt cannot refund bytes it might have consumed");
-        ps.abort(); ss.abort();
+        assert!(pool
+            .fetch_decoded_budgeted("", "part", &tiny)
+            .await
+            .is_err());
+        assert_eq!(
+            tiny.used(),
+            20,
+            "a truncated attempt cannot refund bytes it might have consumed"
+        );
+        ps.abort();
+        ss.abort();
     }
 }

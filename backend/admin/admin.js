@@ -18,6 +18,7 @@
     capacity:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M13 6.5h4M13 17.5h4"/>',
     playback:'<rect x="3" y="4" width="18" height="16" rx="4"/><path d="m10 8 6 4-6 4Z"/>',
     profiles:'<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 4v2"/>',
+    recovery:'<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z"/><path d="m8 12 3 3 5-6"/>',
     health:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
     clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     calendar:'<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4M17 3v4M3 11h18"/>',
@@ -70,12 +71,13 @@
     return `${Math.floor(delta / 86400000)}d ago`;
   };
   const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
-  const state = {tab:'overview', days:7, report:null, live:null, authenticated:false, reportBusy:false, liveBusy:false, lastSuccess:0, liveSuccess:0, reportError:null, liveError:null, requestId:0, search:{}, sort:{}, filter:{}, expanded:new Set(), profile:null, toastTimer:null};
+  const state = {tab:'overview', days:7, recovery:null, recoveryBusy:false, recoveryError:null, recoveryRequestId:0, report:null, live:null, authenticated:false, reportBusy:false, liveBusy:false, lastSuccess:0, liveSuccess:0, reportError:null, liveError:null, requestId:0, search:{}, sort:{}, filter:{}, expanded:new Set(), profile:null, toastTimer:null};
   const sections = {
     overview:{label:'Overview',eyebrow:'THE BIG PICTURE',title:'Room for everyone.',description:'A clear view of your viewers, streams, and server capacity.'},
     capacity:{label:'Capacity',eyebrow:'KEEP THE GOOD TIMES PLAYING',title:'Know your headroom.',description:'Understand connection demand before adding more server capacity.'},
     playback:{label:'Playback',eyebrow:'WHAT’S KEEPING EVERYONE WATCHING',title:'Every kind of evening.',description:'Movies, shows, live channels, and sports — in one clear picture.'},
     profiles:{label:'People & devices',eyebrow:'YOUR INNER CIRCLE',title:'Everyone has a place.',description:'Understand viewing across profiles, devices, and platforms.'},
+    recovery:{label:'Recovery',eyebrow:'EVERY BYTE COUNTS',title:'Keep the story going.',description:'See what beta recovered, what it could not, and how each watch played out.'},
     health:{label:'Health & quality',eyebrow:'BEHIND THE SCENES',title:'A smoother experience.',description:'Spot playback friction, provider issues, and reporting gaps.'}
   };
   function empty(title, detail, symbol = 'signal', compact = false) {
@@ -152,6 +154,90 @@
     <section class="panel section-space">${panelHeader('Usenet provider health','A missing article can be recovered through a fallback provider')}${providerTable()}</section>
     <div class="two-col"><section class="panel">${panelHeader('Reporting coverage','What these numbers can and cannot tell you')}${coveragePanel()}</section><section class="panel">${panelHeader('Worth a look','The signals that need your attention')}${insights()}</section></div>
     <section class="panel section-space"><div class="panel-pad account-row"><div><h2>Private by design.</h2><p>This dashboard requires your admin access key. Reporting retains up to 90 days of activity.</p></div><button class="button button-secondary" data-logout>Sign out</button></div></section>`;
+  }
+  const recoveryReasons = {
+    file_budget:'Release exceeds repair size limit', cache_budget:'Repair storage limit reached', download_budget:'Repair download limit reached', no_parity:'No repair data in this release', insufficient_parity:'Not enough repair blocks', deadline:'Repair missed its deadline', deadline_exceeded:'Repair missed its deadline', timeout:'Repair timed out', byte_limit:'Repair size limit reached', disk_limit:'Repair storage limit reached', job_limit:'Repair job limit reached', connection_limit:'Connection limit reached', cap_exceeded:'Repair safety limit reached', cancelled:'Playback or repair was cancelled', canceled:'Playback or repair was cancelled', missing_data:'Required data was unavailable', unsupported:'Release cannot be repaired', invalid_parity:'Repair data failed validation', verification_failed:'Repaired bytes failed verification', provider_unavailable:'Providers were unavailable', unknown:'Other / unclassified'
+  };
+  const recoveryReason = reason => recoveryReasons[reason] || String(reason || 'Unknown reason').replace(/_/g,' ');
+  const ratio = (part,total) => finite(part) && finite(total) && total > 0 ? part / total * 100 : null;
+  const isoDate = value => finite(value) && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : '';
+  const exactNumber = value => finite(value) ? new Intl.NumberFormat('en-US',{maximumFractionDigits:2}).format(value) : '—';
+  function recoveryPage() {
+    const r = state.recovery;
+    const scope = `<div class="recovery-scope"><div><span class="badge beta">VELVET BETA</span><p>Recovery events and viewing are measured separately, then linked by watch. Stable playback remains in the other reports.</p></div><div><a class="button button-secondary" href="/admin/api/recovery/export?days=${state.days}">Export sessions ↓</a><span class="recovery-export-note">CSV · latest 5,000 sessions</span></div></div>`;
+    const warning = state.recoveryError ? `<aside class="notice notice-error">${icon('warning')}<div><strong>Beta reporting is temporarily unavailable.</strong> ${escape(state.recoveryError)} ${r ? 'Showing the last successful snapshot.' : 'Existing server reports are still available.'} <button data-recovery-retry>Try again</button></div></aside>` : '';
+    if (!r || r.available === false) return `${scope}${warning}<section class="panel">${empty(state.recoveryBusy ? 'Getting your recovery report ready' : 'Recovery reporting is not available yet',state.recoveryBusy ? 'Checking the beta backend for measured repair and playback events.' : 'The beta backend has not returned compatible recovery telemetry. Earlier watches are not reconstructed.','recovery')}</section>`;
+    const s = r.summary || {};
+    const watched = finite(s.watches) && s.watches > 0;
+    const jobs = finite(s.par2Jobs) && s.par2Jobs > 0;
+    const completed = finite(s.par2Succeeded) && finite(s.par2Failed) ? s.par2Succeeded + s.par2Failed : null;
+    const noActivity = !watched && !jobs && !numeric(s.providerRescuedArticles);
+    const incomplete = numeric(r.coverage?.droppedEvents) > 0 ? `<aside class="notice notice-error">${icon('warning')}<div><strong>Some recovery events were not recorded.</strong> ${count(r.coverage.droppedEvents)} events were dropped since collection began. Repair totals and session timelines can be incomplete.</div></aside>` : '';
+    return `${scope}${warning}${incomplete}${noActivity ? `<aside class="notice">${icon('info')}<div><strong>Ready for the next watch.</strong> Recovery reporting is connected. Results will appear as you watch with a reporting client; a title without damage may need no repairs at all.</div></aside>` : ''}
+      <div class="metric-grid recovery-metrics">
+        ${metric('Watches receiving repaired bytes',count(s.playbacksUsingRepairedBytes),`${count(s.watches)} measured movie or episode watches · delivery is not proof of uninterrupted playback`,'playback',true)}
+        ${metric('PAR2 repairs completed',count(s.par2Succeeded),`${percent(ratio(s.par2Succeeded,completed))} of completed attempts · ${bytes(s.par2RecoveredBytes)} restored`,'check')}
+        ${metric('Repairs unable to complete',count(s.par2Failed),`${count(s.par2Cancelled)} cancelled · ${count(s.par2Pending)} still in progress`,'warning')}
+        ${metric('Source switches / watch',exactNumber(watched ? s.avgSwitchesPerWatch : null),`${count(s.sourceSwitches)} successful switches ÷ ${count(s.watches)} watches, including watches with none`,'refresh')}
+      </div>
+      <div class="dashboard-grid recovery-grid"><section class="panel recovery-path">${panelHeader('What the recovery engine did','Separate measurements for rescue, reconstruction, and delivery')}<div class="recovery-steps">
+        ${recoveryStep('01','Another provider had the article',s.providerRescuedArticles,'articles rescued',`${bytes(s.providerRescuedBytes)} validated from a fallback provider. Rescued articles were delivered to ${count(s.playbacksUsingProviderRescue)} measured watches.`,'provider')}
+        ${recoveryStep('02','PAR2 rebuilt the missing data',s.par2Succeeded,'jobs completed',`${count(s.preparedOnlyJobs)} completed jobs have no observed delivery to a watched session yet. ${bytes(s.repairDownloadBytes)} downloaded for repair jobs.`,'parity')}
+        ${recoveryStep('03','Repaired bytes reached playback',s.playbacksUsingRepairedBytes,'watches received repaired bytes','The server delivered the verified bytes on the player’s active stream. Startup and buffering below show the observed experience.','delivered')}
+      </div><div class="recovery-footnote">${icon('info')}<p>Prepared bytes, delivered bytes, and a smooth viewing experience are different measurements. A successful repair alone does not prove a stall or source switch was avoided.</p></div></section>
+      <section class="panel">${panelHeader('Why a repair could not finish','Recorded failure reasons within this period')}${recoveryFailures(r.reasons,s)}</section></div>
+      <div class="two-col"><section class="panel">${panelHeader('Recovery over time','Completed PAR2 jobs and source switches by UTC day')}${recoveryChart(r.daily)}</section><section class="panel">${panelHeader('The viewing experience','Observed for the selected clients; these are not causal estimates')}${recoveryQuality(s)}</section></div>
+      <section class="panel section-space">${panelHeader('Which titles need help',`Up to ${count(r.coverage?.titleLimit || 50)} movie and episode titles, including watches with no switches`)}${tableToolbar('recovery-titles','Search titles',true,['movie','tv'])}<div id="table-recovery-titles">${recoveryTitlesTable()}</div></section>
+      <section class="panel section-space">${panelHeader('Follow a session',`Latest ${count(r.coverage?.sessionLimit || 200)} sessions, including starts with no viewing. Expand for recovery events and playback measurements.`)}${tableToolbar('recovery-sessions','Search titles, profiles, or devices',true,['movie','tv'])}<div id="table-recovery-sessions">${recoverySessionsTable()}</div></section>
+      <section class="panel section-space">${panelHeader('How to read this report','Useful comparisons start with a clear denominator')}<dl class="definitions recovery-definitions"><div><dt>One watch</dt><dd>A movie or episode session with reported viewing time. Source switches stay inside that watch. Live TV and sports do not enter the per-watch average.</dd></div><div><dt>Switches per watch</dt><dd>Successful replacement starts divided by all measured watches, including zero-switch watches. Attempts that never start are reported separately.</dd></div><div><dt>Repair attempts</dt><dd>Provider article rescues and PAR2 jobs have different units. A single PAR2 job may restore many articles, and prepared data may never be played.</dd></div><div><dt>Reporting coverage</dt><dd>${r.firstEventAt ? `First event ${escape(date(r.firstEventAt,true))} UTC. Last event ${escape(date(r.lastEventAt,true))} UTC.` : 'Waiting for the first recovery event.'} A dash means unavailable, not zero. No earlier repair history is reconstructed.</dd></div></dl></section>`;
+  }
+  function recoveryStep(index,title,value,unit,detail,kind) {
+    return `<div class="recovery-step ${kind}"><span class="recovery-step-number">${index}</span><div><h3>${escape(title)}</h3><p>${escape(detail)}</p></div><div class="recovery-step-value"><strong>${count(value)}</strong><span>${escape(unit)}</span></div></div>`;
+  }
+  function recoveryFailures(rows,s) {
+    const data = array(rows).filter(row => finite(row.count) && row.count > 0).sort((a,b) => b.count-a.count), total = sum(data,'count');
+    if (!data.length) return empty(numeric(s.par2Failed) ? 'Reasons have not been reported' : 'No failed repairs reported',numeric(s.par2Failed) ? 'Failure totals are available, but these events did not include a reason.' : 'A failed repair will appear here with the reason it could not finish. Cancelled work is tracked separately.','check');
+    return `<div class="recovery-reasons">${data.map(row => `<div><div class="recovery-reason-label"><span>${escape(recoveryReason(row.reason))}</span><strong>${count(row.count)}</strong></div><div class="recovery-reason-track"><span style="width:${Math.max(0,Math.min(100,row.count/total*100))}%"></span></div></div>`).join('')}</div><p class="chart-caption">${count(total)} classified outcomes. A limit can stop work safely before repair is attempted.</p>`;
+  }
+  function recoveryQuality(s) {
+    const rows = [
+      ['Automatic source switches',count(s.automaticSwitches),`${count(s.automaticSwitchAttempts)} automatic attempts. Counted as a switch once replacement playback starts.`],
+      ['Manual source switches',count(s.manualSwitches),`${count(s.manualSwitchAttempts)} manual attempts · ${count(s.unclassifiedSwitches)} successful switches were unclassified.`],
+      ['Source switch attempts',count(s.sourceSwitchAttempts),'Includes replacement sources that never began playing.'],
+      ['Watches without a source switch',`${count(s.zeroSwitchWatches)} <small>${percent(ratio(s.zeroSwitchWatches,s.watches))}</small>`,'Zero switches does not necessarily mean zero buffering.'],
+      ['Typical startup',latency(s.startupP50Ms),`${latency(s.startupP95Ms)} at the 95th percentile.`],
+      ['Buffering after startup',latency(s.rebufferedMs),`${count(s.rebufferCount)} interruptions after playback began · ${percent(s.bufferRatioPct)} post-start buffering share.`],
+      ['Typical repair duration',latency(s.repairP50Ms),`${latency(s.repairP95Ms)} p95 · ${count(s.deadlineMisses)} missed repair deadlines.`],
+      ['Started by look-ahead',count(s.aheadCompletedJobs),'Successful jobs initiated by look-ahead. This does not establish when repair finished relative to the playhead.'],
+      ['Started by playback request',count(s.foregroundCompletedJobs),'Successful jobs initiated when playback requested missing bytes.'],
+      ['Viewer reads that failed',count(s.failedViewerReads),'The requested bytes could not be supplied after the recovery attempt.']
+    ];
+    return `<div class="quality-list">${rows.map(([title,value,detail]) => `<div class="quality-row"><div>${escape(title)}<small>${escape(detail)}</small></div><strong>${value}</strong></div>`).join('')}</div>`;
+  }
+  function recoveryChart(data) {
+    const rows = array(data).filter(row => row.date && row.observed !== false), keys = [['par2Succeeded','PAR2 completed','#80d9bf'],['par2Failed','PAR2 unsuccessful','#ebc18b'],['sourceSwitches','Source switches','#b9a0ff']];
+    if (!rows.some(row => keys.some(([key]) => finite(row[key]) && row[key] > 0))) return empty('The pattern will appear here','Days are counted only from received events. Start a beta watch to collect recovery and switching history.','recovery');
+    const width = window.innerWidth <= 700 ? 420 : 660, height=250, left=35, right=14, top=24, bottom=38, plotH=height-top-bottom, plotW=width-left-right;
+    const max=niceMax(Math.max(...rows.flatMap(row => keys.map(([key]) => numeric(row[key]))))), step=plotW/rows.length, barW=Math.min(10,step*.18);
+    const grid=Array.from({length:5},(_,i) => {const value=max*i/4,y=top+plotH-i/4*plotH;return `<line class="gridline" x1="${left}" x2="${width-right}" y1="${y}" y2="${y}"/><text x="${left-9}" y="${y+3}" text-anchor="end">${number(value)}</text>`;}).join('');
+    const bars=rows.map((row,i) => {const x=left+step*(i+.5),detail=`${date(`${row.date}T12:00:00Z`)}. ${keys.map(([key,label]) => `${label}: ${count(row[key])}`).join('. ')}`;return `<g tabindex="0" role="img" aria-label="${escape(detail)}"><title>${escape(detail)}</title>${keys.map(([key,,color],j) => {const value=row[key],h=numeric(value)/max*plotH;return finite(value)?`<rect x="${x+(j-1)*(barW+2)-barW/2}" y="${top+plotH-h}" width="${barW}" height="${h}" rx="2" fill="${color}"/>`:'';}).join('')}<rect class="chart-hit" x="${x-step/2}" y="${top}" width="${step}" height="${plotH}"/>${rows.length<=8||i%Math.ceil(rows.length/6)===0||i===rows.length-1?`<text x="${x}" y="${height-14}" text-anchor="middle">${escape(date(`${row.date}T12:00:00Z`))}</text>`:''}</g>`;}).join('');
+    return `<div class="chart-wrap"><svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily PAR2 recovery outcomes and source switches">${grid}${bars}</svg></div><div class="chart-legend">${keys.map(([,label,color]) => legend(label,color)).join('')}</div><p class="chart-caption">Job counts and source changes are separate events. Dates before collection are omitted when identified by the server.</p>`;
+  }
+  function recoveryTitlesTable() {
+    const search=(state.search['recovery-titles']||'').toLowerCase(), filter=state.filter['recovery-titles'];
+    const rows=sortedRows('recovery-titles',array(state.recovery?.titles).filter(row => (!filter||row.kind===filter)&&`${row.title} ${labels[row.kind]||''}`.toLowerCase().includes(search)),'sourceSwitches');
+    return `<div class="table-scroll"><table class="data-table"><thead><tr>${sortHeader('recovery-titles','title','Title')}${sortHeader('recovery-titles','watches','Watches',true)}${sortHeader('recovery-titles','avgSwitchesPerWatch','Switches / watch',true)}${sortHeader('recovery-titles','sourceSwitches','Switches',true,'sourceSwitches')}${sortHeader('recovery-titles','playbacksUsingRepairedBytes','Received repairs',true)}${sortHeader('recovery-titles','par2Failed','PAR2 jobs',true)}${sortHeader('recovery-titles','providerRescuedArticles','Article rescues',true)}${sortHeader('recovery-titles','bufferRatioPct','Buffering',true)}</tr></thead><tbody>${rows.length?rows.map(row=>`<tr><td class="title-cell"><strong>${escape(row.title||'Untitled')}</strong><small>${escape(labels[row.kind]||row.kind||'Playback')}${row.season!=null&&row.episode!=null?` · S${escape(row.season)} E${escape(row.episode)}`:''}</small></td><td class="number">${count(row.watches)}</td><td class="number recovery-number">${exactNumber(row.watches>0?row.avgSwitchesPerWatch:null)}</td><td class="number">${count(row.sourceSwitches)}<small class="table-subline">${count(row.automaticSwitches)} auto · ${count(row.manualSwitches)} manual</small></td><td class="number">${count(row.playbacksUsingRepairedBytes)}<small class="table-subline">watches</small></td><td class="number">${count(row.par2Succeeded)} / ${count(row.par2Failed)}<small class="table-subline">completed / failed</small></td><td class="number">${count(row.providerRescuedArticles)}</td><td class="number">${percent(row.bufferRatioPct)}</td></tr>`).join(''):`<tr><td colspan="8" class="table-empty">${search||filter?'No titles match these filters.':'Movie and episode watches will appear as the beta app reports activity.'}</td></tr>`}</tbody></table></div>`;
+  }
+  function recoverySessionsTable() {
+    const name='recovery-sessions', search=(state.search[name]||'').toLowerCase(), filter=state.filter[name];
+    const rows=sortedRows(name,array(state.recovery?.sessions).filter(row=>(!filter||row.kind===filter)&&`${row.title} ${row.profileName} ${row.deviceName}`.toLowerCase().includes(search)),'startedAt');
+    return `<div class="table-scroll"><table class="data-table"><thead><tr>${sortHeader(name,'title','Watch')}${sortHeader(name,'profileName','Profile / device')}${sortHeader(name,'startedAt','Started',false,'startedAt')}${sortHeader(name,'sourceSwitches','Switches',true)}<th>Repair delivery</th><th><span class="sr-only">Watch details</span></th></tr></thead><tbody>${rows.length?rows.map((row,i)=>{const id=`recovery:${row.id}`,expanded=state.expanded.has(id),detailId=`recovery-session-${i}`;return `<tr><td class="title-cell"><strong>${escape(row.title||'Untitled playback')}</strong><small>${duration(row.playedMs)} watched · ${escape(labels[row.kind]||row.kind||'Playback')}</small></td><td class="title-cell">${escape(row.profileName||'Unassigned')}<small>${escape(row.deviceName||'Unknown device')}</small></td><td>${escape(date(row.startedAt,true))}</td><td class="number">${count(row.sourceSwitches)}<small class="table-subline">${count(row.automaticSwitches)} auto · ${count(row.manualSwitches)} manual</small></td><td>${row.usedRepairedBytes===true?'<span class="badge live">Delivered</span>':row.usedRepairedBytes===false?'<span class="badge">None reported</span>':'<span class="subtle">Unavailable</span>'}</td><td><button class="text-button" data-expand="${escape(id)}" aria-expanded="${expanded}" aria-controls="${detailId}">${expanded?'Less −':'Details +'}</button></td></tr><tr id="${detailId}" class="detail-row"${expanded?'':' hidden'}><td colspan="6"><dl class="detail-grid">${[['Time watched',duration(row.playedMs)],['Startup',latency(row.startupMs)],['Buffering',latency(row.bufferedMs)],['Provider article rescues',count(row.providerRescuedArticles)],['PAR2 completed',count(row.par2Succeeded)],['PAR2 unsuccessful',count(row.par2Failed)]].map(([title,value])=>`<div><dt>${escape(title)}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl>${recoveryTimeline(row.events)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="table-empty">No reported watches match this view.</td></tr>'}</tbody></table></div>`;
+  }
+  function recoveryTimeline(events) {
+    const rows=array(events).filter(row=>!['stream_session','repair_job_watch'].includes(row.type)).sort((a,b)=>numeric(a.timestamp)-numeric(b.timestamp));
+    if (!rows.length) return '<p class="recovery-timeline-empty">No event timeline has been reported for this watch.</p>';
+    const titles={stream_read_failed:'Playback read could not be recovered',repair_job_started:'PAR2 repair started',provider_rescue:'Article recovered from another provider',par2_started:'PAR2 repair started',par2_succeeded:'PAR2 repair completed',par2_failed:'PAR2 could not finish',par2_cancelled:'PAR2 repair cancelled',repaired_bytes_served:'Repaired bytes delivered to playback',source_switch:'Playback source changed',automatic_switch:'Automatic source switch',manual_switch:'Manual source switch',buffering:'Playback buffered',deadline_missed:'Repair deadline missed'};
+    return `<div class="recovery-timeline-heading"><h3>Recovery events</h3><span>Times in UTC</span></div><ol class="recovery-timeline">${rows.map(row=>{const failed=['failed','error','timeout'].includes(row.outcome)||['par2_failed','deadline_missed','stream_read_failed'].includes(row.type),good=['succeeded','success','delivered'].includes(row.outcome)||['provider_rescue','par2_succeeded','repaired_bytes_served'].includes(row.type);const details=[row.reason?recoveryReason(row.reason):null,finite(row.bytes)&&row.bytes>0?bytes(row.bytes):null,finite(row.durationMs)?latency(row.durationMs):null,finite(row.positionMs)?`${duration(row.positionMs)} into playback`:null].filter(Boolean);return `<li class="${failed?'failed':good?'succeeded':''}"><span class="recovery-timeline-dot"></span><div><strong>${escape(titles[row.type]||String(row.type||'Recovery event').replace(/_/g,' '))}</strong>${details.length?`<p>${escape(details.join(' · '))}</p>`:''}</div><time datetime="${escape(isoDate(row.timestamp))}">${escape(date(row.timestamp,true))}</time></li>`;}).join('')}</ol>`;
   }
   function legend(label, color, value = '') {
     return `<span class="legend-item"><i class="legend-dot" style="background:${color}"></i>${escape(label)}${value ? `<span class="legend-value">${value}</span>` : ''}</span>`;
@@ -310,8 +396,8 @@
       ['Retention',`Activity is retained for ${count(c.retentionDays || 90)} days. Reports display the latest 200 sessions and up to 50 titles.`,'90 days']
     ].map(([title,detail,badge]) => `<div class="coverage-item"><div><strong>${escape(title)}</strong><p>${escape(detail)}</p></div><span class="badge">${escape(badge)}</span></div>`).join('')}</div>`;
   }
-  function tableToolbar(name, placeholder, withKind = false) {
-    return `<div class="table-toolbar"><div class="search-field">${icon('search')}<input id="search-${name}" data-search="${name}" type="search" placeholder="${escape(placeholder)}…" aria-label="${escape(placeholder)}" value="${escape(state.search[name] || '')}"></div>${withKind ? `<select class="table-filter" data-filter="${name}" aria-label="Filter by playback kind"><option value="">All viewing</option>${kinds.map(kind => `<option value="${kind}"${state.filter[name] === kind ? ' selected' : ''}>${labels[kind]}</option>`).join('')}</select>` : ''}<span class="table-count" id="count-${name}"></span></div>`;
+  function tableToolbar(name, placeholder, withKind = false, allowedKinds = kinds) {
+    return `<div class="table-toolbar"><div class="search-field">${icon('search')}<input id="search-${name}" data-search="${name}" type="search" placeholder="${escape(placeholder)}…" aria-label="${escape(placeholder)}" value="${escape(state.search[name] || '')}"></div>${withKind ? `<select class="table-filter" data-filter="${name}" aria-label="Filter by playback kind"><option value="">All viewing</option>${allowedKinds.map(kind => `<option value="${kind}"${state.filter[name] === kind ? ' selected' : ''}>${labels[kind]}</option>`).join('')}</select>` : ''}<span class="table-count" id="count-${name}"></span></div>`;
   }
   function sortedRows(name, rows, defaultKey, defaultDirection = -1) {
     const sort = state.sort[name] || {key:defaultKey,direction:defaultDirection};
@@ -347,7 +433,7 @@
     const focused = document.activeElement, focusId = focused?.id, start = focused?.selectionStart, end = focused?.selectionEnd;
     const focusData = ['expand','profile','sort','key','nav'].filter(key => focused?.dataset?.[key]).map(key => [key,focused.dataset[key]]);
     const scrollPositions = $$('.table-scroll').map(el => el.scrollLeft);
-    const renderers = {overview,capacity:capacityPage,playback:playbackPage,profiles:profilesPage,health:healthPage};
+    const renderers = {overview,capacity:capacityPage,playback:playbackPage,profiles:profilesPage,recovery:recoveryPage,health:healthPage};
     $('#report-content').innerHTML = renderers[state.tab]();
     $('#report-content').hidden = false;
     $('#report-loading').hidden = true;
@@ -358,7 +444,7 @@
     $('#collection-label').textContent = coverage.collectionStartedAt ? 'Reporting online' : 'Starting collection';
     $('#collection-since').textContent = coverage.collectionStartedAt ? `Collecting since ${date(coverage.collectionStartedAt)} UTC` : 'Gathering your first samples';
     updateTableCounts();
-    $('#coverage-footer').textContent = `Playback covers reporting clients only. ${count(coverage.capacitySampleCount)} capacity samples · ${number(state.report.range?.observedDays)} observed days · ${count(coverage.retentionDays || 90)}-day retention.`;
+    $('#coverage-footer').textContent = state.tab === 'recovery' ? 'Beta recovery covers reporting movie and episode watches only. No earlier repairs are reconstructed.' : `Playback covers reporting clients only. ${count(coverage.capacitySampleCount)} capacity samples · ${number(state.report.range?.observedDays)} observed days · ${count(coverage.retentionDays || 90)}-day retention.`;
   }
   function renderLive() {
     $$('[data-live-panel="capacity"]').forEach(el => {el.innerHTML = capacityNow();});
@@ -426,6 +512,27 @@
       else {state.reportError = error.message;if (initial) showApp();updateStatus();if (!state.report) {$('#report-loading').hidden = true;$('#report-content').hidden = false;$('#report-content').innerHTML = `<section class="panel">${empty('Your report is temporarily unavailable','Use Refresh to try again. No data has been replaced.','warning')}</section>`;}}
     } finally {state.reportBusy = false;$('#refresh').classList.remove('is-refreshing');if (days !== state.days && state.authenticated) fetchReport();}
   }
+  async function fetchRecovery() {
+    if (state.recoveryBusy || !state.authenticated) return;
+    state.recoveryBusy = true;
+    const requestId = ++state.recoveryRequestId, days = state.days;
+    if (state.tab === 'recovery') render();
+    try {
+      const recovery = await api(`/admin/api/recovery?days=${days}`);
+      if (requestId !== state.recoveryRequestId || days !== state.days || !state.authenticated) return;
+      if (!recovery || typeof recovery !== 'object' || (recovery.available !== false && !recovery.summary)) throw new Error('The beta backend returned an incomplete recovery report.');
+      state.recovery = recovery;
+      state.recoveryError = null;
+    } catch (error) {
+      if (requestId !== state.recoveryRequestId || days !== state.days) return;
+      if (error.status === 401) showLogin(error.message);
+      else state.recoveryError = error.message;
+    } finally {
+      state.recoveryBusy = false;
+      if (state.tab === 'recovery') render();
+      if (days !== state.days && state.authenticated) fetchRecovery();
+    }
+  }
   async function fetchLive() {
     if (state.liveBusy || !state.authenticated) return;
     state.liveBusy = true;
@@ -441,21 +548,21 @@
     banner.innerHTML = stale ? `${icon('warning')}<div>${escape(state.reportError || state.liveError)} ${state.report ? 'Showing the last successful snapshot.' : ''} <button data-retry>Try again</button></div>` : '';
   }
   async function refresh() {
-    await Promise.allSettled([fetchReport(),fetchLive()]);
+    await Promise.allSettled([fetchReport(),fetchLive(),fetchRecovery()]);
   }
   async function logout() {
-    try {await api('/admin/api/logout',{method:'POST'});state.report = null;state.live = null;$('#report-content').innerHTML = '';state.lastSuccess = 0;state.liveSuccess = 0;state.reportError = null;state.liveError = null;showLogin();$('#access-key').focus();}
+    try {await api('/admin/api/logout',{method:'POST'});state.report = null;state.live = null;state.recovery = null;state.recoveryError = null;state.recoveryRequestId++;$('#report-content').innerHTML = '';state.lastSuccess = 0;state.liveSuccess = 0;state.reportError = null;state.liveError = null;showLogin();$('#access-key').focus();}
     catch(error) {if (error.status === 401) showLogin();else toast('Could not sign out. Please try again.');}
   }
   function toast(message) {clearTimeout(state.toastTimer);$('#toast').textContent = message;$('#toast').hidden = false;state.toastTimer = setTimeout(() => {$('#toast').hidden = true;},5000);}
   function updateTableCounts() {
-    for (const name of ['titles','sessions','devices']) {
+    for (const name of ['titles','sessions','devices','recovery-titles','recovery-sessions']) {
       const table = $(`#table-${name}`), label = $(`#count-${name}`);
       if (table && label) label.textContent = `${table.querySelector('.table-empty') ? 0 : table.querySelectorAll('tbody > tr:not(.detail-row)').length} results`;
     }
   }
   function updateTable(name) {
-    const renderer = {titles:titlesTable,sessions:sessionsTable,devices:devicesTable}[name];
+    const renderer = {titles:titlesTable,sessions:sessionsTable,devices:devicesTable,'recovery-titles':recoveryTitlesTable,'recovery-sessions':recoverySessionsTable}[name];
     const target = $(`#table-${name}`);
     if (renderer && target) target.innerHTML = renderer();
     else render();
@@ -469,19 +576,19 @@
   $('#login-form').addEventListener('submit',async event => {
     event.preventDefault();const token = $('#access-key').value.trim();if (!token) return;
     const button = $('#login-submit');button.disabled = true;button.textContent = 'Signing in…';$('#login-error').hidden = true;
-    try {await api('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});$('#access-key').value = '';$('#access-key').type = 'password';$('#show-key').setAttribute('aria-pressed','false');$('#show-key').setAttribute('aria-label','Show access key');showApp();await fetchReport();await fetchLive();}
+    try {await api('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});$('#access-key').value = '';$('#access-key').type = 'password';$('#show-key').setAttribute('aria-pressed','false');$('#show-key').setAttribute('aria-label','Show access key');showApp();await fetchReport();await Promise.allSettled([fetchLive(),fetchRecovery()]);}
     catch(error) {$('#login-error').textContent = error.status === 401 ? 'That access key wasn’t recognized. Please try again.' : error.message;$('#login-error').hidden = false;$('#access-key').focus();}
     finally {button.disabled = false;button.innerHTML = 'Open dashboard <span aria-hidden="true">↗</span>';}
   });
   $('#logout').addEventListener('click',logout);
   $('#refresh').addEventListener('click',refresh);
   $('#range').addEventListener('change',event => {
-    state.days = Number(event.target.value);state.expanded.clear();state.report = null;
+    state.days = Number(event.target.value);state.expanded.clear();state.report = null;state.recovery = null;state.recoveryError = null;
     $('#report-content').hidden = true;
     $('#report-loading').hidden = false;
     $('#export-playback').href = `/admin/api/export?days=${state.days}&type=playback`;
     $('#export-capacity').href = `/admin/api/export?days=${state.days}&type=capacity`;
-    fetchReport();
+    fetchReport();fetchRecovery();
   });
   window.addEventListener('hashchange',() => setTab(location.hash.slice(1)));
   document.addEventListener('click',event => {
@@ -494,6 +601,7 @@
     if (target.closest('[data-clear-profile]')) {state.profile = null;render();}
     if (target.closest('[data-logout]')) logout();
     if (target.closest('[data-retry]')) refresh();
+    if (target.closest('[data-recovery-retry]')) fetchRecovery();
     if (!target.closest('.export-menu')) $$('.export-menu[open]').forEach(el => {el.open = false;});
   });
   document.addEventListener('input',event => {const target = event.target;if (target instanceof HTMLInputElement && target.dataset.search) {state.search[target.dataset.search] = target.value;updateTable(target.dataset.search);}});
@@ -501,12 +609,12 @@
   document.addEventListener('keydown',event => {if (event.key === 'Escape') $$('.export-menu[open]').forEach(el => {el.open = false;});});
   document.addEventListener('visibilitychange',() => {if (!document.hidden && state.authenticated) refresh();});
   setInterval(() => {if (!document.hidden && state.authenticated) fetchLive();},15000);
-  setInterval(() => {if (!document.hidden && state.authenticated) fetchReport();},60000);
+  setInterval(() => {if (!document.hidden && state.authenticated) {fetchReport();fetchRecovery();}},60000);
   setInterval(() => {if (state.authenticated) updateStatus();},10000);
   let resizeTimer;
   let chartWidthMode = window.innerWidth <= 700;
   window.addEventListener('resize',() => {clearTimeout(resizeTimer);resizeTimer = setTimeout(() => {const next = window.innerWidth <= 700;if (next !== chartWidthMode) {chartWidthMode = next;render();}},150);});
   $('#app').hidden = false;
   setTab(location.hash.slice(1),false);
-  fetchReport(true).then(() => {if (state.authenticated) fetchLive();});
+  fetchReport(true).then(() => {if (state.authenticated) {fetchLive();fetchRecovery();}});
 })();

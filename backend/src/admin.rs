@@ -41,6 +41,7 @@ struct AdminInner {
     ingest_attempts: Mutex<VecDeque<i64>>,
     latest: RwLock<Value>,
     collected_at: i64,
+    recovery_proxy: Option<crate::admin_recovery::Proxy>,
 }
 #[derive(Deserialize)]
 pub struct ReportQuery {
@@ -150,6 +151,7 @@ pub fn router(
         ingest_attempts: Mutex::new(VecDeque::new()),
         latest: RwLock::new(Value::Null),
         collected_at,
+        recovery_proxy: crate::admin_recovery::Proxy::from_env()?,
     }));
     tokio::spawn(sample_loop(st.clone()));
     Ok(routes(st))
@@ -159,6 +161,8 @@ fn routes(st: AdminState) -> Router {
         .route("/admin/api/report", get(report))
         .route("/admin/api/live", get(live))
         .route("/admin/api/export", get(export))
+        .route("/admin/api/recovery", get(recovery_report))
+        .route("/admin/api/recovery/export", get(recovery_export))
         .route("/admin/api/logout", post(logout))
         .route_layer(middleware::from_fn_with_state(st.clone(), require_admin));
     Router::new()
@@ -350,6 +354,8 @@ pub struct PlaybackEvent {
     error_count: u64,
     #[serde(default)]
     source_switches: u64,
+    #[serde(flatten)]
+    recovery: crate::admin_recovery::ClientCounters,
 }
 fn valid_id(s: &str) -> bool {
     !s.is_empty()
@@ -388,6 +394,7 @@ impl PlaybackEvent {
             && self.buffered_ms < 31_536_000_000
             && self.error_count <= 100_000
             && self.source_switches <= 100_000
+            && self.recovery.validate(self.source_switches)
             && self.startup_ms.is_none_or(|s| s <= 3_600_000)
             && self.position_ms.is_none_or(|s| s < 31_536_000_000)
             && self.season.is_none_or(|n| n < 10000)
@@ -459,6 +466,7 @@ fn enrich_profile(c: &Connection, event: &mut PlaybackEvent) {
 }
 
 pub fn migrate(c: &Connection) -> anyhow::Result<()> {
+    crate::admin_recovery::migrate(c)?;
     c.execute_batch("CREATE TABLE IF NOT EXISTS admin_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS admin_sessions(
       id TEXT PRIMARY KEY,device_id TEXT NOT NULL,device_name TEXT NOT NULL,platform TEXT NOT NULL,app_version TEXT NOT NULL,
@@ -536,6 +544,7 @@ fn ingest(c: &mut Connection, e: &PlaybackEvent, now: i64) -> anyhow::Result<boo
         if state == "ended" {
             return Ok(false);
         }
+        crate::admin_recovery::validate_cohort(c, &e.session_id, &e.recovery, true)?;
         anyhow::ensure!(
             e.played_ms >= p
                 && e.buffered_ms >= b
@@ -566,6 +575,10 @@ fn ingest(c: &mut Connection, e: &PlaybackEvent, now: i64) -> anyhow::Result<boo
             e.source_switches,
         )
     };
+    anyhow::ensure!(
+        !e.recovery.supported() || switches <= 1_000,
+        "recovery switch delta exceeds limit"
+    );
     // Small clock jitter tolerance, never a wall-clock seek delta.
     let budget = (elapsed + 1000).min(120_000);
     let total = played.saturating_add(buffered);
@@ -592,6 +605,7 @@ fn ingest(c: &mut Connection, e: &PlaybackEvent, now: i64) -> anyhow::Result<boo
     let mut t = now - span;
     let mut left_p = played;
     let mut left_b = buffered;
+    let mut buffered_intervals = Vec::new();
     while t < now {
         let end = ((t.div_euclid(MINUTE) + 1) * MINUTE).min(now);
         let duration = (end - t) as u64;
@@ -607,10 +621,19 @@ fn ingest(c: &mut Connection, e: &PlaybackEvent, now: i64) -> anyhow::Result<boo
         };
         left_p -= p;
         left_b -= b;
+        buffered_intervals.push((t.div_euclid(MINUTE) * MINUTE, b));
         tx.execute("INSERT INTO admin_usage(bucket,session_id,played_ms,buffered_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(bucket,session_id) DO UPDATE SET played_ms=played_ms+excluded.played_ms,buffered_ms=buffered_ms+excluded.buffered_ms",params![t.div_euclid(MINUTE)*MINUTE,e.session_id,p,b])?;
         t = end;
     }
     tx.execute("INSERT INTO admin_usage(bucket,session_id,errors,switches) VALUES(?1,?2,?3,?4) ON CONFLICT(bucket,session_id) DO UPDATE SET errors=errors+excluded.errors,switches=switches+excluded.switches",params![now.div_euclid(MINUTE)*MINUTE,e.session_id,errors.min(1000),switches.min(1000)])?;
+    crate::admin_recovery::record_client(
+        &tx,
+        &e.session_id,
+        &e.recovery,
+        now,
+        buffered,
+        &buffered_intervals,
+    )?;
     tx.commit()?;
     Ok(true)
 }
@@ -715,6 +738,7 @@ async fn sample_loop(st: AdminState) {
             let mut conn = db.lock().unwrap();
             save_sample(&mut conn, now, ms, &current, &old, &host_copy, cpu)?;
             if count % 240 == 0 {
+                crate::admin_recovery::prune(&conn, now - RETENTION)?;
                 conn.execute("DELETE FROM admin_capacity WHERE ts<?1", [now - RETENTION])?;
                 conn.execute("DELETE FROM admin_providers WHERE ts<?1", [now - RETENTION])?;
                 conn.execute("DELETE FROM admin_usage WHERE bucket<?1", [now - RETENTION])?;
@@ -836,6 +860,80 @@ async fn export(State(st): State<AdminState>, Query(q): Query<ReportQuery>) -> R
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+
+async fn recovery_report(
+    State(st): State<AdminState>,
+    headers: HeaderMap,
+    Query(q): Query<ReportQuery>,
+) -> Response {
+    if !(1..=90).contains(&q.days) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if let Some(proxy) = &st.0.recovery_proxy {
+        if headers.contains_key("X-Velvet-Recovery-Proxy") {
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+        return match proxy.fetch(q.days,false).await {
+            Ok(bytes)=>match serde_json::from_slice::<Value>(&bytes){Ok(v) if v.is_object()=>Json(v).into_response(),_=>StatusCode::BAD_GATEWAY.into_response()},
+            Err(_)=>(StatusCode::SERVICE_UNAVAILABLE,Json(json!({"available":false,"scope":"beta","message":"The beta backend is unavailable. Existing server reporting is unaffected."}))).into_response(),
+        };
+    }
+    let db = st.0.db.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::admin_recovery::report(&db.lock().unwrap(), q.days, now_ms())
+    })
+    .await
+    {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!("recovery report: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+async fn recovery_export(
+    State(st): State<AdminState>,
+    headers: HeaderMap,
+    Query(q): Query<ReportQuery>,
+) -> Response {
+    if !(1..=90).contains(&q.days) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let bytes = if let Some(proxy) = &st.0.recovery_proxy {
+        if headers.contains_key("X-Velvet-Recovery-Proxy") {
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+        proxy.fetch(q.days, true).await.ok()
+    } else {
+        let db = st.0.db.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::admin_recovery::export(&db.lock().unwrap(), q.days, now_ms())
+        })
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(String::into_bytes)
+    };
+    match bytes {
+        Some(value) => (
+            [
+                (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"velvet-beta-watches.csv\"",
+                ),
+            ],
+            value,
+        )
+            .into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+#[cfg(test)]
+#[path = "admin_recovery_ingest_tests.rs"]
+mod recovery_ingest_tests;
 
 #[cfg(test)]
 mod tests {
@@ -981,6 +1079,7 @@ mod tests {
             ingest_attempts: Mutex::new(VecDeque::new()),
             latest: RwLock::new(json!({})),
             collected_at: now_ms(),
+            recovery_proxy: None,
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -993,6 +1092,8 @@ mod tests {
             "/admin/api/report",
             "/admin/api/live",
             "/admin/api/export?type=playback",
+            "/admin/api/recovery",
+            "/admin/api/recovery/export",
         ] {
             assert_eq!(
                 client
@@ -1044,6 +1145,42 @@ mod tests {
             .unwrap()
             .get("summary")
             .is_some());
+        let recovery = client
+            .get(format!("{url}/admin/api/recovery?days=7"))
+            .header("Cookie", cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(recovery.status(), 200);
+        assert_eq!(recovery.headers()["cache-control"], "no-store");
+        let recovery = recovery.json::<Value>().await.unwrap();
+        assert_eq!(recovery["available"], false);
+        assert_eq!(recovery["scope"], "beta");
+        for route in ["/admin/api/recovery", "/admin/api/recovery/export"] {
+            for days in [0, 91] {
+                assert_eq!(
+                    client
+                        .get(format!("{url}{route}?days={days}"))
+                        .header("Cookie", cookie)
+                        .send()
+                        .await
+                        .unwrap()
+                        .status(),
+                    400
+                );
+            }
+        }
+        let recovery_csv = client
+            .get(format!("{url}/admin/api/recovery/export?days=7"))
+            .header("Cookie", cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(recovery_csv.status(), 200);
+        assert!(recovery_csv.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .contains("text/csv"));
         assert_eq!(
             client
                 .get(format!("{url}/admin/api/report?days=9999"))
