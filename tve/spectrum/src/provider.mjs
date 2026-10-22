@@ -1,14 +1,14 @@
 import {readFile, writeFile, rename, unlink} from 'node:fs/promises';
 import {randomBytes} from 'node:crypto';
 import {BridgeError, boundedRequest, providerError} from './http.mjs';
+import {authText, renewAuth} from './auth.mjs';
 
 const API = 'https://apis-vid.spectrum.net';
-const TOKEN = 'https://apis.spectrum.net/auth/oauth/v2/token';
 const LOCATION = 'https://apis.spectrum.net/pinxt/customer/location/v1';
 const LOCATION_TTL = 15 * 60 * 1000;
 const LOCATION_FIELDS = ['behindOwnModem','inMarket','stateAbbr','behindTheRouter'];
 const AUTH_FIELDS = ['accessToken','refreshToken','deviceId'];
-const tokenText = value => typeof value==='string' && value.length>0 && value.length<=65536 && !/[\r\n\0]/.test(value);
+const tokenText = authText;
 function locationValue(value) {
   if (!value || typeof value!=='object' || Array.isArray(value) || typeof value.behindOwnModem!=='boolean' || typeof value.inMarket!=='boolean') throw new BridgeError();
   const location = {behindOwnModem:value.behindOwnModem,inMarket:value.inMarket};
@@ -25,7 +25,7 @@ function locationValue(value) {
 export class SpectrumProvider {
   constructor(config, {request = boundedRequest, now = Date.now} = {}) {
     this.config = config; this.request = request; this.now = now;
-    this.auth = null; this.refreshing = null; this.cached = null; this.loading = null;
+    this.auth = null; this.pendingAuth = null; this.refreshing = null; this.cached = null; this.loading = null;
     this.locationCache = null; this.locationLoading = null;
   }
   async loadAuth() {
@@ -38,20 +38,19 @@ export class SpectrumProvider {
     if (this.refreshing) return this.refreshing;
     this.refreshing = (async () => {
       const current = await this.loadAuth();
-      const body = Buffer.from(new URLSearchParams({client_id: 'stva-ovp', grant_type: 'refresh_token', refresh_token: current.refreshToken}).toString());
-      const response = await this.request({url: TOKEN, method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded','Content-Length':body.length}, body, maxBytes: 256 * 1024});
-      let value; try { value = JSON.parse(response.body); } catch { throw new BridgeError('sign_in_required', 401); }
-      if (response.status !== 200 || !['access_token','refresh_token'].every(k => tokenText(value?.[k])) || !Number.isFinite(Number(value.expires_in)) || Number(value.expires_in) <= 0) throw new BridgeError('sign_in_required', 401);
-      const next = {...current, accessToken:value.access_token, refreshToken:value.refresh_token, expiresAt:this.now()+Number(value.expires_in)*1000};
+      // Retain an already rotated credential while retrying a failed disk write;
+      // never consume its previous refresh token a second time.
+      const next = this.pendingAuth ?? await renewAuth(current, {request:this.request, now:this.now});
+      this.pendingAuth = next;
       const temporary = this.config.authFile + '.' + randomBytes(8).toString('hex') + '.tmp';
       try {
         await writeFile(temporary, JSON.stringify(next), {mode:0o600,flag:'wx'});
         await rename(temporary, this.config.authFile);
       } catch {
         await unlink(temporary).catch(()=>{});
-        throw new BridgeError('sign_in_required',401);
+        throw new BridgeError();
       }
-      this.auth = next; return next;
+      this.auth = next; this.pendingAuth = null; return next;
     })().finally(() => { this.refreshing = null; });
     return this.refreshing;
   }
