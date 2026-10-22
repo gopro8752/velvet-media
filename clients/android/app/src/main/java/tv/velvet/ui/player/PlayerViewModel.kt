@@ -31,6 +31,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -45,6 +47,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tv.velvet.VelvetApp
+import tv.velvet.BuildConfig
 import tv.velvet.data.local.DEFAULT_PROFILE_ID
 import tv.velvet.data.local.WatchProgressEntity
 import tv.velvet.data.local.WatchedEpisodeEntity
@@ -130,6 +133,8 @@ data class PlayerUiState(
     val blockedGroups: List<ReleaseGroup> = emptyList(),
     val canBlockCurrentRelease: Boolean = false,
     val groupActionError: String? = null,
+    val recoveryDiagnostics: ExactRecoveryState? = null,
+    val repairDiagnostics: ExactRepairState? = null,
     /** Display name of the active embedded subtitle track; null = subtitles off. */
     val subtitleLabel: String? = null,
     val subtitleAvailable: Boolean = false,
@@ -262,6 +267,7 @@ class PlayerViewModel(
     private var preparedFallback: StreamOption? = null
     private var recoveryPrepareRequested = false
     private var recoveryRevision = 0L
+    private val recoverySessionId = java.util.UUID.randomUUID().toString()
 
     /**
      * Ordered fallback list for THIS media: ranked streams with release-group continuity
@@ -797,6 +803,8 @@ class PlayerViewModel(
                 errorMessage = null,
                 canChooseStream = false,
                 currentStreamUrl = stream.url,
+                recoveryDiagnostics = null,
+                repairDiagnostics = null,
                 canBlockCurrentRelease = canBlockCurrentRelease(),
                 isBuffering = true,
             )
@@ -911,9 +919,10 @@ class PlayerViewModel(
         recoveryRevision++
         recoveryPrepareRequested = true
         preparedFallback = null
+        if (BuildConfig.RECOVERY_BETA) _state.update { it.copy(recoveryDiagnostics = null, repairDiagnostics = null) }
     }
 
-    /** Keep a verified alternative warm while the current stream is still buffered. */
+    /** Report playback for exact recovery and keep an alternate available as ordinary fallback. */
     private fun watchRecovery(stream: StreamOption) {
         if (!handoffAccepted) return
         recoveryJob?.cancel()
@@ -923,41 +932,68 @@ class PlayerViewModel(
             var prepareJob: Job? = null
             var preparedRevision = -1L
             var requestedFraction = 0.0
-            while (isActive && currentStream?.url == stream.url) {
-                val revision = recoveryRevision
-                val duration = player.duration.takeIf { it > 0 }
-                    ?: lastKnownDurationMs.takeIf { it > 0 }
-                    ?: currentEpisodeMeta?.runtimeMinutes?.toLong()?.times(60_000)
-                    ?: details?.item?.runtimeMinutes?.toLong()?.times(60_000) ?: 0L
-                val position = pendingSeek?.positionMs ?: player.currentPosition
-                val fraction = if (duration > 0) position.toDouble() / duration else 0.0
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (prepareJob?.isActive != true && (recoveryPrepareRequested || now - lastPrepareAt >= 30_000)) {
-                    recoveryPrepareRequested = false
-                    lastPrepareAt = now
-                    preparedRevision = revision
-                    requestedFraction = fraction.coerceIn(0.0, 0.999)
-                    prepareJob = launch { container.streamRecoveryApi.prepare(stream, fraction) }
+            var lastPlayback: RecoveryPlaybackPosition? = null
+            try {
+                while (isActive && currentStream?.url == stream.url) {
+                    val revision = recoveryRevision
+                    val duration = player.duration.takeIf { it > 0 }
+                        ?: lastKnownDurationMs.takeIf { it > 0 }
+                        ?: currentEpisodeMeta?.runtimeMinutes?.toLong()?.times(60_000)
+                        ?: details?.item?.runtimeMinutes?.toLong()?.times(60_000) ?: 0L
+                    val position = pendingSeek?.positionMs ?: player.currentPosition
+                    val fraction = if (duration > 0) position.toDouble() / duration else 0.0
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (prepareJob?.isActive != true && (recoveryPrepareRequested || now - lastPrepareAt >= 30_000)) {
+                        recoveryPrepareRequested = false
+                        lastPrepareAt = now
+                        preparedRevision = revision
+                        requestedFraction = fraction.coerceIn(0.0, 0.999)
+                        prepareJob = launch { container.streamRecoveryApi.prepare(stream, fraction) }
+                    }
+                    if (BuildConfig.RECOVERY_BETA) {
+                        val sample = RecoveryPlaybackPosition(
+                            positionMs = position.coerceAtLeast(0),
+                            // Only measured player duration belongs in the server's timing map.
+                            durationMs = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L,
+                            bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0),
+                            playing = player.playWhenReady && !hostStopped,
+                            sessionId = recoverySessionId,
+                            generation = revision,
+                        )
+                        lastPlayback = sample
+                        container.streamRecoveryApi.playback(stream, sample)
+                    }
+                    val health = container.streamRecoveryApi.health(stream, recoverySessionId.takeIf { BuildConfig.RECOVERY_BETA })
+                    if (currentStream?.url != stream.url) break
+                    // A seek while the request was in flight invalidates the old warm point.
+                    if (revision != recoveryRevision) continue
+                    val exactRecovery = health?.exactRecovery?.takeIf { BuildConfig.RECOVERY_BETA }
+                    _state.update { it.copy(recoveryDiagnostics = exactRecovery, repairDiagnostics = health?.repair?.takeIf { BuildConfig.RECOVERY_BETA }) }
+                    preparedFallback = health?.takeIf { preparedRevision == revision }?.let {
+                        StreamRecoveryApi.preparedCandidate(stream, it, candidates, requestedFraction)
+                            ?.takeIf { candidate -> candidate.url !in blacklistedUrls && !isBlocked(candidate) }
+                    }
+                    val next = preparedFallback
+                    if (health?.status == "incomplete" && exactRecovery?.shouldHoldProactiveFallback() != true &&
+                        next != null && !swapping && !queueAdvancing && !queueDetached && !queueClosed &&
+                        !hostStopped && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
+                        _state.value.phase == PlayerPhase.PLAYING && autoRetries < MAX_AUTO_RETRIES) {
+                        blacklistedUrls.add(stream.url)
+                        autoRetries++
+                        // Best-effort timeline seek: different release cuts may not match exactly.
+                        failoverTo(next)
+                        return@launch
+                    }
+                    delay(if (player.playbackState == Player.STATE_BUFFERING) 1_000 else 3_000)
                 }
-                val health = container.streamRecoveryApi.health(stream)
-                if (currentStream?.url != stream.url) break
-                // A seek while the request was in flight invalidates the old warm point.
-                if (revision != recoveryRevision) continue
-                preparedFallback = health?.takeIf { preparedRevision == revision }?.let {
-                    StreamRecoveryApi.preparedCandidate(stream, it, candidates, requestedFraction)
-                        ?.takeIf { candidate -> candidate.url !in blacklistedUrls && !isBlocked(candidate) }
+            } finally {
+                // Captured values avoid touching a released player. A lower generation stop
+                // cannot cancel a later seek/resume heartbeat for the same session.
+                lastPlayback?.let { last ->
+                    withContext(NonCancellable) {
+                        container.streamRecoveryApi.playback(stream, last.copy(playing = false, stopped = true))
+                    }
                 }
-                val next = preparedFallback
-                if (health?.status == "incomplete" && next != null && !swapping && !queueAdvancing && !queueDetached && !queueClosed &&
-                    !hostStopped && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
-                    _state.value.phase == PlayerPhase.PLAYING && autoRetries < MAX_AUTO_RETRIES) {
-                    blacklistedUrls.add(stream.url)
-                    autoRetries++
-                    // Timeline seek preserves the scene across differently sized releases.
-                    failoverTo(next)
-                    return@launch
-                }
-                delay(if (player.playbackState == Player.STATE_BUFFERING) 1_000 else 3_000)
             }
         }
     }
@@ -990,6 +1026,9 @@ class PlayerViewModel(
         hostStopped = false
         resetStallDeadline()
         if (recoveryJob?.isActive != true) currentStream?.let(::watchRecovery)
+        // Leaving the beta cancels expensive repair. If that interrupted a paused
+        // network read, prepare the same resource/position when the viewer resumes.
+        if (BuildConfig.RECOVERY_BETA && currentStream != null && player.playerError != null) player.prepare()
         player.play()
     }
 

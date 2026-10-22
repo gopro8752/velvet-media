@@ -35,6 +35,7 @@ mod nntp;
 mod nzb;
 mod pool;
 mod release;
+mod repair;
 mod resolver;
 mod sevenzip;
 mod stream;
@@ -103,7 +104,7 @@ async fn serve() -> anyhow::Result<()> {
         saved_categories::migrate(&conn).context("migrate saved categories")?;
     }
 
-    let pool = pool::Pool::new(&cfg.providers);
+    let pool = pool::Pool::new_verified(&cfg.providers, cfg.repair.enabled);
     let names: Vec<&str> = cfg
         .providers
         .iter()
@@ -115,7 +116,7 @@ async fn serve() -> anyhow::Result<()> {
         pool.total_capacity(),
     );
 
-    let stream_state = stream::StreamState::new(pool.clone(), http.clone(), db.clone());
+    let stream_state = stream::StreamState::with_recovery(pool.clone(), http.clone(), db.clone(), cfg.repair.clone(), cfg.stream_buffer.clone(), format!("http://127.0.0.1:{}", cfg.port));
     let public_base = cfg
         .public_base_url
         .clone()

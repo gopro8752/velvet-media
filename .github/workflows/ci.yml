@@ -32,8 +32,12 @@ jobs:
       - name: Install media tools for integration tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg libchromaprint-tools
+          sudo apt-get install -y --no-install-recommends ffmpeg libchromaprint-tools par2
       - run: cargo test --locked
+      - name: Exercise exact recovery through HTTP and synthetic NNTP
+        run: |
+          cargo build --locked
+          python3 tests/recovery_e2e.py --binary target/debug/velvet-backend --par2 /usr/bin/par2
 
   portable-clients:
     runs-on: ubuntu-latest

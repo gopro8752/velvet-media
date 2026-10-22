@@ -22,6 +22,25 @@ use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use crate::config::Provider;
 use crate::nntp::{ArticleBody, NntpConn};
 
+/// Shared byte budget for a repair job, including every provider retry. A BODY
+/// reserves its maximum possible wire payload first. Complete reads refund the
+/// unused reservation; interrupted attempts retain it conservatively.
+pub struct FetchBudget { limit: u64, remaining: std::sync::atomic::AtomicU64 }
+#[derive(Debug)]
+pub struct FetchBudgetExceeded;
+impl FetchBudget {
+    pub fn new(limit: u64) -> Self { Self { limit, remaining: std::sync::atomic::AtomicU64::new(limit) } }
+    pub fn used(&self) -> u64 { self.limit.saturating_sub(self.remaining.load(std::sync::atomic::Ordering::Relaxed)) }
+    fn reserve(&self) -> Result<usize, FetchBudgetExceeded> {
+        self.remaining.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |left| {
+            if left == 0 { None } else { Some(left.saturating_sub(crate::nntp::MAX_ARTICLE_BYTES as u64)) }
+        }).map(|left| left.min(crate::nntp::MAX_ARTICLE_BYTES as u64) as usize).map_err(|_| FetchBudgetExceeded)
+    }
+    fn finish(&self, reserved: usize, used: usize) {
+        self.remaining.fetch_add(reserved.saturating_sub(used) as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Cumulative counters are scoped to this Pool's lifetime. `free_connections`
 /// includes reusable idle sockets; `unused_slots` counts only unopened slots.
 /// Opening/authenticating connections consume a busy slot but are not connected
@@ -320,42 +339,53 @@ impl ProviderPool {
     /// Try to fetch one segment from THIS provider. Reconnects once on an I/O
     /// error (a stale pooled socket), then gives up (caller tries next provider).
     async fn fetch(&self, group: &str, message_id: &str) -> ProviderOutcome {
+        self.fetch_budgeted(group, message_id, None).await.unwrap_or(ProviderOutcome::ProviderDown)
+    }
+
+    async fn fetch_budgeted(&self, group: &str, message_id: &str, budget: Option<&FetchBudget>) -> Result<ProviderOutcome, FetchBudgetExceeded> {
         for attempt in 0..2 {
             let mut conn = match self.checkout().await {
                 Ok(c) => c,
-                Err(_) => return ProviderOutcome::ProviderDown,
+                Err(_) => return Ok(ProviderOutcome::ProviderDown),
             };
             if !group.is_empty() {
                 if let Err(_) = conn.inner.group(group).await {
                     self.metrics.update(|m| m.article_errors += 1);
                     // Broken socket — drop it (frees the slot) and retry fresh once.
                     if attempt == 0 { continue; }
-                    return ProviderOutcome::ProviderDown;
+                    return Ok(ProviderOutcome::ProviderDown);
                 }
             }
-            match conn.inner.body(message_id).await {
+            let reserved = match budget { Some(budget) => budget.reserve()?, None => crate::nntp::MAX_ARTICLE_BYTES };
+            // Bound the entire article, not just each line: a trickling peer
+            // cannot keep a foreground request alive indefinitely.
+            let body = tokio::time::timeout(std::time::Duration::from_secs(20), conn.inner.body_with_limit(message_id, reserved))
+                .await.unwrap_or(Err(crate::nntp::NntpError::Timeout));
+            match body {
                 Ok(ArticleBody::Found(raw)) => {
+                    if let Some(budget) = budget { budget.finish(reserved, conn.inner.body_wire_bytes()); }
                     self.metrics.update(|m| {
                         m.articles_found += 1;
                         m.bytes_downloaded = m.bytes_downloaded.saturating_add(raw.len() as u64);
                     });
                     self.checkin(conn).await;
-                    return ProviderOutcome::Found(raw);
+                    return Ok(ProviderOutcome::Found(raw));
                 }
                 Ok(ArticleBody::Missing) => {
+                    if let Some(budget) = budget { budget.finish(reserved, 0); }
                     self.metrics.update(|m| m.articles_missing += 1);
                     self.checkin(conn).await;
-                    return ProviderOutcome::Missing;
+                    return Ok(ProviderOutcome::Missing);
                 }
                 Err(_) => {
                     self.metrics.update(|m| m.article_errors += 1);
                     // Drop the broken conn; retry once with a fresh one.
                     if attempt == 0 { continue; }
-                    return ProviderOutcome::ProviderDown;
+                    return Ok(ProviderOutcome::ProviderDown);
                 }
             }
         }
-        ProviderOutcome::ProviderDown
+        Ok(ProviderOutcome::ProviderDown)
     }
 }
 
@@ -370,6 +400,7 @@ pub struct Pool {
     /// Shared across every verification sweep, rather than a limit per title.
     background: Semaphore,
     started: Instant,
+    strict: bool,
 }
 
 /// Result of fetching a segment across all providers.
@@ -388,9 +419,22 @@ pub enum CheckedFetch {
     Unavailable,
 }
 
+/// Validated beta media fetch. A corrupt BODY is retried on the next provider,
+/// rather than selecting a different release or caching damaged bytes.
+#[derive(Debug)]
+pub enum DecodedFetch {
+    Found(crate::yenc::DecodedSegment),
+    Missing,
+    Corrupt,
+    Unavailable,
+}
+
 impl Pool {
-    pub fn new(providers: &[Provider]) -> Arc<Pool> {
+    pub fn new(providers: &[Provider]) -> Arc<Pool> { Self::new_verified(providers, false) }
+
+    pub fn new_verified(providers: &[Provider], strict: bool) -> Arc<Pool> {
         Arc::new(Pool {
+            strict,
             providers: providers.iter().cloned().map(ProviderPool::new).collect(),
             background: Semaphore::new(background_capacity(providers)),
             started: Instant::now(),
@@ -436,6 +480,10 @@ impl Pool {
             if index > 0 { pp.metrics.update(|m| m.fallback_attempts += 1); }
             match pp.fetch(group, message_id).await {
                 ProviderOutcome::Found(raw) => {
+                    if self.strict && crate::yenc::decode_verified(&raw).is_err() {
+                        pp.metrics.update(|m| m.article_errors += 1);
+                        continue;
+                    }
                     if index > 0 { pp.metrics.update(|m| m.fallback_successes += 1); }
                     return CheckedFetch::Found(raw);
                 }
@@ -444,6 +492,36 @@ impl Pool {
             }
         }
         if all_missing { CheckedFetch::Missing } else { CheckedFetch::Unavailable }
+    }
+
+    pub async fn fetch_decoded(&self, group: &str, message_id: &str) -> DecodedFetch {
+        self.fetch_decoded_inner(group, message_id, None).await.unwrap_or(DecodedFetch::Unavailable)
+    }
+
+    pub async fn fetch_decoded_budgeted(&self, group: &str, message_id: &str, budget: &FetchBudget) -> Result<DecodedFetch, FetchBudgetExceeded> {
+        self.fetch_decoded_inner(group, message_id, Some(budget)).await
+    }
+
+    async fn fetch_decoded_inner(&self, group: &str, message_id: &str, budget: Option<&FetchBudget>) -> Result<DecodedFetch, FetchBudgetExceeded> {
+        let mut unavailable = self.providers.is_empty();
+        let mut corrupt = false;
+        for (index, pp) in self.providers.iter().enumerate() {
+            if index > 0 { pp.metrics.update(|m| m.fallback_attempts += 1); }
+            match pp.fetch_budgeted(group, message_id, budget).await? {
+                ProviderOutcome::Found(raw) => match crate::yenc::decode_verified(&raw) {
+                    Ok(decoded) => {
+                        if index > 0 { pp.metrics.update(|m| m.fallback_successes += 1); }
+                        return Ok(DecodedFetch::Found(decoded));
+                    }
+                    Err(_) => { corrupt = true; pp.metrics.update(|m| m.article_errors += 1); }
+                },
+                ProviderOutcome::Missing => {},
+                ProviderOutcome::ProviderDown => unavailable = true,
+            }
+        }
+        if unavailable { Ok(DecodedFetch::Unavailable) }
+        else if corrupt { Ok(DecodedFetch::Corrupt) }
+        else { Ok(DecodedFetch::Missing) }
     }
 
     pub async fn background_permit(&self) -> tokio::sync::SemaphorePermit<'_> {
@@ -727,5 +805,90 @@ pub(crate) mod tests {
         missing_server.abort();
         temporary_server.abort();
         present_server.abort();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod verified_fixtures {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    pub(crate) fn article(data: &[u8], begin: u64, total: u64, number: usize) -> Vec<u8> {
+        let mut body = format!("=ybegin part={number} line=128 size={total} name=fixture.mp4\r\n=ypart begin={begin} end={}\r\n", begin + data.len() as u64 - 1).into_bytes();
+        body.extend(crate::yenc::encode_data(data, 128));
+        body.extend(format!("=yend size={} part={number} pcrc32={:08x}\r\n", data.len(), crate::yenc::crc32(data)).as_bytes());
+        // NNTP dot-stuffing is independent of yEnc escaping.
+        let mut stuffed = Vec::new();
+        for line in body.split_inclusive(|b| *b == b'\n') {
+            if line.starts_with(b".") { stuffed.push(b'.'); }
+            stuffed.extend(line);
+        }
+        stuffed
+    }
+
+    pub(crate) async fn provider(bodies: std::collections::HashMap<String, Vec<u8>>) -> (Provider, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bodies = Arc::new(bodies);
+        let server = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let bodies = bodies.clone();
+                tokio::spawn(async move {
+                    let mut socket = BufReader::new(socket);
+                    if socket.get_mut().write_all(b"200 fixture\r\n").await.is_err() { return; }
+                    loop {
+                        let mut line = String::new();
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 { break; }
+                        let id = line.trim().split(' ').nth(1).unwrap_or("").trim_matches(['<', '>']);
+                        let response = if line.starts_with("AUTHINFO") { b"281 accepted\r\n".to_vec() }
+                        else if line.starts_with("GROUP") { b"211 test\r\n".to_vec() }
+                        else if let Some(body) = bodies.get(id) {
+                            if line.starts_with("BODY") { [b"222 body\r\n".as_slice(), body, b".\r\n"].concat() }
+                            else { b"223 present\r\n".to_vec() }
+                        } else { b"430 missing\r\n".to_vec() };
+                        if socket.get_mut().write_all(&response).await.is_err() { break; }
+                    }
+                });
+            }
+        });
+        (Provider { name: "fixture".into(), host: "127.0.0.1".into(), port, tls: false, username: "fixture".into(), password: "fixture".into(), max_connections: 8 }, server)
+    }
+
+    #[tokio::test]
+    async fn corrupt_primary_retries_secondary_before_returning_verified_original_bytes() {
+        let (primary, pserver) = provider(std::collections::HashMap::from([("part".into(), article(b"damaged", 1, 6, 1))])).await;
+        let (secondary, sserver) = provider(std::collections::HashMap::from([("part".into(), article(b"original", 1, 8, 1))])).await;
+        let pool = Pool::new_verified(&[primary, secondary], true);
+        // Primary body is internally consistent CRC but has an end-size/total
+        // mismatch. Its successful NNTP reply must never be selected.
+        let decoded = match pool.fetch_decoded("", "part").await { DecodedFetch::Found(d) => d, other => panic!("unexpected {other:?}") };
+        assert_eq!(decoded.data, b"original");
+        let metrics = pool.metrics_snapshot().await;
+        assert_eq!(metrics.providers[1].metrics.fallback_successes, 1);
+        assert_eq!(metrics.providers[0].metrics.article_errors, 1);
+        pserver.abort(); sserver.abort();
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[tokio::test]
+    async fn download_budget_charges_corrupt_retry_payloads_and_refunds_unused_reservations() {
+        let mut bad = verified_fixtures::article(b"original", 1, 8, 1);
+        let crc = bad.windows(7).position(|w| w == b"pcrc32=").unwrap() + 7;
+        bad[crc..crc + 8].copy_from_slice(b"00000000");
+        let good = verified_fixtures::article(b"original", 1, 8, 1);
+        let expected = bad.len() as u64 + good.len() as u64 + 6; // Both NNTP terminators.
+        let (primary, ps) = verified_fixtures::provider(std::collections::HashMap::from([("part".into(), bad)])).await;
+        let (secondary, ss) = verified_fixtures::provider(std::collections::HashMap::from([("part".into(), good)])).await;
+        let pool = Pool::new_verified(&[primary, secondary], true);
+        let budget = FetchBudget::new(1024 * 1024);
+        assert!(matches!(pool.fetch_decoded_budgeted("", "part", &budget).await.unwrap(), DecodedFetch::Found(_)));
+        assert_eq!(budget.used(), expected);
+        let tiny = FetchBudget::new(20);
+        assert!(pool.fetch_decoded_budgeted("", "part", &tiny).await.is_err());
+        assert_eq!(tiny.used(), 20, "a truncated attempt cannot refund bytes it might have consumed");
+        ps.abort(); ss.abort();
     }
 }

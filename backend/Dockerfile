@@ -15,7 +15,7 @@ RUN touch src/main.rs && cargo build --locked --release
 FROM debian:bookworm-slim AS base
 # ffmpeg + fpcalc (libchromaprint-tools) power the skip-intro worker.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg libchromaprint-tools ca-certificates \
+ && apt-get install -y --no-install-recommends ffmpeg libchromaprint-tools ca-certificates par2 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/velvet-backend /usr/local/bin/velvet-backend
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/velvet-backend/

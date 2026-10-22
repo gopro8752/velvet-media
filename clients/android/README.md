@@ -24,15 +24,38 @@ Use JDK 17 and the Android command-line tools or Android Studio. Install Android
 ```sh
 export JAVA_HOME=/path/to/jdk-17
 export ANDROID_HOME=/path/to/android-sdk
-./gradlew :app:testDebugUnitTest :app:assembleRelease :app:lintRelease
+./gradlew :app:testStableDebugUnitTest :app:assembleStableRelease :app:lintStableRelease
 node --test tests/sports-startup.test.cjs
 ```
 
-Gradle downloads its pinned toolchain dependencies from the configured upstream repositories. The client supports Android 8.0/API 26 or newer. Release builds produce **unsigned** APKs for `arm64-v8a`, `armeabi-v7a`, and `x86_64` under `app/build/outputs/apk/release/`. Choose the ABI supported by your device.
+Gradle downloads its pinned toolchain dependencies from the configured upstream repositories. The client supports Android 8.0/API 26 or newer. Release builds produce **unsigned** APKs for `arm64-v8a`, `armeabi-v7a`, and `x86_64` under `app/build/outputs/apk/stable/release/`. Choose the ABI supported by your device.
 
-Sign and align release APKs using your own Android signing key and the Android SDK's `zipalign`/`apksigner` tools. Keep signing material and passwords outside the repository. Debug builds (`./gradlew :app:assembleDebug`) use your local Android debug key. No release signing key or publisher credentials are included.
+Sign and align release APKs using your own Android signing key and the Android SDK's `zipalign`/`apksigner` tools. Keep signing material and passwords outside the repository. Debug builds (`./gradlew :app:assembleStableDebug`) use your local Android debug key. No release signing key or publisher credentials are included.
 
 To use [Velour](../../launcher/README.md), sign **both applications with the same certificate**. Velvet protects its launcher data provider and launch entry point with a signature permission. Independently signed copies cannot read that data. An existing installation signed with a different key cannot be updated by your build; use your own test device or app identifier while developing.
+
+## Recovery beta
+
+Build the isolated app with `./gradlew :app:testBetaDebugUnitTest :app:assembleBetaDebug`.
+The resulting `app/build/outputs/apk/beta/debug/` APKs install as **Velvet Beta**
+(`tv.velvet.beta`, version suffix `-beta`) alongside stable Velvet. Its preferences,
+profiles, launcher permission/provider, and playback receiver identity are separate.
+The installed stable Velour launcher continues opening stable Velvet.
+
+Configure the beta app with a separate beta backend URL and token at runtime. No
+backend or private credentials are embedded. The beta sends playback position,
+measured duration, buffered position, a temporary session ID, and a seek generation
+to the configured backend's `/stream/:id/playback` endpoint while a native stream is
+open; leaving playback sends a stop. Other sources and older servers keep normal
+fallback behavior. Position reports contain no title, profile, or provider secret.
+
+**Playback options → Recovery beta** shows server status and verified seconds ahead
+only when the backend has a trustworthy media-time index, plus PAR2 phase and charged repair
+download budget when available (including conservative charges for partial failures). A missing index displays
+an explicit unavailable value. Repairs do not add a toast or overlay to playback.
+Fresh recovery work can defer speculative source changes; actual player errors and
+the ordinary stall deadline still fail over. A different release is not guaranteed
+to preserve the same scene, audio, or encoding boundaries.
 
 ## Source layout
 

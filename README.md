@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/assets/velvet-hero.svg" alt="Velvet — Your library. Your screens. Your server." width="100%"></p>
 
+> **Recovery beta:** This branch adds experimental exact-byte recovery and packet-indexed read-ahead. Use a separate backend and the **Velvet Beta** Android app. See [beta setup, limits, and validation](BETA.md). The stable release remains on [`main`](https://github.com/gopro8752/velvet-media/tree/main).
+
 <p align="center">
   <a href="#get-started">Get started</a> ·
   <a href="#on-the-big-screen">Screenshots</a> ·

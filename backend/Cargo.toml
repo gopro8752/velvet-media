@@ -31,6 +31,7 @@ thiserror = "1"
 futures = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 flate2 = "1"
+md5 = "0.7"
 
 [profile.release]
 opt-level = 3

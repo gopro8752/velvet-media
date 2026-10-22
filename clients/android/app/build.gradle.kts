@@ -19,6 +19,20 @@ android {
         versionName = "1.12.1"
     }
 
+    flavorDimensions += "channel"
+    productFlavors {
+        create("stable") {
+            dimension = "channel"
+            buildConfigField("boolean", "RECOVERY_BETA", "false")
+        }
+        create("beta") {
+            dimension = "channel"
+            applicationIdSuffix = ".beta"
+            versionNameSuffix = "-beta"
+            buildConfigField("boolean", "RECOVERY_BETA", "true")
+        }
+    }
+
     // Keep supported TV architectures without shipping every browser binary to each device.
     splits {
         abi {
@@ -40,6 +54,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources.merges += "/META-INF/AL2.0"

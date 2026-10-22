@@ -1,5 +1,7 @@
 package tv.velvet.data.launcher
 
+import tv.velvet.BuildConfig
+
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -99,7 +101,7 @@ class LauncherSportsRepository(private val context: Context, client: OkHttpClien
                     if (failed.size < SupportedLeagues.size) now else previous.updatedAt, now, failed)
                 suspend fun publish(value: SportsScheduleCache) {
                     context.sportsScheduleStore.edit { it[key] = json.encodeToString(SportsScheduleCache.serializer(), value) }
-                    context.contentResolver.notifyChange(android.net.Uri.parse("content://tv.velvet.launcher/snapshot"), null)
+                    context.contentResolver.notifyChange(android.net.Uri.parse("content://${BuildConfig.APPLICATION_ID}.launcher/snapshot"), null)
                 }
                 publish(result)
                 val available = if (schedule.any { !it.stale && it.status in setOf("scheduled", "live", "delayed") })

@@ -22,18 +22,356 @@ use crate::pool::Pool;
 // sections (never across an `.await`), which keeps the async handlers `Send` and
 // avoids tokio-mutex's higher-ranked-lifetime friction with axum.
 
+/// Packet-indexed ahead buffer. Limits apply to one probe, independently of the
+/// repair engine's disk/job limits. Seconds are reported only from actual packet
+/// timestamps whose bytes are still resident in the verified segment cache.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct BufferConfig {
+    pub enabled: bool,
+    pub lookahead_seconds: u64,
+    pub max_probe_bytes: u64,
+    pub max_probe_seconds: u64,
+    pub max_memory_bytes: usize,
+    pub heartbeat_timeout_seconds: u64,
+    pub ffprobe_binary: String,
+}
+impl Default for BufferConfig {
+    fn default() -> Self {
+        Self { enabled: false, lookahead_seconds: 90, max_probe_bytes: 256 * 1024 * 1024,
+            max_probe_seconds: 40, max_memory_bytes: 256 * 1024 * 1024,
+            heartbeat_timeout_seconds: 15, ffprobe_binary: "ffprobe".into() }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybackRequest {
+    session_id: String,
+    generation: u64,
+    position_ms: u64,
+    #[serde(default)]
+    duration_ms: u64,
+    #[serde(default)]
+    buffered_position_ms: u64,
+    #[serde(default)]
+    playing: bool,
+    #[serde(default)]
+    stopped: bool,
+}
+struct PlaybackPoint { request: PlaybackRequest, at: std::time::Instant }
+#[derive(Default)]
+struct VerifiedBuffer {
+    sessions: HashMap<String, PlaybackPoint>,
+    current_session: String,
+    generation: u64,
+    revision: u64,
+    task: Option<tokio::task::JoinHandle<()>>,
+    probe_token: String,
+    probe_budget: Option<Arc<std::sync::atomic::AtomicU64>>,
+    index_status: &'static str,
+    verified: Option<VerifiedWindow>,
+    updated: Option<std::time::Instant>,
+    last_attempt: Option<std::time::Instant>,
+}
+struct VerifiedWindow {
+    from: f64,
+    through: f64,
+    segments: Vec<String>,
+    repaired_files: Vec<String>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExactRecoveryHealth {
+    enabled: bool,
+    status: &'static str,
+    verified_ahead_seconds: Option<f64>,
+    index_status: &'static str,
+    hold_fallback: bool,
+    lookahead_target_seconds: u64,
+    updated_ago_seconds: Option<f64>,
+}
+impl StreamState {
+    fn buffer_health(&self, entry: &StreamEntry) -> ExactRecoveryHealth {
+        self.buffer_health_for(entry, None, &std::collections::HashSet::new())
+    }
+    fn buffer_health_for(&self, entry: &StreamEntry, session: Option<&str>, verified_files: &std::collections::HashSet<String>) -> ExactRecoveryHealth {
+        let buffer = entry.buffer.lock().unwrap();
+        let active = buffer.sessions.get(&buffer.current_session).filter(|p| {
+            p.at.elapsed().as_secs() <= self.buffer_config.heartbeat_timeout_seconds
+                && !p.request.stopped
+                && session.is_none_or(|id| id == p.request.session_id)
+        });
+        let position = active.map(|p| p.request.position_ms as f64 / 1000.0);
+        let seconds = buffer.verified.as_ref().and_then(|window| {
+            let position = position?;
+            if position + 0.002 < window.from || position > window.through { return None; }
+            if !window.segments.iter().all(|id| self.cache.get(id).is_some())
+                || !window.repaired_files.iter().all(|id| verified_files.contains(id)) { return None; }
+            Some((window.through - position).max(0.0))
+        });
+        ExactRecoveryHealth {
+            enabled: self.repair_enabled,
+            status: if !self.repair_enabled { "disabled" } else if seconds.is_some() { "verified" }
+                else if buffer.task.as_ref().is_some_and(|t| !t.is_finished()) { "checking" } else { "idle" },
+            verified_ahead_seconds: seconds,
+            index_status: if buffer.index_status.is_empty() { "idle" } else { buffer.index_status },
+            // Readers wait for exact repair on the original resource. A real
+            // read failure remains actionable; no indefinite client failover hold.
+            hold_fallback: false,
+            lookahead_target_seconds: self.buffer_config.lookahead_seconds,
+            updated_ago_seconds: buffer.updated.map(|at| at.elapsed().as_secs_f64()),
+        }
+    }
+
+    async fn playback_update(&self, sid: &str, request: PlaybackRequest) -> Result<(), StatusCode> {
+        if request.session_id.is_empty() || request.session_id.len() > 80
+            || !request.session_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || request.position_ms > 7 * 86400 * 1000 || request.duration_ms > 7 * 86400 * 1000
+            || request.buffered_position_ms > 7 * 86400 * 1000 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let entry = self.lookup(sid).ok_or(StatusCode::NOT_FOUND)?;
+        if !self.repair_enabled || !self.buffer_config.enabled { return Ok(()); }
+        let _lifecycle = entry.playback_lock.lock().await;
+        if !request.stopped {
+            let manifest = entry.manifest.lock().unwrap().clone();
+            if let Some(manifest) = manifest {
+                let _ = self.repair.register(sid, manifest).await;
+            }
+        }
+        let mut cancel = false;
+        let spawn = {
+            let mut buffer = entry.buffer.lock().unwrap();
+            let now = std::time::Instant::now();
+            buffer.sessions.retain(|_, p| p.at.elapsed().as_secs() <= self.buffer_config.heartbeat_timeout_seconds * 4);
+            if buffer.sessions.get(&request.session_id).is_some_and(|p| p.request.generation > request.generation) {
+                return Ok(()); // Late stop/heartbeat from the old seek must not cancel a new one.
+            }
+            if buffer.sessions.len() >= 8 && !buffer.sessions.contains_key(&request.session_id) {
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
+            let changed = buffer.current_session != request.session_id || buffer.generation != request.generation;
+            buffer.sessions.insert(request.session_id.clone(), PlaybackPoint { request: request.clone(), at: now });
+            if request.stopped {
+                if buffer.current_session == request.session_id {
+                    if let Some(task) = buffer.task.take() { task.abort(); }
+                    buffer.probe_budget = None;
+                    buffer.probe_token.clear();
+                    buffer.verified = None;
+                    buffer.index_status = "stopped";
+                    buffer.revision += 1;
+                }
+                cancel = !buffer.sessions.values().any(|p| !p.request.stopped && p.at.elapsed().as_secs() <= self.buffer_config.heartbeat_timeout_seconds);
+                None
+            } else if buffer.current_session != request.session_id && buffer.task.as_ref().is_some_and(|task| !task.is_finished()) {
+                // Another viewer of the exact same source must not repeatedly
+                // cancel a bounded probe that is already making progress.
+                None
+            } else {
+                if changed {
+                    if let Some(task) = buffer.task.take() { task.abort(); }
+                    buffer.verified = None;
+                    buffer.current_session = request.session_id.clone();
+                    buffer.generation = request.generation;
+                    buffer.last_attempt = None;
+                    buffer.revision += 1;
+                }
+                let running = buffer.task.as_ref().is_some_and(|t| !t.is_finished());
+                let throttled = buffer.last_attempt.is_some_and(|at| at.elapsed().as_secs() < if request.playing { 8 } else { 30 });
+                let sufficient = buffer.verified.as_ref().is_some_and(|window| {
+                    window.from <= request.position_ms as f64 / 1000.0 + 0.002
+                        && window.through > request.position_ms as f64 / 1000.0 + self.buffer_config.lookahead_seconds as f64 * 0.7
+                        && window.segments.iter().all(|id| self.cache.get(id).is_some())
+                });
+                if running || throttled || sufficient { None } else {
+                    buffer.last_attempt = Some(now);
+                    buffer.index_status = "indexing";
+                    buffer.revision += 1;
+                    Some(buffer.revision)
+                }
+            }
+        };
+        if cancel { self.repair.cancel(sid).await; }
+        if let Some(revision) = spawn {
+            let state = self.clone();
+            let sid = sid.to_owned();
+            let task_entry = entry.clone();
+            let task = tokio::spawn(async move { state.index_ahead(&sid, task_entry, request, revision).await; });
+            entry.buffer.lock().unwrap().task = Some(task);
+        }
+        Ok(())
+    }
+
+    async fn index_ahead(&self, sid: &str, entry: Arc<StreamEntry>, point: PlaybackRequest, revision: u64) {
+        let timeout = std::time::Duration::from_secs(self.buffer_config.max_probe_seconds.clamp(1, 120));
+        let result = tokio::time::timeout(timeout, self.index_ahead_inner(sid, &entry, &point, revision)).await;
+        let expired = matches!(&result, Ok(Err(reason)) if *reason == "heartbeat-expired");
+        {
+            let mut buffer = entry.buffer.lock().unwrap();
+            if buffer.revision != revision { return; }
+            buffer.probe_budget = None;
+            buffer.probe_token.clear();
+            buffer.updated = Some(std::time::Instant::now());
+            match result {
+                Ok(Ok(window)) => { buffer.verified = Some(window); buffer.index_status = "packet-indexed"; }
+                Ok(Err(reason)) => { buffer.verified = None; buffer.index_status = reason; }
+                Err(_) => { buffer.verified = None; buffer.index_status = "probe-timeout"; }
+            }
+        }
+        if expired {
+            // Serialize the last-viewer cleanup with a new session arriving, so
+            // an old heartbeat expiry cannot remove newly registered repair data.
+            let _lifecycle = entry.playback_lock.lock().await;
+            let active = entry.buffer.lock().unwrap().sessions.values().any(|p| !p.request.stopped && p.at.elapsed().as_secs() <= self.buffer_config.heartbeat_timeout_seconds);
+            if !active { self.repair.cancel(sid).await; }
+        }
+    }
+
+    async fn index_ahead_inner(&self, sid: &str, entry: &Arc<StreamEntry>, point: &PlaybackRequest, revision: u64) -> Result<VerifiedWindow, &'static str> {
+        use tokio::io::AsyncReadExt;
+        let _slot = self.buffer_slots.acquire().await.map_err(|_| "unavailable")?;
+        let mut random = [0u8; 16];
+        getrandom::getrandom(&mut random).map_err(|_| "unavailable")?;
+        let token = random.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        {
+            let mut buffer = entry.buffer.lock().unwrap();
+            if buffer.revision != revision { return Err("cancelled"); }
+            buffer.probe_token = token.clone();
+            buffer.probe_budget = Some(Arc::new(std::sync::atomic::AtomicU64::new(self.buffer_config.max_probe_bytes.min(1024 * 1024 * 1024))));
+        }
+        let start = point.position_ms as f64 / 1000.0;
+        let end = if point.duration_ms > point.position_ms {
+            (start + self.buffer_config.lookahead_seconds.clamp(5, 300) as f64).min(point.duration_ms as f64 / 1000.0)
+        } else { start + self.buffer_config.lookahead_seconds.clamp(5, 300) as f64 };
+        let mut command = tokio::process::Command::new(&self.buffer_config.ffprobe_binary);
+        command.args(["-v", "error", "-threads", "1", "-max_alloc", "16777216", "-protocol_whitelist", "http,tcp", "-format_whitelist", "matroska,webm,mov,mp4,m4a,3gp,3g2,mj2,avi,mpegts,mpeg", "-rw_timeout", "15000000", "-headers", &format!("X-Velvet-Probe: {token}\r\n"),
+            "-read_intervals", &format!("{start:.3}%{end:.3}"), "-show_packets", "-show_streams", "-show_entries",
+            "packet=stream_index,pos,size,pts_time,dts_time,duration_time:stream=index,codec_type", "-of", "json", &format!("{}/stream/{sid}", self.local_origin)]);
+        command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
+        let mut child = command.spawn().map_err(|_| "ffprobe-unavailable")?;
+        let stdout = child.stdout.take().ok_or("ffprobe-unavailable")?;
+        let read = async move {
+            let mut bytes = Vec::new();
+            stdout.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes).await.map_err(|_| "probe-failed")?;
+            if bytes.len() > 16 * 1024 * 1024 { return Err("index-limit"); }
+            Ok(bytes)
+        };
+        let stale = async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let current = entry.buffer.lock().unwrap();
+                if current.revision != revision || current.sessions.get(&point.session_id).is_none_or(|p| p.at.elapsed().as_secs() > self.buffer_config.heartbeat_timeout_seconds) {
+                    return;
+                }
+            }
+        };
+        let bytes = tokio::select! {
+            result = read => result?,
+            _ = stale => { let _ = child.kill().await; return Err("heartbeat-expired"); }
+        };
+        if !child.wait().await.map_err(|_| "probe-failed")?.success() { return Err("unsupported-or-unavailable"); }
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "invalid-index")?;
+        let file_ids = {
+            let loaded = entry.loaded.lock().unwrap();
+            loaded.as_ref().map(|loaded| loaded.extents.iter().filter_map(|ext| ext.segments.first().map(|segment| segment.message_id.clone())).collect::<Vec<_>>()).unwrap_or_default()
+        };
+        let mut verified_files = std::collections::HashSet::new();
+        for id in file_ids {
+            if self.repair.verified_file(sid, &id).await { verified_files.insert(id); }
+        }
+        self.verified_packet_window(entry, &value, start, end, &verified_files)
+    }
+
+    fn verified_packet_window(&self, entry: &StreamEntry, value: &serde_json::Value, start: f64, end: f64, verified_files: &std::collections::HashSet<String>) -> Result<VerifiedWindow, &'static str> {
+        let loaded = entry.loaded.lock().unwrap();
+        let loaded = loaded.as_ref().ok_or("not-loaded")?;
+        let streams = value["streams"].as_array().ok_or("no-index")?;
+        let mut tracks: HashMap<u64, Vec<(f64, f64)>> = streams.iter().filter(|v| matches!(v["codec_type"].as_str(), Some("audio" | "video")))
+            .filter_map(|v| v["index"].as_u64().map(|i| (i, Vec::new()))).collect();
+        if tracks.is_empty() { return Err("no-media-tracks"); }
+        let mut spans = Vec::new();
+        {
+            let cache = self.cache.inner.lock().unwrap();
+            for (ei, ext) in loaded.extents.iter().enumerate() {
+                if let Some(id) = ext.segments.first().map(|segment| &segment.message_id).filter(|id| verified_files.contains(*id)) {
+                    // A PAR2-verified immutable original file proves every byte
+                    // of this extent, including consecutive missing articles
+                    // whose individual yEnc boundaries cannot be guessed.
+                    spans.push((loaded.ext_media_start[ei], loaded.ext_media_start[ei] + ext.data_len, id.clone(), true));
+                    continue;
+                }
+                for segment in ext.segments.iter() {
+                    if let Some((data, from)) = cache.map.get(&segment.message_id) {
+                        let begin = (*from).max(ext.data_start);
+                        let finish = (*from + data.len() as u64).min(ext.data_start + ext.data_len);
+                        if begin < finish {
+                            spans.push((loaded.ext_media_start[ei] + begin - ext.data_start,
+                                loaded.ext_media_start[ei] + finish - ext.data_start, segment.message_id.clone(), false));
+                        }
+                    }
+                }
+            }
+        }
+        spans.sort_by_key(|span| span.0);
+        let mut ids = std::collections::HashSet::new();
+        let mut repaired_files = std::collections::HashSet::new();
+        for packet in value["packets"].as_array().ok_or("no-packets")? {
+            let Some(track) = packet["stream_index"].as_u64().and_then(|i| tracks.get_mut(&i)) else { continue };
+            let time = packet["pts_time"].as_str().or_else(|| packet["dts_time"].as_str()).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).ok_or("untimed-packets")?;
+            let duration = packet["duration_time"].as_str().and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
+            let pos = packet["pos"].as_str().and_then(|v| v.parse::<u64>().ok()).ok_or("no-byte-index")?;
+            let size = packet["size"].as_str().and_then(|v| v.parse::<u64>().ok()).filter(|v| *v > 0).ok_or("no-byte-index")?;
+            let last = pos.checked_add(size).filter(|last| *last <= loaded.total_size).ok_or("invalid-byte-index")?;
+            let mut offset = pos;
+            while offset < last {
+                let index = spans.partition_point(|span| span.0 <= offset).checked_sub(1).ok_or("verified-bytes-evicted")?;
+                let span = &spans[index];
+                if span.1 <= offset { return Err("verified-bytes-evicted"); }
+                if span.3 { repaired_files.insert(span.2.clone()); } else { ids.insert(span.2.clone()); }
+                offset = span.1.min(last);
+            }
+            track.push((time, time + duration));
+        }
+        let mut from = f64::NEG_INFINITY;
+        let mut through = end;
+        for packets in tracks.values_mut() {
+            packets.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let Some(first) = packets.first() else { return Err("incomplete-packet-index"); };
+            from = from.max(first.0);
+            let mut covered = first.1;
+            for packet in packets.iter().skip(1) {
+                // Timestamp gaps are not treated as verified playback. Small
+                // rounding differences in the container timebase are expected.
+                if packet.0 > covered + 0.002 { return Err("discontinuous-packet-index"); }
+                covered = covered.max(packet.1);
+            }
+            through = through.min(covered);
+        }
+        if !from.is_finite() || !through.is_finite() || from > start + 0.002 || through <= start { return Err("incomplete-packet-index"); }
+        Ok(VerifiedWindow { from, through, segments: ids.into_iter().collect(), repaired_files: repaired_files.into_iter().collect() })
+    }
+}
+
+async fn playback(State(st): State<StreamState>, Path(id): Path<String>, Json(request): Json<PlaybackRequest>) -> Response {
+    match st.playback_update(&id, request).await { Ok(()) => StatusCode::NO_CONTENT.into_response(), Err(status) => status.into_response() }
+}
+
 /// A stream the resolver has registered (id → how to obtain it). The media layout
 /// is learned lazily on first playback and cached.
 struct StreamEntry {
     nzb_url: String,
     loaded: Mutex<Option<Loaded>>,
+    manifest: Mutex<Option<Arc<crate::nzb::Nzb>>>,
     /// Single-flight for the heavy load (NZB download + volume-header fetches):
     /// a serve arriving while a warm is mid-load WAITS for it instead of doing
     /// the whole thing again in parallel (async mutex — held across awaits).
     load_lock: tokio::sync::Mutex<()>,
     verify_lock: tokio::sync::Mutex<()>,
+    playback_lock: tokio::sync::Mutex<()>,
     verification_attempt: Mutex<Option<std::time::Instant>>,
     recovery: Mutex<Recovery>,
+    buffer: Mutex<VerifiedBuffer>,
 }
 
 #[derive(Default)]
@@ -61,12 +399,16 @@ struct RecoveryHealth {
     status: &'static str,
     stream_id: Option<String>,
     prepared_fraction: Option<f64>,
+    /// A different release remains an explicit player restart fallback.
+    seamless: bool,
 }
 
 #[derive(Serialize)]
 struct StreamHealth {
     status: &'static str,
     recovery: RecoveryHealth,
+    #[serde(rename = "exactRecovery")]
+    exact_recovery: ExactRecoveryHealth,
 }
 
 /// The media file as a list of extents — one for a raw post, several for a RAR5
@@ -147,15 +489,29 @@ pub struct StreamState {
     /// Bound candidate preparation across all viewers. Playback never acquires
     /// this semaphore and continues while alternate releases are prepared.
     recovery_slots: Arc<tokio::sync::Semaphore>,
+    pub repair: crate::repair::RepairRegistry,
+    repair_enabled: bool,
+    buffer_config: BufferConfig,
+    local_origin: String,
+    buffer_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl StreamState {
     pub fn new(pool: Arc<Pool>, http: reqwest::Client, db: crate::db::Db) -> StreamState {
+        Self::with_recovery(pool, http, db, Default::default(), Default::default(), String::new())
+    }
+
+    pub fn with_recovery(pool: Arc<Pool>, http: reqwest::Client, db: crate::db::Db, repair_config: crate::repair::RepairConfig, buffer_config: BufferConfig, local_origin: String) -> StreamState {
         StreamState {
+            repair: crate::repair::RepairRegistry::new(repair_config.clone(), pool.clone()),
+            repair_enabled: repair_config.enabled,
+            buffer_config: buffer_config.clone(),
+            local_origin,
+            buffer_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             pool,
             http,
             // ~256MB of decoded segments ≈ 15 warmed titles at 24 segments each.
-            cache: SegCache::new(256 * 1024 * 1024),
+            cache: SegCache::new(buffer_config.max_memory_bytes.clamp(4 * 1024 * 1024, 1024 * 1024 * 1024)),
             db,
             streams: Arc::new(Mutex::new(HashMap::new())),
             warmed: Arc::new(Mutex::new(HashMap::new())),
@@ -168,6 +524,7 @@ impl StreamState {
     /// its articles are still filling in, so an old verdict earns one re-check
     /// (still bad → re-condemned with a fresh timestamp, costing one failover).
     pub fn is_condemned(&self, nzb_url: &str) -> bool {
+        if self.repair_enabled { return false; }
         let sid = fnv_hex(nzb_url.as_bytes());
         let conn = self.db.lock().unwrap();
         conn.query_row(
@@ -233,10 +590,13 @@ impl StreamState {
         Arc::new(StreamEntry {
             nzb_url,
             loaded: Mutex::new(None),
+            manifest: Mutex::new(None),
             load_lock: tokio::sync::Mutex::new(()),
             verify_lock: tokio::sync::Mutex::new(()),
+            playback_lock: tokio::sync::Mutex::new(()),
             verification_attempt: Mutex::new(None),
             recovery: Mutex::new(Recovery::default()),
+            buffer: Mutex::new(VerifiedBuffer::default()),
         })
     }
 
@@ -313,12 +673,14 @@ impl StreamState {
         });
         Some(StreamHealth {
             status,
+            exact_recovery: self.buffer_health(&entry),
             recovery: RecoveryHealth {
                 status: if ready.is_some() { "ready" } else if recovery.preparing {
                     "preparing"
                 } else if recovery.attempted { "unavailable" } else { "idle" },
                 stream_id: ready.map(|p| p.sid.clone()),
                 prepared_fraction: ready.map(|p| p.fraction),
+                seamless: false,
             },
         })
     }
@@ -393,6 +755,11 @@ async fn verify_stream_inner(
     };
     let health = st.pool.completeness(&ids).await;
     let ok = health.is_complete();
+    if st.repair_enabled && !ok {
+        // A missing STAT is a repair opportunity, not proof that original bytes
+        // cannot be recovered. Only the actual bounded reader may fail.
+        return Ok(true);
+    }
     if !ok && health.missing == 0 {
         anyhow::bail!("verification incomplete: providers temporarily unavailable");
     }
@@ -465,14 +832,14 @@ async fn warm_region(st: &StreamState, sid: &str, fraction: Option<f64>) -> anyh
         let outcomes = futures::stream::iter(jobs)
             .map(|(ei, idx)| {
                 let ext = &extents[ei];
-                let pool = st.pool.clone();
+                let state = st.clone();
+                let sid = sid.to_string();
                 let cache = st.cache.clone();
                 let group = ext.group.clone();
                 let seg = ext.segments[idx].clone();
                 let part_size = ext.part_size;
                 async move {
-                    let _background = pool.background_permit().await;
-                    let (data, start) = fetch_streaming(&pool, &cache, &group, &seg, part_size, idx).await?;
+                    let (data, start) = fetch_recovering(&state, &sid, &group, &seg, part_size, idx, true).await?;
                     cache.put(&seg.message_id, data, start);
                     Ok::<_, FetchFailure>(seg.message_id)
                 }
@@ -484,7 +851,7 @@ async fn warm_region(st: &StreamState, sid: &str, fraction: Option<f64>) -> anyh
             match outcome {
                 Ok(id) => warmed_ids.push(id),
                 Err(error) => {
-                    if error.confirmed_bad() { st.condemn_sid(sid, error.reason()); }
+                    if error.confirmed_bad() && !st.repair_enabled { st.condemn_sid(sid, error.reason()); }
                     anyhow::bail!("{}", error.reason());
                 }
             }
@@ -573,9 +940,21 @@ async fn prepare(State(st): State<StreamState>, Path(id): Path<String>, Json(req
     } else { StatusCode::NOT_FOUND.into_response() }
 }
 
-async fn health(State(st): State<StreamState>, Path(id): Path<String>) -> Response {
+async fn health(State(st): State<StreamState>, Path(id): Path<String>, axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>) -> Response {
     match st.health(&id) {
-        Some(health) => ([(header::CACHE_CONTROL, "no-store")], Json(health)).into_response(),
+        Some(mut health) => {
+            if let Some(entry) = st.lookup(&id) {
+                let file_ids = entry.buffer.lock().unwrap().verified.as_ref().map(|window| window.repaired_files.clone()).unwrap_or_default();
+                let mut verified_files = std::collections::HashSet::new();
+                for file in file_ids {
+                    if st.repair.verified_file(&id, &file).await { verified_files.insert(file); }
+                }
+                health.exact_recovery = st.buffer_health_for(&entry, query.get("sessionId").map(String::as_str), &verified_files);
+            }
+            let mut value = serde_json::to_value(health).unwrap_or_default();
+            value["repair"] = serde_json::to_value(st.repair.status(&id).await).unwrap_or_default();
+            ([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response()
+        },
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -586,6 +965,7 @@ pub fn router(state: StreamState) -> axum::Router {
         .route("/stream/:id", axum::routing::get(serve))
         .route("/stream/:id/prepare", axum::routing::post(prepare))
         .route("/stream/:id/health", axum::routing::get(health))
+        .route("/stream/:id/playback", axum::routing::post(playback))
         .with_state(state)
 }
 
@@ -615,7 +995,7 @@ async fn serve(
     match complete {
         // Verified holes: refuse so the app fails over at a clean request
         // boundary — never let the parser hit a zero-filled gap mid-scene.
-        Some(false) => {
+        Some(false) if !st.repair_enabled => {
             return (StatusCode::BAD_GATEWAY, "source has missing articles").into_response();
         }
         // Not verified yet: serve optimistically (never block byte 0) and let a
@@ -629,7 +1009,7 @@ async fn serve(
                 let _ = verify_stream(&vst, &vid).await;
             });
         }
-        Some(true) => {}
+        Some(true) | Some(false) => {}
     }
 
     // Parse a single Range: `bytes=start-end` (end optional).
@@ -638,8 +1018,17 @@ async fn serve(
         None => return (StatusCode::RANGE_NOT_SATISFIABLE, "bad range").into_response(),
     };
 
+    let probe_budget = {
+        let buffer = entry.buffer.lock().unwrap();
+        headers.get("x-velvet-probe").and_then(|v| v.to_str().ok())
+            .filter(|v| !buffer.probe_token.is_empty() && *v == buffer.probe_token)
+            .and_then(|_| buffer.probe_budget.clone())
+    };
+    if headers.contains_key("x-velvet-probe") && probe_budget.is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let gen = StreamGen {
-        pool: st.pool.clone(),
+        probe_budget,
         extents,
         ext_media_start,
         media_pos: start,
@@ -648,7 +1037,6 @@ async fn serve(
         seg_idx: 0,
         positioned: false,
         inflight: std::collections::VecDeque::new(),
-        cache: st.cache.clone(),
         state: st.clone(),
         sid: id.clone(),
     };
@@ -671,6 +1059,10 @@ async fn serve(
 async fn ensure_loaded(st: StreamState, entry: Arc<StreamEntry>) -> anyhow::Result<()> {
     // Fast path: already loaded (brief lock, no await held).
     if entry.loaded.lock().unwrap().is_some() {
+        if st.repair_enabled {
+            let manifest = entry.manifest.lock().unwrap().clone();
+            if let Some(manifest) = manifest { let _ = st.repair.register(&fnv_hex(entry.nzb_url.as_bytes()), manifest).await; }
+        }
         return Ok(());
     }
     // Single-flight: whoever holds the lock does the load; everyone else waits
@@ -692,7 +1084,14 @@ async fn ensure_loaded(st: StreamState, entry: Arc<StreamEntry>) -> anyhow::Resu
         .error_for_status()?
         .bytes()
         .await?;
-    let parsed = crate::nzb::parse(&nzb_bytes)?;
+    let parsed = Arc::new(crate::nzb::parse(&nzb_bytes)?);
+    *entry.manifest.lock().unwrap() = Some(parsed.clone());
+    let sid = fnv_hex(entry.nzb_url.as_bytes());
+    if st.repair_enabled {
+        if st.repair.register(&sid, parsed.clone()).await.is_err() {
+            tracing::debug!("stream {sid}: bounded repair registration unavailable");
+        }
+    }
 
     // Build the media as extents: a raw media file → one extent; otherwise try to
     // stream from inside a store-mode archive — RAR5 volumes (many extents) or a
@@ -704,7 +1103,17 @@ async fn ensure_loaded(st: StreamState, entry: Arc<StreamEntry>) -> anyhow::Resu
         let group = file.groups.first().cloned().unwrap_or_default();
         let segments = file.segments.clone();
         let first = segments.first().ok_or_else(|| anyhow::anyhow!("no segments"))?;
-        let (part_size, total) = match st.pool.fetch(&group, &first.message_id).await {
+        let (part_size, total) = if st.repair_enabled {
+            let decoded = match st.pool.fetch_decoded(&group, &first.message_id).await {
+                crate::pool::DecodedFetch::Found(decoded) => decoded,
+                _ => st.repair.recover(&sid, &first.message_id).await.map_err(|_| anyhow::anyhow!("initial article could not be recovered"))?,
+            };
+            let _ = st.repair.remember(&sid, &first.message_id, &decoded).await;
+            let part = decoded.data.len() as u64;
+            let total = decoded.total_size.ok_or_else(|| anyhow::anyhow!("initial article missing exact total size"))?;
+            st.cache.put(&first.message_id, decoded.data, decoded.part_begin.unwrap_or(1) - 1);
+            (part, total)
+        } else { match st.pool.fetch(&group, &first.message_id).await {
             crate::pool::Fetched::Found(raw) => {
                 let dec = crate::yenc::decode(&raw)?;
                 let part = dec.data.len() as u64;
@@ -714,7 +1123,7 @@ async fn ensure_loaded(st: StreamState, entry: Arc<StreamEntry>) -> anyhow::Resu
                 let part = first.bytes.saturating_sub(first.bytes / 40).max(1);
                 (part, part * segments.len() as u64)
             }
-        };
+        }};
         let extent = Extent {
             segments: Arc::new(segments),
             group,
@@ -783,7 +1192,7 @@ const LOOKAHEAD: usize = 32;
 /// current extent, in order), so the server buffers AHEAD of the playhead and one
 /// slow article no longer stalls the stream.
 struct StreamGen {
-    pool: Arc<Pool>,
+    probe_budget: Option<Arc<std::sync::atomic::AtomicU64>>,
     extents: Arc<Vec<Extent>>,
     ext_media_start: Arc<Vec<u64>>,
     /// Absolute media offset to emit next.
@@ -796,8 +1205,6 @@ struct StreamGen {
     positioned: bool,
     /// Spawned fetches for segments `seg_idx..seg_idx+len` of the current extent.
     inflight: std::collections::VecDeque<tokio::task::JoinHandle<Result<(Vec<u8>, u64), FetchFailure>>>,
-    /// Warm cache — consulted before NNTP so pre-warmed titles start instantly.
-    cache: Arc<SegCache>,
     /// For condemning the release when a hole is discovered mid-stream.
     state: StreamState,
     sid: String,
@@ -837,6 +1244,7 @@ async fn fetch_streaming(
         crate::pool::CheckedFetch::Found(raw) => match crate::yenc::decode(&raw) {
             Ok(d) if !d.data.is_empty() => {
                 let start = d.part_begin.and_then(|b| b.checked_sub(1)).unwrap_or(idx as u64 * part_size);
+                cache.put(&seg.message_id, d.data.clone(), start);
                 Ok((d.data, start))
             }
             _ => Err(FetchFailure::Corrupt),
@@ -844,6 +1252,37 @@ async fn fetch_streaming(
         crate::pool::CheckedFetch::Missing => Err(FetchFailure::Missing),
         crate::pool::CheckedFetch::Unavailable => Err(FetchFailure::Unavailable),
     }
+}
+
+/// Beta reads preserve exact original-file offsets and the HTTP resource. Every
+/// ordinary successful fetch is persisted, so repair can reuse already verified
+/// data. A failed speculative fetch never poisons concurrent range requests.
+async fn fetch_recovering(st: &StreamState, sid: &str, group: &str, seg: &crate::nzb::Segment, part_size: u64, idx: usize, background: bool) -> Result<(Vec<u8>, u64), FetchFailure> {
+    if !st.repair_enabled { return fetch_streaming(&st.pool, &st.cache, group, seg, part_size, idx).await; }
+    if let Some((data, start)) = st.cache.get(&seg.message_id) { return Ok((data.as_ref().clone(), start)); }
+    let decoded = if let Some(decoded) = st.repair.read(sid, &seg.message_id).await { decoded }
+    else {
+        let attempt = {
+            let _background = if background { Some(st.pool.background_permit().await) } else { None };
+            st.pool.fetch_decoded(group, &seg.message_id).await
+        };
+        match attempt {
+            crate::pool::DecodedFetch::Found(decoded) => {
+                let _ = st.repair.remember(sid, &seg.message_id, &decoded).await;
+                decoded
+            }
+            failure => {
+                st.repair.recover(sid, &seg.message_id).await.map_err(|_| match failure {
+                    crate::pool::DecodedFetch::Missing => FetchFailure::Missing,
+                    crate::pool::DecodedFetch::Corrupt => FetchFailure::Corrupt,
+                    _ => FetchFailure::Unavailable,
+                })?
+            }
+        }
+    };
+    let start = decoded.part_begin.unwrap_or(1).checked_sub(1).ok_or(FetchFailure::Corrupt)?;
+    st.cache.put(&seg.message_id, decoded.data.clone(), start);
+    Ok((decoded.data, start))
 }
 
 impl Drop for StreamGen {
@@ -870,24 +1309,29 @@ impl StreamGen {
         let last_vol_off = ext.data_start + (self.end.min(ext_end) - ext_start).saturating_sub(1);
         let last_needed = ((last_vol_off / ext.part_size.max(1)) as usize + 1)
             .min(ext.segments.len().saturating_sub(1));
-        while self.inflight.len() < LOOKAHEAD {
+        let count = if self.state.repair_enabled {
+            let byte_limit = self.probe_budget.as_ref().map(|b| b.load(std::sync::atomic::Ordering::Relaxed))
+                .unwrap_or(self.state.buffer_config.max_memory_bytes as u64 / 4);
+            (byte_limit / (crate::nntp::MAX_ARTICLE_BYTES as u64).max(ext.part_size)).clamp(1, LOOKAHEAD as u64) as usize
+        } else { LOOKAHEAD };
+        while self.inflight.len() < count {
             let idx = self.seg_idx + self.inflight.len();
             if idx > last_needed {
                 break;
             }
-            let pool = self.pool.clone();
-            let cache = self.cache.clone();
+
             let group = ext.group.clone();
             let seg = ext.segments[idx].clone();
             let part_size = ext.part_size;
             let state = self.state.clone();
             let sid = self.sid.clone();
+            let background = self.probe_budget.is_some();
             self.inflight.push_back(tokio::spawn(async move {
-                let result = fetch_streaming(&pool, &cache, &group, &seg, part_size, idx).await;
+                let result = fetch_recovering(&state, &sid, &group, &seg, part_size, idx, background).await;
                 // Report as soon as a look-ahead task discovers a hole, before
                 // ordered emission (and hence the viewer) reaches that article.
                 if let Err(error) = &result {
-                    if error.confirmed_bad() { state.condemn_sid(&sid, error.reason()); }
+                    if error.confirmed_bad() && !state.repair_enabled { state.condemn_sid(&sid, error.reason()); }
                 }
                 result
             }));
@@ -914,6 +1358,25 @@ impl StreamGen {
 
             // Volume-relative offset for the current media position.
             let vol_off = ext.data_start + (self.media_pos - ext_start);
+            if self.state.repair_enabled {
+                if let Some(first) = ext.segments.first() {
+                    let take = ext.part_size.min(ext_end - self.media_pos).min(self.end - self.media_pos).min(4 * 1024 * 1024) as usize;
+                    if let Ok(Some(bytes)) = self.state.repair.read_range(&self.sid, &first.message_id, vol_off, take).await {
+                        if !bytes.is_empty() {
+                            self.abort_inflight();
+                            if let Some(budget) = &self.probe_budget {
+                                if budget.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |remaining| remaining.checked_sub(bytes.len() as u64)).is_err() {
+                                    self.media_pos = self.end;
+                                    return Some((Err(std::io::Error::other("probe byte limit")), self));
+                                }
+                            }
+                            self.media_pos += bytes.len() as u64;
+                            self.positioned = false;
+                            return Some((Ok(Bytes::from(bytes)), self));
+                        }
+                    }
+                }
+            }
             if !self.positioned {
                 self.seg_idx = ((vol_off / ext.part_size.max(1)) as usize)
                     .min(ext.segments.len().saturating_sub(1));
@@ -934,18 +1397,29 @@ impl StreamGen {
                         Ok(res) => res,
                         // Join failure (shouldn't happen) — fall back to a direct fetch.
                         Err(_) => {
-                            fetch_streaming(&self.pool, &self.cache, &ext.group, &ext.segments[self.seg_idx], ext.part_size, self.seg_idx).await
+                            fetch_recovering(&self.state, &self.sid, &ext.group, &ext.segments[self.seg_idx], ext.part_size, self.seg_idx, self.probe_budget.is_some()).await
                         }
                     },
                     None => {
-                        fetch_streaming(&self.pool, &self.cache, &ext.group, &ext.segments[self.seg_idx], ext.part_size, self.seg_idx).await
+                        fetch_recovering(&self.state, &self.sid, &ext.group, &ext.segments[self.seg_idx], ext.part_size, self.seg_idx, self.probe_budget.is_some()).await
                     }
                 }
             } else {
                 // Positioning: serial adaptive fetch until the exact segment for
                 // media_pos is found (=ypart is ground truth, estimates can drift).
-                fetch_streaming(&self.pool, &self.cache, &ext.group, &ext.segments[self.seg_idx], ext.part_size, self.seg_idx).await
+                fetch_recovering(&self.state, &self.sid, &ext.group, &ext.segments[self.seg_idx], ext.part_size, self.seg_idx, self.probe_budget.is_some()).await
             };
+            let fetched = if self.state.repair_enabled && fetched.is_err() {
+                // PAR2 verifies whole original files. Consecutive absent articles
+                // need not have guessable boundaries: read the exact original
+                // file offset required by this HTTP range instead.
+                let id = &ext.segments[self.seg_idx].message_id;
+                let take = ext.part_size.min(ext_end - self.media_pos).min(self.end - self.media_pos).min(4 * 1024 * 1024) as usize;
+                match self.state.repair.read_range(&self.sid, id, vol_off, take).await {
+                    Ok(Some(bytes)) if !bytes.is_empty() => Ok((bytes, vol_off)),
+                    _ => fetched,
+                }
+            } else { fetched };
             let (decoded, seg_start) = match fetched {
                 Ok(value) => value,
                 Err(error) => {
@@ -957,7 +1431,7 @@ impl StreamGen {
                     "stream {}: {} at media {}, aborting transfer",
                     self.sid, error.reason(), self.media_pos,
                 );
-                if error.confirmed_bad() { self.state.condemn_sid(&self.sid, error.reason()); }
+                if error.confirmed_bad() && !self.state.repair_enabled { self.state.condemn_sid(&self.sid, error.reason()); }
                 self.abort_inflight();
                 self.media_pos = self.end; // next step() ends the stream
                 return Some((
@@ -991,6 +1465,13 @@ impl StreamGen {
             if take == 0 {
                 self.seg_idx += 1;
                 continue;
+            }
+            if let Some(budget) = &self.probe_budget {
+                if budget.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |remaining| remaining.checked_sub(take as u64)).is_err() {
+                    self.abort_inflight();
+                    self.media_pos = self.end;
+                    return Some((Err(std::io::Error::other("probe byte limit")), self));
+                }
             }
             let chunk = Bytes::copy_from_slice(&decoded[from..from + take]);
             self.media_pos += take as u64;
@@ -1174,10 +1655,11 @@ mod tests {
         let sid = loaded_stream(&st, "lookahead", Some(true)).await;
         let ext = extent("lookahead", 5);
         let mut gen = StreamGen {
-            pool: st.pool.clone(), extents: Arc::new(vec![ext.clone()]),
+            probe_budget: None,
+            extents: Arc::new(vec![ext.clone()]),
             ext_media_start: Arc::new(vec![0]), media_pos: 0, end: 500,
             ext_idx: 0, seg_idx: 0, positioned: true,
-            inflight: std::collections::VecDeque::new(), cache: st.cache.clone(),
+            inflight: std::collections::VecDeque::new(),
             state: st.clone(), sid: sid.clone(),
         };
         gen.top_up(&ext, 0, 500);
@@ -1205,5 +1687,140 @@ mod tests {
     fn fnv_is_stable() {
         assert_eq!(fnv_hex(b"https://x/a.nzb"), fnv_hex(b"https://x/a.nzb"));
         assert_ne!(fnv_hex(b"a"), fnv_hex(b"b"));
+    }
+}
+
+#[cfg(test)]
+mod beta_tests {
+    use super::*;
+
+    fn state(pool: Arc<Pool>) -> (StreamState, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!("velvet-buffer-test-{}-{:x}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let db = crate::db::open(":memory:").unwrap();
+        crate::sync::migrate(&db.lock().unwrap()).unwrap();
+        let cfg = crate::repair::RepairConfig { enabled: true, cache_dir: path.to_string_lossy().into_owned(), min_free_bytes: 0, max_job_bytes: 1024 * 1024, max_cache_bytes: 4 * 1024 * 1024, ..Default::default() };
+        (StreamState::with_recovery(pool, reqwest::Client::new(), db, cfg, BufferConfig { enabled: true, ..Default::default() }, "http://127.0.0.1:1".into()), path)
+    }
+
+    async fn loaded(st: &StreamState) -> (String, Arc<StreamEntry>) {
+        let sid = st.register("https://fixture.invalid/exact.nzb").await;
+        let segments = Arc::new((0..5).map(|i| crate::nzb::Segment { number: i + 1, bytes: 120, message_id: format!("part-{i}") }).collect::<Vec<_>>());
+        let manifest = Arc::new(crate::nzb::Nzb { files: vec![crate::nzb::NzbFile { subject: "fixture.mp4".into(), groups: vec![], segments: segments.as_ref().clone(), total_bytes: 600 }] });
+        st.repair.register(&sid, manifest.clone()).await.unwrap();
+        let entry = st.lookup(&sid).unwrap();
+        *entry.manifest.lock().unwrap() = Some(manifest);
+        *entry.loaded.lock().unwrap() = Some(Loaded { extents: Arc::new(vec![Extent { segments, group: "".into(), part_size: 100, data_start: 0, data_len: 500 }]), ext_media_start: Arc::new(vec![0]), total_size: 500, complete: None });
+        (sid, entry)
+    }
+
+    fn point(session: &str, generation: u64) -> PlaybackRequest {
+        PlaybackRequest { session_id: session.into(), generation, position_ms: 0, duration_ms: 10000, buffered_position_ms: 0, playing: true, stopped: false }
+    }
+
+    #[tokio::test]
+    async fn beta_missing_stat_and_speculative_fetch_do_not_poison_original_resource() {
+        let (provider, server) = crate::pool::tests::fake_provider(430).await;
+        let (st, path) = state(Pool::new_verified(&[provider], true));
+        let (sid, entry) = loaded(&st).await;
+        assert!(verify_stream(&st, &sid).await.unwrap());
+        assert_ne!(st.health(&sid).unwrap().status, "incomplete");
+        let segment = entry.loaded.lock().unwrap().as_ref().unwrap().extents[0].segments[2].clone();
+        assert!(fetch_recovering(&st, &sid, "", &segment, 100, 2, true).await.is_err());
+        assert_ne!(st.health(&sid).unwrap().status, "incomplete");
+        assert_eq!(st.db.lock().unwrap().query_row("SELECT count(*) FROM bad_releases", [], |r| r.get::<_, u64>(0)).unwrap(), 0);
+        st.repair.cancel(&sid).await;
+        drop(entry); drop(st); server.abort(); let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[tokio::test]
+    async fn verified_provider_fallback_and_disk_reuse_keep_one_http_resource_byte_exact() {
+        let original: Vec<u8> = (0..=255).cycle().take(500).collect();
+        let bodies = original.chunks(100).enumerate().map(|(i, data)| (format!("part-{i}"), crate::pool::verified_fixtures::article(data, i as u64 * 100 + 1, 500, i + 1))).collect();
+        let (bad, bad_server) = crate::pool::tests::fake_provider(223).await;
+        let (good, good_server) = crate::pool::verified_fixtures::provider(bodies).await;
+        let (mut st, path) = state(Pool::new_verified(&[bad, good], true));
+        let (sid, entry) = loaded(&st).await;
+        let response = serve(State(st.clone()), Path(sid.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(axum::body::to_bytes(response.into_body(), 1024).await.unwrap().as_ref(), original);
+        // Evict the memory tier and make network impossible. The same URL still
+        // serves verified ordinary bytes persisted by the first read.
+        st.cache = SegCache::new(1024);
+        st.pool = Pool::new_verified(&[], true);
+        let response = serve(State(st.clone()), Path(sid.clone()), HeaderMap::new()).await;
+        assert_eq!(axum::body::to_bytes(response.into_body(), 1024).await.unwrap().as_ref(), original);
+        assert_ne!(st.health(&sid).unwrap().status, "incomplete");
+        st.repair.cancel(&sid).await;
+        drop(entry); drop(st); bad_server.abort(); good_server.abort(); let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[tokio::test]
+    async fn packet_timestamps_require_contiguous_tracks_and_resident_verified_bytes() {
+        let (st, path) = state(Pool::new_verified(&[], true));
+        let (sid, entry) = loaded(&st).await;
+        for i in 0..5 { st.cache.put(&format!("part-{i}"), vec![1; 100], i * 100); }
+        let packets: Vec<_> = (0..10).map(|i| serde_json::json!({"stream_index":0,"pos":(i * 50).to_string(),"size":"50","pts_time":i.to_string(),"duration_time":"1"})).collect();
+        let mut index = serde_json::json!({"streams":[{"index":0,"codec_type":"video"}],"packets":packets});
+        let window = st.verified_packet_window(&entry, &index, 0.0, 10.0, &std::collections::HashSet::new()).unwrap();
+        assert_eq!((window.from, window.through), (0.0, 10.0));
+        index["packets"][4]["pts_time"] = "40".into();
+        assert!(st.verified_packet_window(&entry, &index, 0.0, 10.0, &std::collections::HashSet::new()).is_err());
+        index["packets"][4]["pts_time"] = "4".into();
+        st.cache.inner.lock().unwrap().map.remove("part-2");
+        assert_eq!(st.verified_packet_window(&entry, &index, 0.0, 10.0, &std::collections::HashSet::new()).err(), Some("verified-bytes-evicted"));
+        st.repair.cancel(&sid).await; drop(entry); drop(st); let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[tokio::test]
+    async fn repaired_file_coverage_must_be_revalidated_before_reporting_seconds() {
+        let (st, path) = state(Pool::new_verified(&[], true));
+        let (sid, entry) = loaded(&st).await;
+        let packets: Vec<_> = (0..10).map(|i| serde_json::json!({"stream_index":0,"pos":(i * 50).to_string(),"size":"50","pts_time":i.to_string(),"duration_time":"1"})).collect();
+        let index = serde_json::json!({"streams":[{"index":0,"codec_type":"video"}],"packets":packets});
+        let proof = std::collections::HashSet::from(["part-0".to_owned()]);
+        let window = st.verified_packet_window(&entry, &index, 0.0, 10.0, &proof).unwrap();
+        assert!(window.segments.is_empty());
+        {
+            let mut buffer = entry.buffer.lock().unwrap();
+            buffer.current_session = "viewer".into();
+            buffer.sessions.insert("viewer".into(), PlaybackPoint { request: point("viewer", 1), at: std::time::Instant::now() });
+            buffer.verified = Some(window);
+        }
+        assert_eq!(st.buffer_health_for(&entry, Some("viewer"), &proof).verified_ahead_seconds, Some(10.0));
+        // The cached window alone is not a proof. The HTTP health endpoint
+        // asynchronously checks the actual immutable repaired file, now absent.
+        let response = health(State(st.clone()), Path(sid.clone()), axum::extract::Query(HashMap::from([("sessionId".into(), "viewer".into())]))).await;
+        let value: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16384).await.unwrap()).unwrap();
+        assert!(value["exactRecovery"]["verifiedAheadSeconds"].is_null());
+        st.repair.cancel(&sid).await; drop(entry); drop(st); let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[tokio::test]
+    async fn independent_viewer_and_stale_stop_do_not_cancel_active_probe() {
+        let (st, path) = state(Pool::new_verified(&[], true));
+        let (sid, entry) = loaded(&st).await;
+        let task = tokio::spawn(std::future::pending::<()>());
+        let abort = task.abort_handle();
+        {
+            let mut buffer = entry.buffer.lock().unwrap();
+            buffer.current_session = "first".into(); buffer.generation = 2;
+            buffer.sessions.insert("first".into(), PlaybackPoint { request: point("first", 2), at: std::time::Instant::now() });
+            buffer.task = Some(task);
+        }
+        st.playback_update(&sid, point("second", 1)).await.unwrap();
+        let mut stale = point("first", 1); stale.stopped = true;
+        st.playback_update(&sid, stale).await.unwrap();
+        assert!(!abort.is_finished());
+        assert_eq!(entry.buffer.lock().unwrap().current_session, "first");
+        let mut stop = point("first", 2); stop.stopped = true;
+        st.playback_update(&sid, stop).await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(abort.is_finished());
+        let mut stop = point("second", 1); stop.stopped = true;
+        st.playback_update(&sid, stop).await.unwrap();
+        assert!(st.repair.status(&sid).await.is_none());
+        ensure_loaded(st.clone(), entry.clone()).await.unwrap();
+        assert!(st.repair.status(&sid).await.is_some(), "resuming a cached layout re-registers exact repair metadata");
+        st.repair.cancel(&sid).await; drop(entry); drop(st); let _ = std::fs::remove_dir_all(path);
     }
 }

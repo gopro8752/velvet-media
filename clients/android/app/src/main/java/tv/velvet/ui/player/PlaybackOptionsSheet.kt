@@ -2,6 +2,10 @@ package tv.velvet.ui.player
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +25,9 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,8 +45,12 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import tv.velvet.ui.theme.VelvetColors
+import tv.velvet.BuildConfig
+import tv.velvet.data.streams.ExactRecoveryState
+import tv.velvet.data.streams.ExactRepairState
+import java.util.Locale
 
-internal enum class PlaybackOption { AUDIO, SUBTITLES, BLOCK, RESET }
+internal enum class PlaybackOption { AUDIO, SUBTITLES, BLOCK, RESET, RECOVERY }
 
 /** One home for track choices and reversible actions on this show's current release. */
 @Composable
@@ -60,6 +71,7 @@ internal fun PlaybackOptionsSheet(
         if (state.subtitleOptions.isNotEmpty()) add(PlaybackOption.SUBTITLES)
         if (state.canBlockCurrentRelease) add(PlaybackOption.BLOCK)
         if (state.isShow && state.blockedGroups.isNotEmpty()) add(PlaybackOption.RESET)
+        if (BuildConfig.RECOVERY_BETA) add(PlaybackOption.RECOVERY)
     }
     LaunchedEffect(available, initialFocus) {
         withFrameNanos { }
@@ -73,7 +85,7 @@ internal fun PlaybackOptionsSheet(
     Box(Modifier.fillMaxSize().background(VelvetColors.Scrim)) {
         Column(
             modifier = Modifier.align(Alignment.CenterEnd).width(380.dp).fillMaxHeight()
-                .background(VelvetColors.Surface).padding(24.dp),
+                .background(VelvetColors.Surface).verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -107,6 +119,22 @@ internal fun PlaybackOptionsSheet(
                     title = "Reset blocked releases", subtitle = "For this show only", navigates = false,
                     onClick = onResetBlocks, modifier = focusModifier(PlaybackOption.RESET),
                 )
+            }
+            if (BuildConfig.RECOVERY_BETA) {
+                Spacer(Modifier.height(6.dp))
+                var focused by remember { mutableStateOf(false) }
+                Column(
+                    Modifier.fillMaxWidth().border(2.dp,
+                        if (focused) VelvetColors.FocusRing else VelvetColors.Surface,
+                        RoundedCornerShape(10.dp))
+                        .then(focusModifier(PlaybackOption.RECOVERY))
+                        .onFocusChanged { focused = it.isFocused }.focusable().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("Recovery beta", style = MaterialTheme.typography.titleSmall, color = VelvetColors.TextSecondary)
+                    Text(recoveryDiagnosticText(state.recoveryDiagnostics, state.repairDiagnostics),
+                        style = MaterialTheme.typography.bodySmall, color = VelvetColors.TextTertiary)
+                }
             }
             state.groupActionError?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = VelvetColors.Gold)
@@ -153,4 +181,30 @@ internal fun PlaybackOptionRow(
             }
         }
     }
+}
+
+/** Only fixed labels and numerical measurements are displayed, never upstream errors or URLs. */
+internal fun recoveryDiagnosticText(state: ExactRecoveryState?, repair: ExactRepairState? = null): String {
+    if (state == null) return "Waiting for recovery status from the beta backend."
+    if (!state.enabled) return "Exact recovery is disabled on this backend."
+    val status = when (state.status) {
+        "ready", "healthy", "verified" -> "Ahead verified"
+        "repairing", "recovering" -> "Repairing ahead"
+        "verifying", "prefetching", "warming", "checking" -> "Checking ahead"
+        "failed", "unavailable", "exhausted" -> "Recovery unavailable"
+        "paused", "stopped" -> "Paused"
+        else -> "Monitoring"
+    }
+    val verified = state.verifiedAheadSeconds?.takeIf { it.isFinite() && it >= 0.0 }
+        ?.let { String.format(Locale.US, "%.1f s verified ahead", it) }
+        ?: "Verified time unavailable until the media index is ready"
+    val repairLine = when (repair?.phase) {
+        "ready" -> "PAR2 repair verified"
+        "failed" -> "PAR2 repair unavailable"
+        "repairing", "downloading" -> "PAR2 recovery in progress"
+        else -> null
+    }
+    val downloaded = repair?.chargedDownloadBytes?.takeIf { it > 0 }
+        ?.let { String.format(Locale.US, "Repair budget used: %.1f MiB", it / (1024.0 * 1024.0)) }
+    return listOfNotNull(status, verified, repairLine, downloaded).joinToString("\n")
 }

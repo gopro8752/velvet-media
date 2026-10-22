@@ -7,6 +7,7 @@
 **/DerivedData*/
 **/node_modules/
 **/dist/
+**/__pycache__/
 **/releases/
 **/previews/
 **/xcuserdata/
@@ -28,6 +29,7 @@
 !**/.env.example
 backend/velvet.toml
 backend/data/
+backend/beta-config/
 backend/config/
 backend/spectrum-config/
 backend/codex/
