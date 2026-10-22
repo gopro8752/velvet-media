@@ -10,13 +10,13 @@ const NOW = 1800000000000;
 const auth = (extra = {}) => ({accessToken:'fixture-access',refreshToken:'fixture-refresh',deviceId:'fixture-device',expiresAt:NOW+3600000,...extra});
 const reply = (value, status = 200, headers = {}) => ({status,headers,body:Buffer.isBuffer(value)?value:Buffer.from(JSON.stringify(value))});
 const deferred = () => { let resolve; const promise = new Promise(r => {resolve=r;}); return {promise,resolve}; };
-async function fixture(t, request, {saved = auth(), config = {}} = {}) {
+async function fixture(t, request, {saved = auth(), config = {}, now = ()=>NOW} = {}) {
   const directory = await mkdtemp(join(tmpdir(),'velvet-spectrum-provider-test-'));
   t.after(() => rm(directory,{recursive:true,force:true}));
   const authFile = join(directory,'auth.json');
   await writeFile(authFile,JSON.stringify(saved),{mode:0o600});
   const calls=[];
-  const provider = new SpectrumProvider({authFile,tuneQuery:{},...config},{now:()=>NOW,request:async options => {
+  const provider = new SpectrumProvider({authFile,tuneQuery:{},...config},{now,request:async options => {
     calls.push(options); return request(options,calls.length);
   }});
   return {provider,calls,authFile,directory};
@@ -181,6 +181,116 @@ test('tune builds real platform capabilities and never reuses borrowed session i
     for(const key of ['aegis','sessionId','streamSessionId']) assert.equal(u.searchParams.has(key),false);
     assert.deepEqual(body,{deviceCapabilities:{packaging:format==='fairplay'?'hls':'dash',drm:format==='fairplay'?'fairplay':'cenc',videoCodecs:['avc'],audioCodecs:format==='fairplay'?['aac']:['aac','ac3','eac3']}});
   }
+});
+
+test('fresh provider location replaces captured flags for tunes while preserving privacy and capabilities',async t=>{
+  const f=await fixture(t,options=>{
+    const u=new URL(options.url);
+    if(u.pathname==='/pinxt/customer/location/v1'){
+      assert.equal(u.href,'https://apis.spectrum.net/pinxt/customer/location/v1');
+      assert.equal(options.headers.Authorization,'Bearer fixture-access');
+      assert.equal(options.headers.device_id,'fixture-device');
+      assert.equal(options.maxBytes,256*1024);
+      assert.equal(options.timeoutMs,15000);
+      return reply({behindOwnModem:true,inMarket:true,stateAbbr:'OH',OTT:false,geoDMA:'private-dma',customerId:'private-customer'});
+    }
+    assert.equal(u.origin,'https://apis-vid.spectrum.net');
+    assert.equal(u.searchParams.get('behindOwnModem'),'true');
+    assert.equal(u.searchParams.get('inMarket'),'true');
+    assert.equal(u.searchParams.get('stateAbbr'),'OH');
+    assert.equal(u.searchParams.has('behindTheRouter'),false,'missing current state must remove the captured router flag');
+    assert.equal(u.searchParams.get('OTT'),'false');
+    assert.equal(u.searchParams.get('privacy'),'fixture-privacy');
+    assert.equal(u.searchParams.has('geoDMA'),false);
+    assert.equal(u.searchParams.has('customerId'),false);
+    return reply({initLocation:{behindOwnModem:true,inMarket:true},ok:true});
+  },{config:{refreshLocation:true,tuneQuery:{behindOwnModem:false,inMarket:false,stateAbbr:'CA',behindTheRouter:true,OTT:false,privacy:'fixture-privacy'}}});
+  const result=await f.provider.tune({service:'fixture-channel'},'widevine');
+  assert.deepEqual(result.location,{behindOwnModem:true,inMarket:true,stateAbbr:'OH'});
+  assert.equal(Object.isFrozen(result.location),true);
+  assert.equal(f.calls.length,2);
+  assert.equal(JSON.stringify(result.location).includes('private'),false);
+});
+
+test('location lookup is singleflight, caches for fifteen minutes, and follows a changed network',async t=>{
+  let now=NOW,lookups=0;
+  const started=deferred(),release=deferred();
+  const f=await fixture(t,async()=>{
+    lookups++;
+    if(lookups===1){started.resolve();await release.promise;}
+    return reply({behindOwnModem:lookups===1,inMarket:lookups===1,behindTheRouter:lookups===1,stateAbbr:lookups===1?'OH':'CA'});
+  },{now:()=>now});
+  const pending=Array.from({length:8},()=>f.provider.location());
+  await started.promise;release.resolve();
+  const values=await Promise.all(pending);
+  assert.equal(lookups,1);
+  assert.ok(values.every(value=>value===values[0]));
+  now+=15*60*1000-1;
+  assert.deepEqual(await f.provider.location(),{behindOwnModem:true,inMarket:true,stateAbbr:'OH',behindTheRouter:true});
+  assert.equal(lookups,1);
+  now++;
+  assert.deepEqual(await f.provider.location(),{behindOwnModem:false,inMarket:false,stateAbbr:'CA',behindTheRouter:false});
+  assert.equal(lookups,2);
+});
+
+test('expired or forced location refresh failure never authorizes a tune using stale captured home state',async t=>{
+  for(const forced of [false,true]) await t.test(forced?'forced':'expired',async t=>{
+    let now=NOW,lookups=0;
+    const f=await fixture(t,options=>{
+      assert.equal(new URL(options.url).pathname,'/pinxt/customer/location/v1','no tune should be sent after a failed location refresh');
+      lookups++;
+      return lookups===1?reply({behindOwnModem:true,inMarket:true,stateAbbr:'OH'}):reply({secret:'provider detail'},503);
+    },{now:()=>now,config:{refreshLocation:true,tuneQuery:{behindOwnModem:true,inMarket:true,stateAbbr:'OH'}}});
+    await f.provider.location();
+    if(forced)await assert.rejects(()=>f.provider.location(true),code('source_unavailable'));
+    else now+=15*60*1000;
+    await assert.rejects(()=>f.provider.tune({service:'fixture-channel'},'widevine'),error=>{
+      assert.equal(error.message,'source_unavailable');return code('source_unavailable')(error);
+    });
+    assert.equal(f.provider.locationCache,null);
+    assert.equal(f.provider.locationLoading,null);
+    assert.equal(lookups,forced?3:2);
+  });
+});
+
+test('malformed provider location fails closed and never forwards unvalidated location fields',async t=>{
+  for(const value of [null,[],{}, {behindOwnModem:'true',inMarket:true}, {behindOwnModem:true,inMarket:'false'},
+    {behindOwnModem:true,inMarket:true,stateAbbr:'OH\r\nsecret'}, {behindOwnModem:true,inMarket:true,behindTheRouter:'true'}]) {
+    await t.test(JSON.stringify(value),async t=>{
+      const f=await fixture(t,()=>reply(value),{config:{refreshLocation:true}});
+      await assert.rejects(()=>f.provider.tune({service:'fixture-channel'},'widevine'),code('source_unavailable'));
+      assert.equal(f.calls.length,1);assert.equal(f.provider.locationCache,null);
+    });
+  }
+});
+
+test('location401 refreshes through the normal credential rotation guard and retries only the fixed endpoint',async t=>{
+  const f=await fixture(t,options=>{
+    const u=new URL(options.url);
+    if(u.pathname==='/auth/oauth/v2/token')return reply({access_token:'rotated',refresh_token:'rotated-refresh',expires_in:3600});
+    assert.equal(u.href,'https://apis.spectrum.net/pinxt/customer/location/v1');
+    return options.headers.Authorization==='Bearer fixture-access'?reply({},401):reply({behindOwnModem:false,inMarket:false});
+  });
+  assert.deepEqual(await f.provider.location(),{behindOwnModem:false,inMarket:false});
+  assert.equal(f.calls.length,3);
+  assert.equal(JSON.parse(await readFile(f.authFile,'utf8')).accessToken,'rotated');
+});
+
+test('a tune observing a different network invalidates future location checks without rewriting its original context',async t=>{
+  let lookups=0;
+  const f=await fixture(t,options=>{
+    if(new URL(options.url).pathname==='/pinxt/customer/location/v1'){
+      lookups++;
+      return reply({behindOwnModem:lookups===1,inMarket:true,stateAbbr:'OH'});
+    }
+    return reply({initLocation:{behindOwnModem:false,inMarket:true,stateAbbr:'OH'}});
+  },{config:{refreshLocation:true}});
+  const first=await f.provider.tune({service:'fixture-channel'},'widevine');
+  assert.equal(first.location.behindOwnModem,true);
+  assert.equal(f.provider.locationCache,null);
+  const second=await f.provider.tune({service:'fixture-channel'},'widevine');
+  assert.equal(second.location.behindOwnModem,false);
+  assert.equal(lookups,2);
 });
 
 test('license relay preserves binary CDM bytes and exact raw FairPlay query encoding',async t=>{

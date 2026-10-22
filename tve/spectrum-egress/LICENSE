@@ -1,0 +1,97 @@
+Velvet Personal and Noncommercial Source-Available License 1.0
+
+Copyright (c) 2026 gopro8752
+
+1. Scope
+
+This license applies to the original Velvet and Velour code and other original
+materials in this repository, except files identified as third-party materials
+or covered by a separate license. "Software" means those original materials and
+modifications of them. Third-party components retain their own licenses; this
+license does not restrict rights granted by those licenses.
+
+2. Permission for personal and noncommercial use
+
+Subject to these terms, the copyright holder grants you a worldwide,
+non-exclusive, royalty-free copyright license to obtain, run, study, copy,
+modify, and adapt the Software for personal and noncommercial purposes. You may
+make it your own for private use, and you do not have to publish private changes
+that you do not distribute or make available as a service to others.
+
+"Noncommercial" means not primarily intended for or directed toward commercial
+advantage or monetary compensation. Personal use by you, your household, and
+friends without payment for the Software or access to it is permitted.
+
+3. Sharing and source availability
+
+You may distribute the Software or a modified version without charge for
+noncommercial purposes if you:
+
+  a. Include this license and preserve applicable copyright, attribution, and
+     third-party license notices.
+  b. Clearly identify that you changed the Software, if applicable.
+  c. Provide every recipient the complete corresponding source code of your
+     version, including your modifications and the scripts and instructions
+     necessary to build it. You may provide the source alongside the Software
+     or through a clearly identified, freely accessible download link.
+  d. License your modifications and the combined version under these same
+     terms, without adding terms that remove the permissions granted here.
+
+If you make a modified version available for other people to use over a network,
+you must also provide those users a clear, freely accessible way to obtain the
+complete corresponding source of that version under these terms. Private use
+within your household does not require public publication; source may be
+provided privately to those users.
+
+"Corresponding source" means the preferred form for making changes, not
+obfuscated code, and includes build and installation instructions. It does not
+include your passwords, private keys, personal data, media library, service
+accounts, or credentials. Supply safe configuration examples instead.
+
+4. Uses requiring separate permission
+
+The permissions above do not authorize:
+
+  a. Selling copies of the Software or charging for a license, subscription,
+     access to its features, or a hosted service based on the Software.
+  b. Commercial use or incorporating the Software into a commercial product
+     or service.
+  c. Distributing a closed-source version, withholding corresponding source
+     required by Section 3, or relicensing the Software to remove these terms.
+
+These uses require separate written permission from the applicable copyright
+holder(s). Permission for original Velvet code may be requested through the
+repository owner at https://github.com/gopro8752/velvet-media. The owner cannot
+grant rights to third-party code or another contributor's work without the
+authority to do so. Private personal modifications allowed by Section 2 are
+not prohibited closed-source distribution.
+
+5. Ownership and other rights
+
+You retain ownership of your original modifications, subject to the obligations
+above when sharing them. No trademark rights, rights to third-party content,
+service subscriptions, or rights to use another person's credentials are
+granted. No separate patent license is granted by this license. Nothing here
+restricts rights you independently have under applicable law or a third-party
+license, including rights necessary to comply with that license.
+
+6. Termination
+
+Your permissions under this license terminate automatically if you violate its
+terms. If you cease the violation and correct it within 30 days after first
+learning of it, your permissions are reinstated unless the copyright holder
+has separately notified you otherwise. Termination does not remove obligations
+that arose while you were distributing or providing the Software.
+
+7. No warranty; limitation of liability
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT
+PERMITTED BY APPLICABLE LAW, THE AUTHORS AND COPYRIGHT HOLDERS SHALL NOT BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+SOFTWARE OR ITS USE OR OTHER DEALINGS.
+
+This is a source-available license with noncommercial restrictions, not an
+OSI-approved open-source license.

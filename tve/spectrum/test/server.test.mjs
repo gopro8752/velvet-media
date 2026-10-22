@@ -6,12 +6,12 @@ import {BridgeError} from '../src/http.mjs';
 const config={authFile:'/private/auth.json',tuneQuery:{behindOwnModem:false},manifestQuery:{behindOwnModem:false}};
 const manifest=Buffer.from('<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period><AdaptationSet><Representation id="video" bandwidth="1000"><SegmentTemplate media="segment-$Number$.m4s" initialization="init.mp4" duration="2" /></Representation></AdaptationSet></Period></MPD>');
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
-function fixture(t,overrides={}){
+function fixture(t,overrides={},{bridgeConfig=config,now=Date.now,cdnBody=manifest}={}){
   const stops=[],licenses=[],cdnRequests=[];
   const entry={service:'123',channel:{id:'example',name:'Example'}};
   const provider={channels:async()=>[entry],tune:async()=>({value:{aegis:{aegisToken:'owned-lease',aegisTokenRefreshSeconds:60},streamUrl:'https://edge-mm.spectrum.net/live/manifest.mpd',outputFeedId:'feed'},headers:{'x-set-ast':'private-ast'}}),stop:async token=>stops.push(token),renew:async()=>{throw new Error('unexpected renew');},ast:async()=>'fresh-ast',license:async(format,session,bytes,query)=>{licenses.push({format,ast:session.ast,bytes,query});return Buffer.from([4,5,6]);},...overrides};
-  const request=async options=>{cdnRequests.push(options);return {status:200,headers:{},body:manifest};};
-  const bridge=createBridge(config,{provider,request});
+  const request=async options=>{cdnRequests.push(options);return {status:200,headers:{},body:cdnBody};};
+  const bridge=createBridge(bridgeConfig,{provider,request,now});
   t.after(()=>bridge.close());
   return {bridge,provider,stops,licenses,cdnRequests};
 }
@@ -42,6 +42,107 @@ test('invalid tune response releases the lease that it allocated',async t=>{
   const f=fixture(t,{tune:async()=>({value:{aegis:{aegisToken:'partial-owned-lease'}},headers:{}})});
   await assert.rejects(f.bridge.tune('example','dash-widevine'));
   assert.deepEqual(f.stops,['partial-owned-lease']);
+});
+const homeLocation={behindOwnModem:true,inMarket:true};
+const homeTune=()=>({value:{streamUrl:'https://edge-mm.spectrum.net/live/manifest.mpd?stateAbbr=OLD&behindTheRouter=false',outputFeedId:'feed',initLocation:{behindOwnModem:true}},headers:{'x-set-ast':'private-ast'},location:{...homeLocation}});
+test('provider-recognized home playback needs no Aegis but keeps native DRM and scoped paths',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval']});
+  let time=0,renewals=0;
+  const f=fixture(t,{tune:async()=>homeTune(),renew:async()=>{renewals++;}},{bridgeConfig:{...config,refreshLocation:true,manifestQuery:{behindOwnModem:false,inMarket:false,stateAbbr:'OLD',behindTheRouter:false,keep:'value'}},now:()=>time});
+  const result=await f.bridge.tune('example','dash-widevine');
+  const upstream=new URL(f.cdnRequests[0].url);
+  assert.equal(upstream.searchParams.get('behindOwnModem'),'true');
+  assert.equal(upstream.searchParams.get('inMarket'),'true');
+  assert.equal(upstream.searchParams.has('stateAbbr'),false);
+  assert.equal(upstream.searchParams.has('behindTheRouter'),false);
+  assert.equal(upstream.searchParams.get('keep'),'value');
+  assert.equal(JSON.stringify(result).includes('private-ast'),false);
+  assert.equal(JSON.stringify(result).includes('edge-mm'),false);
+  time=60000;t.mock.timers.tick(60000);
+  assert.deepEqual(await f.bridge.license(result.sessionId,null,Buffer.from([1])),Buffer.from([4,5,6]));
+  assert.equal(f.licenses[0].ast,'fresh-ast');
+  await f.bridge.stop(result.sessionId);
+  assert.equal(renewals,0);assert.deepEqual(f.stops,[]);
+  await assert.rejects(f.bridge.license(result.sessionId,null,Buffer.from([1])),{code:'session_ended'});
+});
+test('missing Aegis requires enabled fresh location and a matching in-home tune response',async t=>{
+  const cases=[
+    {enabled:false},
+    {location:undefined},
+    {location:{behindOwnModem:false,inMarket:true}},
+    {location:{behindOwnModem:true}},
+    {initLocation:undefined},
+    {initLocation:{behindOwnModem:false}},
+    {initLocation:{behindOwnModem:'true'}},
+  ];
+  for(const item of cases){
+    const tuned=homeTune();
+    if(Object.hasOwn(item,'location'))tuned.location=item.location;
+    if(Object.hasOwn(item,'initLocation'))tuned.value.initLocation=item.initLocation;
+    const f=fixture(t,{tune:async()=>tuned},{bridgeConfig:{...config,refreshLocation:item.enabled!==false}});
+    await assert.rejects(f.bridge.tune('example','dash-widevine'),{code:'source_unavailable'});
+    assert.deepEqual(f.stops,[]);assert.equal(f.cdnRequests.length,0);
+  }
+});
+test('home FairPlay playback keeps key references and license challenges session-scoped',async t=>{
+  const cdnBody=Buffer.from('#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skds://provider/key?ContentId=opaque-id&KeyId=private-key-reference",KEYFORMAT="com.apple.streamingkeydelivery"\n#EXTINF:6,\nsegment.ts\n');
+  const f=fixture(t,{tune:async()=>homeTune()},{bridgeConfig:{...config,refreshLocation:true},cdnBody});
+  const result=await f.bridge.tune('example','hls-fairplay');
+  assert.equal(result.drm.scheme,'fairplay');
+  const media=await f.bridge.media(result.sessionId,result.playbackPath.split('/').at(-1));
+  const text=media.body.toString(),key=text.match(/skd:\/\/velvet\/([a-f0-9]{32})\?/)[1];
+  assert.equal(text.includes('private-key-reference'),false);
+  const challenge=Buffer.from([7,8,9]);
+  assert.deepEqual(await f.bridge.license(result.sessionId,key,challenge),Buffer.from([4,5,6]));
+  assert.equal(f.licenses[0].format,'fairplay');
+  assert.deepEqual(f.licenses[0].bytes,challenge);
+  assert.equal(f.licenses[0].query,'ContentId=opaque-id&KeyId=private-key-reference');
+  const another=await f.bridge.tune('example','hls-fairplay');
+  await assert.rejects(f.bridge.license(another.sessionId,key,challenge),{code:'session_ended'});
+  await f.bridge.close();assert.deepEqual(f.stops,[]);
+});
+test('home playback rejects present but malformed Aegis and missing native playback fields',async t=>{
+  for(const mutate of [
+    value=>{value.aegis=null;},
+    value=>{value.aegis={};},
+    value=>{value.aegis={aegisToken:''};},
+    value=>{value.aegis='invalid';},
+    value=>{delete value.outputFeedId;},
+    value=>{delete value.streamUrl;},
+  ]){
+    const tuned=homeTune();mutate(tuned.value);
+    const f=fixture(t,{tune:async()=>tuned},{bridgeConfig:{...config,refreshLocation:true}});
+    await assert.rejects(f.bridge.tune('example','dash-widevine'),{code:'source_unavailable'});
+    assert.deepEqual(f.stops,[]);assert.equal(f.cdnRequests.length,0);
+  }
+  const tuned=homeTune();tuned.headers={};
+  const f=fixture(t,{tune:async()=>tuned},{bridgeConfig:{...config,refreshLocation:true}});
+  await assert.rejects(f.bridge.tune('example','dash-widevine'),{code:'source_unavailable'});
+});
+test('home sessions keep capacity and idle limits without issuing provider lease calls',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval']});
+  let time=0,renewals=0;
+  const f=fixture(t,{tune:async()=>homeTune(),renew:async()=>{renewals++;}},{bridgeConfig:{...config,refreshLocation:true},now:()=>time});
+  const sessions=[];
+  for(let i=0;i<24;i++)sessions.push(await f.bridge.tune('example','dash-widevine'));
+  await assert.rejects(f.bridge.tune('example','dash-widevine'),{code:'concurrency_limit'});
+  time=120001;t.mock.timers.tick(15000);
+  await assert.rejects(f.bridge.media(sessions[0].sessionId,sessions[0].playbackPath.split('/').at(-1)),{code:'session_ended'});
+  const fresh=await f.bridge.tune('example','dash-widevine');
+  time+=24*3600000+1;
+  await f.bridge.media(fresh.sessionId,fresh.playbackPath.split('/').at(-1));
+  t.mock.timers.tick(15000);
+  await assert.rejects(f.bridge.media(fresh.sessionId,fresh.playbackPath.split('/').at(-1)),{code:'session_ended'});
+  await f.bridge.close();
+  assert.equal(renewals,0);assert.deepEqual(f.stops,[]);
+});
+test('cancelled home tune never publishes a local playback session',async t=>{
+  const entered=deferred(),done=deferred(),abort=new AbortController();
+  const f=fixture(t,{tune:async()=>{entered.resolve();await done.promise;return homeTune();}},{bridgeConfig:{...config,refreshLocation:true}});
+  const tuned=f.bridge.tune('example','dash-widevine',abort.signal);
+  const rejected=assert.rejects(tuned,{code:'session_ended'});
+  await entered.promise;abort.abort();done.resolve();await rejected;
+  assert.deepEqual(f.stops,[]);assert.equal(f.cdnRequests.length,0);
 });
 test('failed lease cleanup remains retryable and is never reported as success',async t=>{
   const f=fixture(t);let attempts=0;

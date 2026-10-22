@@ -103,6 +103,8 @@ Live TV and Live Sports are separate optional sections. The [native Spectrum ser
 
 Native Spectrum playback uses Widevine on Shield/Android TV and compatible Roku devices, and FairPlay on iPhone/iPad. It does not require Channels DVR or a video browser, and it never silently falls back to browser capture. It requires updated clients and a privately provisioned Spectrum session; the public source does not yet include a Spectrum account sign-in UI. Your TV subscription, channel entitlements, location restrictions, blackouts, simultaneous-stream limits, and device protection requirements still apply. A listing is not a guarantee that a channel can be watched from every location.
 
+Video flows from Spectrum's CDN through the native Spectrum service and Velvet backend to the client, which handles DRM and playback. The optional [WireGuard control egress service](tve/spectrum-egress/README.md) routes account, location, tuning, and license requests through a dedicated connection to the account's home network while video uses the server's ordinary internet connection. Its configuration stays private and it publishes no proxy port.
+
 Other configured Live TV bridges can use verified XMLTV station mappings. Those mappings also fill entirely missing native Spectrum guide rows; availability still depends on the provider's listings. For supported FOX-family channels on the legacy bridge path, the optional [direct TV Everywhere adapter](backend/tve/README.md) relays authenticated network feeds and retains the configured Spectrum bridge as its fallback. It is a separate alternative to native Spectrum.
 
 Live Sports uses an external event adapter for discovery and playback options. These integrations default to off and depend on your configured services, account access, and client capabilities. Velvet does not supply a channel subscription or remove provider restrictions.
@@ -200,6 +202,7 @@ clients/ios/        iPhone and iPad application
 clients/roku/       Roku alpha application and sideload tooling
 launcher/           Velour Android TV launcher
 tve/spectrum/       Optional native Spectrum playback and program-guide service
+tve/spectrum-egress/ Optional private WireGuard route for Spectrum authorization
 scripts/            Publication checks
 docs/               Project documentation assets
 ```

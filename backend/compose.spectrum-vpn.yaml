@@ -1,0 +1,38 @@
+# Optional private control-plane egress. Combine with compose.yaml and
+# compose.spectrum.yaml. Do not publish this proxy or use host networking.
+services:
+  velvet-spectrum-egress:
+    build:
+      context: ../tve/spectrum-egress
+    image: velvet-spectrum-egress:local
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run:size=1m,mode=0700
+      - /tmp:size=1m,mode=0700
+    volumes:
+      - ./spectrum-egress-config:/config:ro
+    networks:
+      - spectrum-control
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 96
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"
+  velvet-spectrum:
+    depends_on:
+      velvet-spectrum-egress:
+        condition: service_healthy
+    networks:
+      - default
+      - spectrum-control
+networks:
+  spectrum-control:
+    driver: bridge

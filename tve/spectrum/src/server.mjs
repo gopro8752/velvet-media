@@ -4,6 +4,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {BridgeError,MESSAGES,boundedRequest,fetchCdn,cdnUrl} from './http.mjs';
 import {SpectrumProvider} from './provider.mjs';
+import {createControlRequest} from './transport.mjs';
 import {createMediaRegistry} from './manifest.mjs';
 import {createGuide} from './guide.mjs';
 
@@ -15,6 +16,8 @@ function secretText(value) { return typeof value==='string' && value.length>0 &&
 export function validateConfig(input) {
   const config=structuredClone(input);
   if (!config || typeof config.authFile!=='string' || !config.authFile.startsWith('/') || config.authFile.length>4096) throw new BridgeError('sign_in_required',401);
+  if (config.refreshLocation!==undefined && typeof config.refreshLocation!=='boolean') throw new BridgeError('invalid_request',400);
+  if (config.controlProxyUrl!==undefined && (typeof config.controlProxyUrl!=='string' || !config.controlProxyUrl || config.refreshLocation!==true)) throw new BridgeError('invalid_request',400);
   for (const field of ['tuneQuery','manifestQuery']) {
     if (!config[field] || typeof config[field]!=='object' || Array.isArray(config[field])) throw new BridgeError('sign_in_required',401);
     for (const [key,value] of Object.entries(config[field])) {
@@ -33,7 +36,8 @@ export function validateConfig(input) {
 }
 export function createBridge(input,{request=boundedRequest,provider,now=Date.now,log=()=>{}}={}) {
   const config=validateConfig(input);
-  provider??=new SpectrumProvider(config,{request,now});
+  const controlRequest=config.controlProxyUrl?createControlRequest(config.controlProxyUrl):request;
+  provider??=new SpectrumProvider(config,{request:controlRequest,now});
   const guide=createGuide(provider,{now});
   const sessions=new Map(),pendingTunes=new Set(),cleanupJobs=new Set(),cleanupSessions=new Map();
   let opening=0,shuttingDown=false,certificate=null,certificateAt=0,certificateWork=null;
@@ -60,7 +64,7 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
     cleanupJobs.add(session.closing);return session.closing;
   }
   function renewLater(session,seconds) {
-    if(session.closed)return;
+    if(session.closed||!session.aegis)return;
     const delay=Number.isFinite(Number(seconds))&&Number(seconds)>0?Math.max(1000,Number(seconds)*1000):30000;
     session.renewTimer=setTimeout(()=>{
       session.leaseWork=(async()=>{
@@ -95,13 +99,25 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
       if(!entry)throw new BridgeError('channel_not_entitled',403);
       checkCancelled();
       session.service=entry.service;session.channel=entry.channel;
-      const {value,headers}=await provider.tune(entry,format);
+      const {value,headers,location}=await provider.tune(entry,format);
       if(secretText(value?.aegis?.aegisToken))session.aegis=value.aegis.aegisToken;
       checkCancelled();
       session.ast=headers['x-set-ast'];session.feed=String(value?.outputFeedId??'');session.astAt=now();
-      if(!session.aegis||!secretText(session.ast)||!session.feed||!secretText(value?.streamUrl))throw new BridgeError();
+      // Spectrum omits Aegis only for its own recognized in-home playback.
+      // Captured query flags never establish that: require both the live
+      // location result and this tune's independent location acknowledgement.
+      const homeWithoutLease=config.refreshLocation===true&&location?.behindOwnModem===true&&value?.initLocation?.behindOwnModem===true&&!Object.hasOwn(value??{},'aegis');
+      if((!session.aegis&&!homeWithoutLease)||!secretText(session.ast)||!session.feed||!secretText(value?.streamUrl))throw new BridgeError();
       const url=cdnUrl(value.streamUrl,config.extraCdnHosts);
-      for(const [key,val]of Object.entries(config.manifestQuery))url.searchParams.set(key,String(val));
+      const manifestQuery={...config.manifestQuery};
+      if(config.refreshLocation===true){
+        if(typeof location?.behindOwnModem!=='boolean'||typeof location?.inMarket!=='boolean')throw new BridgeError();
+        for(const key of ['behindOwnModem','inMarket','stateAbbr','behindTheRouter']){
+          delete manifestQuery[key];url.searchParams.delete(key);
+          if(location[key]!==undefined)manifestQuery[key]=location[key];
+        }
+      }
+      for(const [key,val]of Object.entries(manifestQuery))url.searchParams.set(key,String(val));
       // Each playback owns its ad/stream identifiers and concurrency lease.
       for(const key of ['pvrn','vprn'])url.searchParams.set(key,String(randomBytes(4).readUInt32BE()));
       url.searchParams.set('streamSessionId',session.playerId);
@@ -112,7 +128,7 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
       // remains encrypted and all decryption stays in the device's native CDM.
       await resource(session,session.root);
       checkCancelled();
-      sessions.set(session.id,session);renewLater(session,value.aegis.aegisTokenRefreshSeconds);
+      sessions.set(session.id,session);renewLater(session,value.aegis?.aegisTokenRefreshSeconds);
       return {sessionId:session.id,playbackPath:`/live/streams/${session.id}/${session.root}`,mimeType:format==='fairplay'?'application/vnd.apple.mpegurl':'application/dash+xml',channel:session.channel,canPause:false,canSeek:false,drm:format==='fairplay'?{scheme:'fairplay',licensePath:`/live/drm/${session.id}`,certificatePath:`/live/cert/${session.id}`,contentIdMode:'spectrum-content-id'}:{scheme:'widevine',licensePath:`/live/drm/${session.id}`,multiSession:false}};
     }catch(error){await closeSession(session).catch(()=>{});throw error;}finally{opening--;}
   }
@@ -156,7 +172,7 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
       if(certificateWork)return certificateWork;
       if(!certificate||now()-certificateAt>3600000){
         certificateWork=(async()=>{
-        const response=await request({url:CERTIFICATE,maxBytes:64*1024});
+        const response=await controlRequest({url:CERTIFICATE,maxBytes:64*1024});
         if(response.status!==200||!response.body.length||response.body[0]!==0x30)throw new BridgeError('drm_unavailable',503);
         certificate=response.body;certificateAt=now();
         return certificate;

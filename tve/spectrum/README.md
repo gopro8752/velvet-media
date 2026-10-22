@@ -49,19 +49,35 @@ Listings refresh at most every 15 minutes. Browsing serves cached listings while
 
 ## Session behavior
 
-Each tune allocates its own provider lease and a random, scoped playback capability. Stop, failed startup, abandoned requests, inactivity and shutdown release that lease. Manifest refreshes keep a short grace period for already-requested media. DASH timelines and HLS renditions, init segments, byte ranges and key rotation retain their original playback semantics.
+Each tune allocates a random, scoped playback capability and owns any concurrency lease returned by Spectrum. Stop, failed startup, abandoned requests, inactivity and shutdown release that lease. Spectrum can omit a lease for an in-home session; this is accepted only when a fresh location check and the tune response both recognize the account's home connection. Session limits, expiry and DRM checks still apply. Manifest refreshes keep a short grace period for already-requested media. DASH timelines and HLS renditions, init segments, byte ranges and key rotation retain their original playback semantics.
 
 The license endpoints relay raw device-generated Widevine challenges or FairPlay SPC/CKC messages. They do not expose content keys. Native output requirements, including an active protected HDMI connection where required, remain enforced by the device.
 
 No host port is published in the Compose example. Expose only the Velvet backend; never publish this service, its runtime configuration, browser debugging ports, or a Spectrum sign-in desktop through your public reverse proxy.
 
+## Separate authorization and video routes
+
+The video path is **Spectrum CDN → this service → Velvet backend → client**. The client performs native DRM playback. For installations using a private connection to the account's home network, the service can send Spectrum authorization requests through an HTTP CONNECT proxy while continuing to fetch video directly through the server's ordinary internet connection.
+
+Set `refreshLocation` to `true` in private `spectrum.json` to retrieve Spectrum's actual location response before tuning. Location checks are cached for up to 15 minutes; an expired check must succeed before a new tune can proceed. Current provider values replace captured location flags in tune and manifest requests. A proxy also requires this setting.
+
+Set `controlProxyUrl` to the private proxy's HTTP URL, including its username and password when authentication is enabled. Keep that URL exclusively in runtime configuration. The optional [WireGuard egress service](../spectrum-egress/README.md) provides a restricted proxy and an independent WireGuard client in its own container.
+
+| Traffic | Route when a control proxy is configured |
+| --- | --- |
+| Account token refresh, location, lineup, tuning, guide, lease renewal, DRM license and certificate | Private proxy → account home connection → Spectrum |
+| Video manifests, encrypted audio/video segments and CDN redirects | Server's ordinary internet connection → Spectrum CDN |
+| Client playback | Server → client, unchanged |
+
+The proxy can connect only to the four Spectrum control hosts, and TLS remains verified end to end between this service and Spectrum. A failed proxy does not fall back to direct authorization. Video traffic does not enter the proxy. The routing option does not change the subscription, add-on, blackout or device permissions returned by Spectrum. Validate actual playback and license renewal on the intended devices before activation; obtaining a manifest alone does not establish playable DRM video.
+
 ## Development checks
 
-Node.js 22 or newer is required. There are no npm runtime dependencies.
+Node.js 22 or newer is required. There are no npm runtime dependencies. Tests also require the `openssl` command to generate temporary local TLS certificates.
 
 ```sh
 npm test
 docker build -t velvet-spectrum:local .
 ```
 
-Tests use synthetic manifests and fake transports. They cover credential refresh, opaque license bytes, scoped manifest rewriting, bounded requests, cancellation cleanup and provider errors. They do not log in to Spectrum or establish that a particular account or device can play a channel. The Docker context is an explicit source-only allowlist.
+Tests use synthetic manifests, fake media transports, and local CONNECT/TLS fixtures. They cover credential refresh, opaque license bytes, scoped manifest rewriting, bounded requests, cancellation cleanup, provider errors, and separation of proxied control requests from direct media requests. They do not log in to Spectrum or establish that a particular account or device can play a channel. The Docker context is an explicit source-only allowlist.

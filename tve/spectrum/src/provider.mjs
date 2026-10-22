@@ -4,12 +4,29 @@ import {BridgeError, boundedRequest, providerError} from './http.mjs';
 
 const API = 'https://apis-vid.spectrum.net';
 const TOKEN = 'https://apis.spectrum.net/auth/oauth/v2/token';
+const LOCATION = 'https://apis.spectrum.net/pinxt/customer/location/v1';
+const LOCATION_TTL = 15 * 60 * 1000;
+const LOCATION_FIELDS = ['behindOwnModem','inMarket','stateAbbr','behindTheRouter'];
 const AUTH_FIELDS = ['accessToken','refreshToken','deviceId'];
 const tokenText = value => typeof value==='string' && value.length>0 && value.length<=65536 && !/[\r\n\0]/.test(value);
+function locationValue(value) {
+  if (!value || typeof value!=='object' || Array.isArray(value) || typeof value.behindOwnModem!=='boolean' || typeof value.inMarket!=='boolean') throw new BridgeError();
+  const location = {behindOwnModem:value.behindOwnModem,inMarket:value.inMarket};
+  if (value.stateAbbr!==undefined && value.stateAbbr!==null && value.stateAbbr!=='') {
+    if (typeof value.stateAbbr!=='string' || !/^[A-Z]{2}$/.test(value.stateAbbr)) throw new BridgeError();
+    location.stateAbbr=value.stateAbbr;
+  }
+  if (value.behindTheRouter!==undefined && value.behindTheRouter!==null) {
+    if (typeof value.behindTheRouter!=='boolean') throw new BridgeError();
+    location.behindTheRouter=value.behindTheRouter;
+  }
+  return Object.freeze(location);
+}
 export class SpectrumProvider {
   constructor(config, {request = boundedRequest, now = Date.now} = {}) {
     this.config = config; this.request = request; this.now = now;
     this.auth = null; this.refreshing = null; this.cached = null; this.loading = null;
+    this.locationCache = null; this.locationLoading = null;
   }
   async loadAuth() {
     if (this.auth) return this.auth;
@@ -44,20 +61,37 @@ export class SpectrumProvider {
   }
   async api(path, {method = 'GET', query = {}, data, retry = true, timeoutMs = 15000} = {}) {
     if (typeof path!=='string' || !path.startsWith('/') || path.startsWith('//') || /[\\?#\r\n\0]/.test(path)) throw new BridgeError();
-    const auth = await this.token(), u = new URL(path, API);
+    const u = new URL(path, API);
     if (u.origin !== API) throw new BridgeError();
     for (const [key,value] of Object.entries(query)) if (value !== undefined && value !== null) u.searchParams.set(key, String(value));
+    return this.#json(u,{method,data,retry,timeoutMs});
+  }
+  async #json(u, {method = 'GET', data, retry = true, timeoutMs = 15000, maxBytes = 4*1024*1024} = {}) {
+    const auth = await this.token();
     const body = data === undefined ? undefined : Buffer.from(JSON.stringify(data));
     const headers = {Authorization:`Bearer ${auth.accessToken}`,device_id:auth.deviceId};
     if (body) Object.assign(headers, {'Content-Type':'application/json','Content-Length':body.length});
-    const response = await this.request({url:u, method, headers, body, maxBytes:4*1024*1024,timeoutMs});
+    const response = await this.request({url:u, method, headers, body, maxBytes,timeoutMs});
     if (response.status === 401 && retry) {
       if(this.auth?.accessToken===auth.accessToken)await this.refresh();
-      return this.api(path,{method,query,data,retry:false,timeoutMs});
+      return this.#json(u,{method,data,retry:false,timeoutMs,maxBytes});
     }
     if (response.status < 200 || response.status >= 300) throw providerError(response.status,response.body);
     let value = null; if (response.body.length) { try { value=JSON.parse(response.body); } catch { throw new BridgeError(); } }
     return {value,headers:response.headers};
+  }
+  async location(force = false) {
+    if (this.locationLoading) return this.locationLoading;
+    if (!force && this.locationCache && this.now()-this.locationCache.at>=0 && this.now()-this.locationCache.at<LOCATION_TTL) return this.locationCache.value;
+    // A failed refresh must not resurrect captured or expired home-network flags.
+    this.locationCache = null;
+    this.locationLoading = (async () => {
+      const {value} = await this.#json(new URL(LOCATION),{maxBytes:256*1024});
+      const location = locationValue(value);
+      this.locationCache = {at:this.now(),value:location};
+      return location;
+    })().finally(() => {this.locationLoading=null;});
+    return this.locationLoading;
   }
   async channels(force = false) {
     if (!force && this.cached && this.now()-this.cached.at<60000) return this.cached.items;
@@ -92,11 +126,22 @@ export class SpectrumProvider {
     return this.loading;
   }
   async tune(entry, format) {
+    const location = this.config.refreshLocation===true ? await this.location() : undefined;
     const auth = await this.token();
     const query = {...this.config.tuneQuery,adID:auth.deviceId};
     for (const key of ['aegis','sessionId','streamSessionId']) delete query[key];
+    if (location) {
+      for (const key of LOCATION_FIELDS) delete query[key];
+      Object.assign(query,location);
+    }
     const deviceCapabilities = {packaging:format==='fairplay'?'hls':'dash',drm:format==='fairplay'?'fairplay':'cenc',videoCodecs:['avc'],audioCodecs:format==='fairplay'?['aac']:['aac','ac3','eac3']};
-    return this.api(`/lantern/foc-ipvs/api/smarttv/stream/live/v6/${entry.service}`,{method:'POST',query,data:{deviceCapabilities}});
+    const result = await this.api(`/lantern/foc-ipvs/api/smarttv/stream/live/v6/${entry.service}`,{method:'POST',query,data:{deviceCapabilities}});
+    // Keep the exact GET-derived state used for this tune. A provider-observed
+    // change invalidates future tunes instead of claiming a new location locally.
+    const initial = result.value?.initLocation;
+    if (location && initial && this.locationCache?.value===location && ['behindOwnModem','inMarket','stateAbbr','behindTheRouter'].some(key=>
+      Object.hasOwn(location,key) && typeof initial[key]===typeof location[key] && initial[key]!==location[key])) this.locationCache=null;
+    return {...result,location};
   }
   async stop(aegis) { if (aegis) await this.api('/ipvs/api/smarttv/aegis/v1',{method:'DELETE',query:{aegis},timeoutMs:5000}); }
   async renew(aegis) { return (await this.api('/ipvs/api/smarttv/aegis/v1/refresh',{query:{aegis}})).value; }

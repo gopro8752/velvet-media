@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.conf
+proxy.json
+config/
+*.json
