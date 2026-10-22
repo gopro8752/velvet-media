@@ -14,11 +14,11 @@ Older Velvet builds cannot use this source. Update every client before enabling 
 
 ## Private deployment
 
-The service currently requires a provisioned runtime session from your own signed-in Spectrum account. An account sign-in UI is not included in this source package. Do not copy another installation's session, place credentials in an image, or publish the private configuration directory. Normal refreshes use the stored refresh token; if Spectrum revokes the session, a new account sign-in is required.
+The service currently requires a provisioned runtime session from your own signed-in Spectrum account. An account sign-in UI is not included in this source package. Do not copy another installation's session, place credentials in an image, or publish the private configuration directory. Normal refreshes use the stored refresh token. Expired sessions with a saved device verifier are checked with Spectrum first; device renewal occurs only when Spectrum explicitly directs it. Tokens and rotated device context are saved atomically. A provider instruction to sign in again is respected, and temporary provider failures do not become misleading sign-in prompts.
 
 Create `backend/spectrum-config/` outside version control, protect it with mode `0700`, and protect its JSON files with mode `0600`:
 
-- `auth.json`: the provisioned account's `accessToken`, `refreshToken`, `expiresAt` (Unix milliseconds), and `deviceId`. Additional device verifier/context fields are retained when refreshing.
+- `auth.json`: the provisioned account's `accessToken`, `refreshToken`, `expiresAt` (Unix milliseconds), and `deviceId`. Preserve its `deviceVerifier` and `contextToken` when provided; these support provider-directed session renewal. Do not invent or substitute device identity fields.
 - `spectrum.json`: `authFile` set to `/config/auth.json`; `tuneQuery` and `manifestQuery` containing the account's actual provider-issued playback/privacy/location settings; optionally `sourceName` and reviewed `channelAliases` (`id`, `entitlementId`, optional `name`). Do not change location flags to claim another home or market. Do not include another playback's Aegis token or stream-session identifier.
 
 Start the optional private service alongside the backend:

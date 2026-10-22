@@ -62,7 +62,7 @@ test('malformed refresh responses never overwrite persisted credentials and allo
   for (let i=0;i<invalid.length;i++) await t.test(`invalid response${i}`,async t => {
     const f=await fixture(t,(_options,attempt)=>attempt===1?invalid[i]:reply({access_token:'recovered',refresh_token:'recovered-refresh',expires_in:3600}));
     const before=await readFile(f.authFile,'utf8');
-    await assert.rejects(()=>f.provider.refresh(),code('sign_in_required'));
+    await assert.rejects(()=>f.provider.refresh(),code(i===1?'sign_in_required':'source_unavailable'));
     assert.equal(await readFile(f.authFile,'utf8'),before);
     assert.equal((await f.provider.refresh()).accessToken,'recovered');
     assert.equal(f.calls.length,2);
