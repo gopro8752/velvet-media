@@ -18,7 +18,6 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -176,9 +175,8 @@ private const val PROGRESS_SAVE_EVERY_TICKS = 20 // ticker runs every 500ms -> 1
 private const val REPLAY_BACK_MS = 15_000L
 
 /**
- * Ceiling on AUTOMATIC stream failovers per episode attempt (reset by every episode swap).
- * nzbdav serves the odd dead/incomplete NZB; four silent swaps cover that, while a systemic
- * outage still reaches the error screen instead of looping forever.
+ * Ceiling on automatic alternatives in one failure burst. Thirty seconds of
+ * uninterrupted moving playback renews it; a systemic outage still stops.
  */
 private const val MAX_AUTO_RETRIES = 4
 
@@ -273,8 +271,8 @@ class PlayerViewModel(
     /** URLs that failed playback this session — never picked again by the failover. */
     private val blacklistedUrls: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    /** Automatic failovers used so far this session (see [MAX_AUTO_RETRIES]). */
-    private var autoRetries = 0
+    /** Consecutive failures renew only after sustained, moving playback. */
+    private val recoveryBudget = StreamRecoveryBudget(MAX_AUTO_RETRIES)
 
     private var lastBingeGroup: String? = null
 
@@ -329,7 +327,6 @@ class PlayerViewModel(
         .readTimeout(6, TimeUnit.SECONDS)
         .build()
     private val httpDataSourceFactory = OkHttpDataSource.Factory(playbackHttpClient)
-    private val loadErrorHandlingPolicy = DefaultLoadErrorHandlingPolicy(0)
 
     /**
      * Memory-bounded buffering. ExoPlayer's default LoadControl buffers by TIME
@@ -354,8 +351,7 @@ class PlayerViewModel(
 
     val player: ExoPlayer = ExoPlayer.Builder(app)
         .setMediaSourceFactory(
-            DefaultMediaSourceFactory(httpDataSourceFactory)
-                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy),
+            DefaultMediaSourceFactory(httpDataSourceFactory),
         )
         .setLoadControl(loadControl)
         .setSeekBackIncrementMs(10_000)
@@ -382,6 +378,7 @@ class PlayerViewModel(
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (!isPlaying) recoveryBudget.interrupt()
             _state.update { it.copy(isPlaying = isPlaying) }
             telemetry.observe()
         }
@@ -774,16 +771,20 @@ class PlayerViewModel(
         if (handoffAccepted && isBlocked(stream)) return
         if (handoffAborted || (handoffFinished && !handoffAccepted)) return
         currentStream = stream
+        val sourceGeneration = recoveryBudget.sourceChanged()
         failoverWatchdog.reset(android.os.SystemClock.elapsedRealtime())
         stream.bingeGroup?.let { lastBingeGroup = it }
         if (target.type == MediaType.SHOW && handoffAccepted) reportPlayAndWatchForIntro(stream)
         httpDataSourceFactory.setDefaultRequestProperties(stream.headers)
+        val mediaSource = DefaultMediaSourceFactory(httpDataSourceFactory)
+            .setLoadErrorHandlingPolicy(StreamLoadErrorPolicy(recoveryBudget, sourceGeneration))
+            .createMediaSource(ExoMediaItem.fromUri(stream.url))
         val explicitStart = pendingSeek?.takeIf { !it.guardNearEnd }
         if (explicitStart != null) {
             // Begin loading at the transferred position, without briefly playing from zero.
             pendingSeek = null
-            player.setMediaItem(ExoMediaItem.fromUri(stream.url), explicitStart.positionMs.coerceAtLeast(0))
-        } else player.setMediaItem(ExoMediaItem.fromUri(stream.url))
+            player.setMediaSource(mediaSource, explicitStart.positionMs.coerceAtLeast(0))
+        } else player.setMediaSource(mediaSource)
         // Only now can the OLD item no longer emit STATE_ENDED — re-arming any earlier
         // (e.g. at the top of swapToEpisode) lets a late ENDED corrupt the new episode's
         // watched-state while streams are still being fetched.
@@ -875,27 +876,33 @@ class PlayerViewModel(
         // fires on the new episode's STATE_READY. The swap is already re-preparing the
         // player, so there is nothing to recover here.
         if (swapping || queueAdvancing || queueDetached || queueClosed || hostStopped) return
+        val failure = streamFailure(error)
+        Log.w(TAG, "Playback failed: ${error.errorCodeName}; HTTP=${failure.status ?: "none"}; reason=${failure.reason.wire}")
         val pos = player.currentPosition
         if (pos > 0) lastKnownPositionMs = pos
         val failedUrl = currentStream?.url
         if (failedUrl != null) blacklistedUrls.add(failedUrl)
         val next = preparedFallback?.takeIf { it.url != failedUrl && it.url !in blacklistedUrls && !isBlocked(it) }
             ?: candidates.firstOrNull { it.url != failedUrl && it.url !in blacklistedUrls && !isBlocked(it) }
-        if (next != null && autoRetries < MAX_AUTO_RETRIES) {
-            autoRetries++
+        if (next != null && recoveryBudget.tryAutomaticSwitch()) {
             Log.w(
                 TAG,
-                "stream failed (${error.errorCodeName}) — failover $autoRetries/$MAX_AUTO_RETRIES " +
+                "stream failed (${error.errorCodeName}) — failover ${recoveryBudget.automaticAttempts}/$MAX_AUTO_RETRIES " +
                     "to ${next.sourceName} at ${lastKnownPositionMs}ms",
             )
             failoverTo(next)
             return
         }
-        showError(
-            "This stream wouldn't play (${error.errorCodeName.removePrefix("ERROR_CODE_")}). " +
-                "Try again or choose a different stream.",
-            canChoose = true,
-        )
+        val reason = streamFailure(error)
+        val message = when (reason.reason) {
+            StreamFailureReason.MISSING_ARTICLES -> "This source is missing part of the video."
+            StreamFailureReason.UNSUPPORTED_ARCHIVE -> "This source uses an unsupported archive format."
+            StreamFailureReason.INVALID_ARCHIVE -> "This source's archive could not be read."
+            StreamFailureReason.UNKNOWN_STREAM -> "This stream is no longer available."
+            StreamFailureReason.UPSTREAM_UNAVAILABLE, StreamFailureReason.TRANSPORT -> "The video source stopped responding."
+            else -> "This source couldn't continue playing."
+        }
+        showError("$message Choose another stream or try again.", canChoose = true)
         // A watchdog timeout is synthesized while ExoPlayer is still loading.
         // Cancel that load so it cannot start later underneath the error screen.
         player.stop()
@@ -950,9 +957,8 @@ class PlayerViewModel(
                 val next = preparedFallback
                 if (health?.status == "incomplete" && next != null && !swapping && !queueAdvancing && !queueDetached && !queueClosed &&
                     !hostStopped && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
-                    _state.value.phase == PlayerPhase.PLAYING && autoRetries < MAX_AUTO_RETRIES) {
+                    _state.value.phase == PlayerPhase.PLAYING && recoveryBudget.tryAutomaticSwitch()) {
                     blacklistedUrls.add(stream.url)
-                    autoRetries++
                     // Timeline seek preserves the scene across differently sized releases.
                     failoverTo(next)
                     return@launch
@@ -999,6 +1005,7 @@ class PlayerViewModel(
         val wasEnded = player.playbackState == Player.STATE_ENDED
         val dur = player.duration.takeIf { it > 0 }
         val clamped = positionMs.coerceIn(0L, dur ?: Long.MAX_VALUE)
+        recoveryBudget.interrupt()
         player.seekTo(clamped)
         resetStallDeadline()
         requestRecoveryPreparation()
@@ -1053,7 +1060,7 @@ class PlayerViewModel(
         queueFailureJob?.cancel()
         _state.update { it.copy(queueNotice = null) }
         endedHandled = false
-        autoRetries = 0
+        recoveryBudget.resetBurst()
         val s = currentStream
         if (s != null && !isBlocked(s)) {
             if (lastKnownPositionMs > 1_000) {
@@ -1076,7 +1083,7 @@ class PlayerViewModel(
         queueFailureJob?.cancel()
         _state.update { it.copy(queueNotice = null) }
         if (option.url == currentStream?.url && _state.value.phase == PlayerPhase.PLAYING) return
-        autoRetries = 0
+        recoveryBudget.resetBurst()
         blacklistedUrls.remove(option.url)
         val group = option.bingeGroup
         val id = imdbId
@@ -1152,7 +1159,8 @@ class PlayerViewModel(
     }
 
     private fun resetStallDeadline() = failoverWatchdog.reset(android.os.SystemClock.elapsedRealtime(),
-        player.currentPosition.coerceAtLeast(0), player.bufferedPosition.coerceAtLeast(0), player.duration.coerceAtLeast(0))
+        player.currentPosition.coerceAtLeast(0), player.bufferedPosition.coerceAtLeast(0), player.duration.coerceAtLeast(0),
+        establishedPlayback = recoveryBudget.sourceEstablished)
 
     private suspend fun resolvePreviousEpisode(): Episode? {
         val s = curSeason ?: return null
@@ -1294,6 +1302,10 @@ class PlayerViewModel(
                 val pos = player.currentPosition.coerceAtLeast(0L)
                 val dur = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
                 val buf = player.bufferedPosition.coerceAtLeast(0L)
+                if (recoveryBudget.observe(android.os.SystemClock.elapsedRealtime(), pos,
+                        player.isPlaying && !hostStopped && !swapping && !queueAdvancing)) {
+                    Log.i(TAG, "Sustained playback renewed the automatic recovery budget")
+                }
                 if (pos > 0) lastKnownPositionMs = pos
                 if (dur > 0) lastKnownDurationMs = dur
                 _state.update { it.copy(positionMs = pos, durationMs = dur, bufferedMs = buf) }
@@ -1301,6 +1313,7 @@ class PlayerViewModel(
                         nowMs = android.os.SystemClock.elapsedRealtime(), positionMs = pos,
                         bufferedPositionMs = buf, durationMs = dur,
                         buffering = player.playbackState == Player.STATE_BUFFERING,
+                        inPlaceRetryUntilMs = recoveryBudget.retryUntilMs,
                         isPlaying = player.isPlaying, playWhenReady = player.playWhenReady,
                         suppressed = player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE,
                         eligible = handoffAccepted && !hostStopped && !swapping && !queueAdvancing && !queueDetached && !queueClosed,
@@ -1895,11 +1908,9 @@ class PlayerViewModel(
             pendingSeek = null
             lastKnownPositionMs = 0L
             lastKnownDurationMs = 0L
-            // The retry budget is per episode ATTEMPT, not per evening: four failovers
-            // spread across four episodes of a binge would otherwise leave episode five
-            // onward with no automatic swap at all. blacklistedUrls stays session-wide —
-            // URLs differ per episode, so a dead one stays dead without costing the budget.
-            autoRetries = 0
+            // A new episode also starts a fresh failure burst. Known bad source
+            // URLs stay blacklisted; successful playback never revives them.
+            recoveryBudget.resetBurst()
 
             _state.update {
                 it.copy(

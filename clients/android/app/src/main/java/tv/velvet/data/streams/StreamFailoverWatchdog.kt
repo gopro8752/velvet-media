@@ -19,11 +19,12 @@ internal class StreamFailoverWatchdog {
         positionMs: Long = 0,
         bufferedPositionMs: Long = 0,
         durationMs: Long = 0,
+        establishedPlayback: Boolean = false,
     ) {
         bufferingStartedAt = nowMs
         lastProgressAt = nowMs
         recordPosition(positionMs, bufferedPositionMs, durationMs)
-        hasPlayed = false
+        hasPlayed = establishedPlayback
         triggered = false
     }
 
@@ -38,6 +39,7 @@ internal class StreamFailoverWatchdog {
         playWhenReady: Boolean,
         suppressed: Boolean,
         eligible: Boolean,
+        inPlaceRetryUntilMs: Long = 0,
     ): Boolean {
         val progressed = positionMs > lastPositionMs ||
             bufferedPositionMs > lastBufferedPositionMs ||
@@ -60,7 +62,10 @@ internal class StreamFailoverWatchdog {
         if (triggered) return false
 
         val noProgressLimit = if (hasPlayed) REBUFFER_NO_PROGRESS_MS else STARTUP_NO_PROGRESS_MS
-        val stalled = nowMs - lastProgressAt >= noProgressLimit
+        // A real same-range retry receives a finite grace window. It cannot
+        // postpone startup, and even a bad deadline cannot hold a stall forever.
+        val retryActive = hasPlayed && nowMs < minOf(inPlaceRetryUntilMs, startedAt + 30_000)
+        val stalled = nowMs - lastProgressAt >= noProgressLimit && !retryActive
         val startupExpired = !hasPlayed && nowMs - startedAt >= STARTUP_MAX_BUFFERING_MS
         return (stalled || startupExpired).also { if (it) triggered = true }
     }
@@ -74,6 +79,6 @@ internal class StreamFailoverWatchdog {
     internal companion object {
         const val STARTUP_NO_PROGRESS_MS = 6_000L
         const val STARTUP_MAX_BUFFERING_MS = 12_000L
-        const val REBUFFER_NO_PROGRESS_MS = 5_000L
+        const val REBUFFER_NO_PROGRESS_MS = 15_000L
     }
 }

@@ -39,6 +39,7 @@ mod release;
 mod resolver;
 mod sevenzip;
 mod stream;
+mod stream_errors;
 mod sync;
 mod warm;
 mod yenc;
