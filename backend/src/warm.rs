@@ -1,21 +1,12 @@
-//! Pre-warm engine — the "it just starts instantly" machinery.
+//! Bounded startup discovery and speculative pre-warming.
 //!
-//! Three triggers feed it:
-//!   • resolve (`/stream/:kind/:id.json`): the top-ranked candidate is warmed the
-//!     moment a details page asks for streams — by Play, the head is cached.
-//!   • report_play: starting S2E4 warms S2E5 in the background, so "next
-//!     episode" (or autoplay) begins with zero resolve/load/fetch latency.
-//!   • a periodic sweep of the sync progress table: every few hours, the next
-//!     episode of every in-progress show (and the resume point of anything
-//!     mid-watch) is re-validated and re-warmed — dead-NZB roulette is played
-//!     here, in the background, instead of when someone presses Play.
-//!
-//! A warm = resolve candidates (same quality hierarchy as the endpoint), then
-//! for the best candidate: download+parse NZB, build extents, pull the head
-//! segments into the byte-capped SegCache. A candidate that fails to load falls
-//! through to the next — so the cache ends up holding a PROVEN-playable head.
+//! Resolver requests check candidates concurrently, retaining the highest-quality
+//! verified head/tail and working backups. A separate two-slot maintenance lane
+//! prepares next episodes and saved progress without occupying all interactive
+//! discovery capacity. Readiness reflects cached bytes, not whole-file integrity
+//! or a guarantee of zero startup latency.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -53,21 +44,66 @@ pub(crate) struct WarmCandidate {
 
 const STARTUP_PROBE_TIMEOUT: Duration = Duration::from_secs(11);
 const READY_BACKUPS: usize = 3;
+const INTERACTIVE_JOBS: usize = 4;
+const QUEUED_TITLES: usize = 16;
+
+#[derive(Clone, Copy)]
+enum WarmPriority { Interactive, Maintenance }
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct DiscoveryKey { scope: usize, ids: Vec<String> }
+struct DiscoveryJob { key: DiscoveryKey, state: StreamState, candidates: Vec<WarmCandidate> }
+
+/// One bounded queue rather than a task waiting on a semaphore per resolver.
+/// Repeated requests for the same source set join the existing discovery.
+struct CoalescedQueue<K, T> {
+    running: HashSet<K>,
+    pending: VecDeque<(K, T)>,
+    concurrency: usize,
+    capacity: usize,
+}
+impl<K: Eq + std::hash::Hash + Clone, T> CoalescedQueue<K, T> {
+    fn new(concurrency: usize, capacity: usize) -> Self {
+        Self { running: HashSet::new(), pending: VecDeque::new(), concurrency, capacity }
+    }
+    fn submit(&mut self, key: K, value: T) -> (Option<(K, T)>, bool) {
+        if self.running.contains(&key) || self.pending.iter().any(|(k, _)| *k == key) { return (None, false); }
+        if self.running.len() < self.concurrency {
+            self.running.insert(key.clone());
+            return (Some((key, value)), false);
+        }
+        let displaced = self.pending.len() >= self.capacity;
+        if displaced { self.pending.pop_front(); }
+        self.pending.push_back((key, value));
+        (None, displaced)
+    }
+    fn finish(&mut self, key: &K) -> Option<(K, T)> {
+        self.running.remove(key);
+        let next = self.pending.pop_front()?;
+        self.running.insert(next.0.clone());
+        Some(next)
+    }
+}
 
 struct WarmCoordinator {
     slots: Arc<tokio::sync::Semaphore>,
-    batches: Arc<tokio::sync::Semaphore>,
+    maintenance_slots: Arc<tokio::sync::Semaphore>,
+    interactive: Mutex<CoalescedQueue<DiscoveryKey, DiscoveryJob>>,
     active: Mutex<HashSet<(usize, String)>>,
     concurrency: usize,
+    maintenance_concurrency: usize,
 }
 impl WarmCoordinator {
     fn new(concurrency: usize) -> Arc<Self> {
         let concurrency = concurrency.clamp(1, 8);
+        let maintenance_concurrency = concurrency.saturating_sub(1).clamp(1, 2);
         Arc::new(Self {
             slots: Arc::new(tokio::sync::Semaphore::new(concurrency)),
-            batches: Arc::new(tokio::sync::Semaphore::new(4)),
+            maintenance_slots: Arc::new(tokio::sync::Semaphore::new(maintenance_concurrency)),
+            interactive: Mutex::new(CoalescedQueue::new(INTERACTIVE_JOBS, QUEUED_TITLES)),
             active: Mutex::new(HashSet::new()),
             concurrency,
+            maintenance_concurrency,
         })
     }
 }
@@ -118,6 +154,7 @@ async fn run_discovery<F, Fut>(
     coordinator: Arc<WarmCoordinator>,
     scope: usize,
     candidates: Vec<WarmCandidate>,
+    priority: WarmPriority,
     probe_timeout: Duration,
     probe: F,
 ) -> Option<String>
@@ -126,24 +163,38 @@ where
     Fut: std::future::Future<Output = bool>,
 {
     use futures::StreamExt;
-    // Repeated details/resolver requests cannot queue unbounded background work.
-    let _batch = coordinator.batches.clone().try_acquire_owned().ok()?;
+    let parallelism = match priority {
+        WarmPriority::Interactive => coordinator.concurrency,
+        WarmPriority::Maintenance => coordinator.maintenance_concurrency,
+    };
     let ranks: std::collections::HashMap<_, _> = candidates.iter().enumerate().map(|(rank, c)| (c.sid.clone(), rank)).collect();
     let mut pending: HashSet<_> = ranks.values().copied().collect();
     let mut ready = Vec::new();
+    // At most four interactive batches and three maintenance batches can
+    // reach this point in production. Their finite futures wait for shared
+    // capacity; the actual media test receives its full timeout after admission.
     let work = futures::stream::iter(discovery_order(candidates)).map(|candidate| {
         let coordinator = coordinator.clone();
         let probe = &probe;
         async move {
-            let key = (scope, candidate.sid.clone());
             let sid = candidate.sid.clone();
+            // Acquire this gate before claiming sources or global slots, so
+            // maintenance waiters cannot occupy the interactive reserve.
+            let _maintenance = match priority {
+                WarmPriority::Maintenance => match coordinator.maintenance_slots.clone().acquire_owned().await {
+                    Ok(permit) => Some(permit),
+                    Err(_) => return (sid, false),
+                },
+                WarmPriority::Interactive => None,
+            };
+            let key = (scope, candidate.sid.clone());
             if !coordinator.active.lock().unwrap().insert(key.clone()) { return (sid, false); }
             let _active = ActiveWarm { coordinator: coordinator.clone(), key };
             let Ok(_slot) = coordinator.slots.clone().acquire_owned().await else { return (sid, false); };
             let usable = tokio::time::timeout(probe_timeout, probe(candidate)).await.unwrap_or(false);
             (sid, usable)
         }
-    }).buffer_unordered(coordinator.concurrency);
+    }).buffer_unordered(parallelism);
     tokio::pin!(work);
     while let Some((sid, usable)) = work.next().await {
         let rank = ranks[&sid];
@@ -159,9 +210,9 @@ where
     ready.into_iter().min_by_key(|(rank, _)| *rank).map(|(_, sid)| sid)
 }
 
-async fn discover_startup(st: StreamState, candidates: Vec<WarmCandidate>) -> Option<String> {
+async fn discover_startup(st: StreamState, candidates: Vec<WarmCandidate>, priority: WarmPriority) -> Option<String> {
     let scope = Arc::as_ptr(&st.cache) as usize;
-    run_discovery(coordinator(st.pool.total_capacity()), scope, candidates, STARTUP_PROBE_TIMEOUT, |candidate| {
+    run_discovery(coordinator(st.pool.total_capacity()), scope, candidates, priority, STARTUP_PROBE_TIMEOUT, |candidate| {
         let st = st.clone();
         async move {
             match st.source_readiness(&candidate.sid).status {
@@ -179,7 +230,22 @@ async fn discover_startup(st: StreamState, candidates: Vec<WarmCandidate>) -> Op
 /// permits reserve provider room for playback. Every probe has a deadline; the
 /// finite candidate list continues until best-ready plus backups are found.
 pub(crate) fn spawn_warm_streams(st: StreamState, candidates: Vec<WarmCandidate>) {
-    tokio::spawn(async move { discover_startup(st, candidates).await; });
+    let coordinator = coordinator(st.pool.total_capacity());
+    let mut ids: Vec<_> = candidates.iter().map(|c| c.sid.clone()).collect();
+    ids.sort(); ids.dedup();
+    let key = DiscoveryKey { scope: Arc::as_ptr(&st.cache) as usize, ids };
+    let job = DiscoveryJob { key: key.clone(), state: st, candidates };
+    let (start, displaced) = coordinator.interactive.lock().unwrap().submit(key, job);
+    if displaced { tracing::warn!("startup discovery queue full: replaced oldest queued title with newest request"); }
+    if let Some((_, job)) = start { start_interactive_job(coordinator, job); }
+}
+
+fn start_interactive_job(coordinator: Arc<WarmCoordinator>, job: DiscoveryJob) {
+    tokio::spawn(async move {
+        discover_startup(job.state, job.candidates, WarmPriority::Interactive).await;
+        let next = coordinator.interactive.lock().unwrap().finish(&job.key);
+        if let Some((_, next)) = next { start_interactive_job(coordinator, next); }
+    });
 }
 
 /// Rank results with the same hierarchy the resolver endpoint serves.
@@ -246,7 +312,7 @@ async fn warm_title(
     for r in results.iter().filter(|r| !st.is_condemned(&r.nzb_url)) {
         candidates.push(WarmCandidate { sid: st.register(&r.nzb_url).await, title: r.title.clone(), size: r.size });
     }
-    let Some(sid) = discover_startup(st.clone(), candidates).await else { return false; };
+    let Some(sid) = discover_startup(st.clone(), candidates, WarmPriority::Maintenance).await else { return false; };
     // A resume region is optional extra preparation, never a gate on startup.
     if req.fraction.is_some() {
         let _ = tokio::time::timeout(Duration::from_secs(15), warm_head(st.clone(), sid.clone(), req.fraction)).await;
@@ -264,17 +330,39 @@ pub async fn run_worker(
     db: Db,
 ) {
     let mut sweep = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+    let mut sweep_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut jobs = tokio::task::JoinSet::new();
+    let mut queue = CoalescedQueue::new(2, QUEUED_TITLES);
     loop {
-        tokio::select! {
+        let start = tokio::select! {
             req = rx.recv() => {
-                let Some(req) = req else { return };
-                warm_title(&http, &indexers, &st, &req).await;
+                let Some(req) = req else { break };
+                let key = format!("{:?}:{}:{}:{}", req.kind, req.imdb, req.season, req.episode);
+                let (start, displaced) = queue.submit(key, req);
+                if displaced { tracing::warn!("next-episode warm queue full: replaced oldest queued title with newest request"); }
+                start
+            }
+            done = jobs.join_next(), if !jobs.is_empty() => {
+                match done {
+                    Some(Ok(key)) => queue.finish(&key),
+                    _ => None,
+                }
             }
             _ = sweep.tick() => {
-                sweep_progress(&http, &indexers, &st, &db).await;
+                if sweep_task.as_ref().is_none_or(|task| task.is_finished()) {
+                    let (http, indexers, st, db) = (http.clone(), indexers.clone(), st.clone(), db.clone());
+                    sweep_task = Some(tokio::spawn(async move { sweep_progress(&http, &indexers, &st, &db).await; }));
+                }
+                None
             }
+        };
+        if let Some((key, req)) = start {
+            let (http, indexers, st) = (http.clone(), indexers.clone(), st.clone());
+            jobs.spawn(async move { warm_title(&http, &indexers, &st, &req).await; key });
         }
     }
+    if let Some(task) = sweep_task { task.abort(); }
+    jobs.abort_all();
 }
 
 /// Sweep the sync progress table: for every in-progress show, warm the next
@@ -368,7 +456,7 @@ mod tests {
     async fn discovery_keeps_searching_after_three_dead_sources_and_retains_backups() {
         let coordinator = WarmCoordinator::new(2);
         let calls = AtomicUsize::new(0);
-        let result = run_discovery(coordinator.clone(), 1, remuxes(12), Duration::from_secs(1), |candidate| {
+        let result = run_discovery(coordinator.clone(), 1, remuxes(12), WarmPriority::Interactive, Duration::from_secs(1), |candidate| {
             calls.fetch_add(1, Ordering::SeqCst);
             async move { candidate.sid.parse::<usize>().unwrap() >= 7 }
         }).await;
@@ -381,7 +469,7 @@ mod tests {
     #[tokio::test]
     async fn discovery_can_reach_the_last_source_beyond_old_caps() {
         let calls = AtomicUsize::new(0);
-        let result = run_discovery(WarmCoordinator::new(4), 1, remuxes(80), Duration::from_secs(1), |candidate| {
+        let result = run_discovery(WarmCoordinator::new(4), 1, remuxes(80), WarmPriority::Interactive, Duration::from_secs(1), |candidate| {
             calls.fetch_add(1, Ordering::SeqCst);
             async move { candidate.sid == "79" }
         }).await;
@@ -396,7 +484,7 @@ mod tests {
             candidate(1, "Show.1080p.WEB.H264", 100),
             candidate(2, "Show.1080p.WEB.H264", 200),
         ];
-        let result = run_discovery(WarmCoordinator::new(3), 1, candidates, Duration::from_secs(1), |candidate| async move {
+        let result = run_discovery(WarmCoordinator::new(3), 1, candidates, WarmPriority::Interactive, Duration::from_secs(1), |candidate| async move {
             if candidate.sid == "0" { tokio::time::sleep(Duration::from_millis(20)).await; }
             true
         }).await;
@@ -418,8 +506,8 @@ mod tests {
             true
         };
         let (a, b) = tokio::join!(
-            run_discovery(coordinator.clone(), 1, remuxes(4), Duration::from_secs(1), &probe),
-            run_discovery(coordinator.clone(), 1, remuxes(4), Duration::from_secs(1), &probe),
+            run_discovery(coordinator.clone(), 1, remuxes(4), WarmPriority::Interactive, Duration::from_secs(1), &probe),
+            run_discovery(coordinator.clone(), 1, remuxes(4), WarmPriority::Interactive, Duration::from_secs(1), &probe),
         );
         assert!(a.is_some() || b.is_some());
         assert_eq!(calls.load(Ordering::SeqCst), 4, "concurrent viewers must not fetch each source twice");
@@ -431,13 +519,105 @@ mod tests {
     async fn cancelled_batch_releases_claims_and_slots() {
         let coordinator = WarmCoordinator::new(2);
         let result = tokio::time::timeout(Duration::from_millis(10), run_discovery(
-            coordinator.clone(), 1, remuxes(8), Duration::from_secs(1), |_| async {
+            coordinator.clone(), 1, remuxes(8), WarmPriority::Interactive, Duration::from_secs(1), |_| async {
                 std::future::pending::<bool>().await
             },
         )).await;
         assert!(result.is_err());
         assert!(coordinator.active.lock().unwrap().is_empty());
         assert_eq!(coordinator.slots.available_permits(), 2);
-        assert_eq!(coordinator.batches.available_permits(), 4);
+        assert_eq!(coordinator.maintenance_slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn four_busy_maintenance_batches_cannot_starve_or_drop_interactive_discovery() {
+        let coordinator = WarmCoordinator::new(8);
+        let entered = Arc::new(AtomicUsize::new(0));
+        let mut maintenance = tokio::task::JoinSet::new();
+        for scope in 1..=4 {
+            let coordinator = coordinator.clone();
+            let entered = entered.clone();
+            maintenance.spawn(async move {
+                run_discovery(coordinator, scope, remuxes(12), WarmPriority::Maintenance, Duration::from_secs(10), |_| {
+                    let entered = entered.clone();
+                    async move {
+                        entered.fetch_add(1, Ordering::SeqCst);
+                        std::future::pending::<bool>().await
+                    }
+                }).await
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while entered.load(Ordering::SeqCst) < 2 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert_eq!(entered.load(Ordering::SeqCst), 2);
+        assert_eq!(coordinator.slots.available_permits(), 6);
+        let result = tokio::time::timeout(Duration::from_millis(200), run_discovery(
+            coordinator.clone(), 99, remuxes(8), WarmPriority::Interactive, Duration::from_secs(1), |_| async { true },
+        )).await.expect("interactive discovery cannot wait for the maintenance sweep");
+        assert_eq!(result.as_deref(), Some("0"));
+        assert_eq!(entered.load(Ordering::SeqCst), 2, "maintenance may occupy only two shared slots");
+        maintenance.abort_all();
+        while maintenance.join_next().await.is_some() {}
+        assert_eq!(coordinator.slots.available_permits(), 8);
+        assert!(coordinator.active.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn capacity_wait_does_not_spend_healthy_sources_probe_budget() {
+        let coordinator = WarmCoordinator::new(1);
+        let held = coordinator.slots.clone().acquire_owned().await.unwrap();
+        let released = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(65)).await;
+            drop(held);
+        });
+        let calls = AtomicUsize::new(0);
+        let result = tokio::time::timeout(Duration::from_millis(300), run_discovery(
+            coordinator.clone(), 1, remuxes(1), WarmPriority::Interactive, Duration::from_millis(20), |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { true }
+            },
+        )).await.expect("deferred discovery must resume when shared capacity becomes free");
+        assert_eq!(result.as_deref(), Some("0"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(coordinator.active.lock().unwrap().is_empty());
+        assert_eq!(coordinator.slots.available_permits(), 1);
+        released.await.unwrap();
+    }
+
+    #[test]
+    fn small_provider_pools_reserve_interactive_capacity_when_possible() {
+        for capacity in 2..=8 {
+            let coordinator = WarmCoordinator::new(capacity);
+            assert!(coordinator.maintenance_concurrency < capacity);
+            assert!(coordinator.maintenance_concurrency <= 2);
+        }
+        assert_eq!(WarmCoordinator::new(1).maintenance_concurrency, 1);
+    }
+
+    #[test]
+    fn interactive_queue_coalesces_active_and_pending_titles_without_dropping_fifth_title() {
+        let mut queue = CoalescedQueue::new(4, 16);
+        for title in 0..4 { assert_eq!(queue.submit(title, title), (Some((title, title)), false)); }
+        assert_eq!(queue.submit(4, 4), (None, false));
+        for _ in 0..100 {
+            assert_eq!(queue.submit(0, 999), (None, false));
+            assert_eq!(queue.submit(4, 999), (None, false));
+        }
+        assert_eq!(queue.pending.len(), 1);
+        assert_eq!(queue.running.len(), 4);
+        assert_eq!(queue.finish(&0), Some((4, 4)), "completion starts queued discovery instead of silently dropping it");
+    }
+
+    #[test]
+    fn queue_overflow_is_bounded_and_reports_replacement_of_oldest_waiting_title() {
+        let mut queue = CoalescedQueue::new(4, 16);
+        for title in 0..20 { assert!(!queue.submit(title, title).1); }
+        assert!(queue.submit(20, 20).1);
+        assert_eq!(queue.running.len(), 4);
+        assert_eq!(queue.pending.len(), 16);
+        assert_eq!(queue.pending.front().map(|(key, _)| *key), Some(5));
+        assert_eq!(queue.pending.back().map(|(key, _)| *key), Some(20));
+        assert_eq!(queue.finish(&0), Some((5, 5)));
     }
 }

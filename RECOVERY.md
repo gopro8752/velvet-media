@@ -13,11 +13,11 @@ The backend fixes for unequal article lengths, seek-position loops, classified H
 
 ## Choosing a playable source
 
-The backend checks candidate releases concurrently, using up to eight source checks according to configured provider capacity. Article requests share a separate background allowance so discovery leaves room for active playback. It checks high-quality releases alongside compatible encodes, rather than allowing a long run of broken remuxes to hide a playable source farther down the list.
+The backend checks candidate releases concurrently, using up to eight source checks according to configured provider capacity. Saved-history sweeps and speculative preparation share at most two of those slots, leaving capacity for current playback requests. Next-episode requests do not wait for the entire saved-history sweep. Article requests share a separate background allowance so discovery leaves room for active playback. It checks high-quality releases alongside compatible encodes, rather than allowing a long run of broken remuxes to hide a playable source farther down the list.
 
 Startup readiness means checksummed bytes cover the actual media's opening and ending windows. It does not mean every article in the release is available or that every client can decode it. Readiness expires when those cached bytes are evicted. Preparation failures receive a short cooldown instead of launching the same expensive work on every request; uncertainty about a provider is not a permanent missing-article verdict.
 
-Updated clients fetch cached readiness in one authenticated request, prefer quality among prepared candidates, and continue through untried startup candidates without the former four-failure cutoff. Discovery retains prepared backups and checks higher-quality candidates still outstanding. A failed background check does not interrupt a stream that is already playing. Mid-play alternatives still need preparation around the current playback position; another encode may require a visible player restart.
+Updated clients fetch cached readiness in one request protected by the configured backend token, prefer quality among prepared candidates, and continue through untried startup candidates without the former four-failure cutoff. Discovery retains prepared backups and checks higher-quality candidates still outstanding. A failed background check does not interrupt a stream that is already playing. Mid-play alternatives still need preparation around the current playback position; another encode may require a visible player restart.
 
 ## Enable on your server
 
