@@ -25,10 +25,12 @@ private final class TelemetryRedirectPolicy: NSObject, URLSessionTaskDelegate, @
 /// Independent, short-lived best-effort requests; failures never reach the player UI.
 @MainActor
 final class PlaybackTelemetry {
-    struct Sample { var state: String; var positionMs: Int64 = 0 }
+    struct Sample { var state: String; var positionMs: Int64 = 0; var source: URL? = nil }
     private let settings: SettingsStore
     private var payload: [String: Any]?
+    var sessionId: String? { payload?["sessionId"] as? String }
     private var clock: PlaybackTelemetryClock?
+    private var recovery: RecoveryPlaybackMetrics?
     private var sampler: (() -> Sample)?
     private var timer: Task<Void, Never>?
     private var endpoint: URL?
@@ -61,6 +63,7 @@ final class PlaybackTelemetry {
         defaults.set(deviceId, forKey: "telemetry_device_id")
         openedAt = ProcessInfo.processInfo.systemUptime
         clock = PlaybackTelemetryClock(now: openedAt)
+        recovery = (kind == "tv" || kind == "movie") ? RecoveryPlaybackMetrics(nowMs: Int64(openedAt * 1_000)) : nil
         sequence = 0; lastSent = 0; sampler = sample
         payload = ["sessionId": UUID().uuidString, "deviceId": deviceId,
                    "deviceName": UIDevice.current.model, "platform": "ios",
@@ -80,6 +83,7 @@ final class PlaybackTelemetry {
     func observe(force: Bool = false) {
         guard let sample = sampler?(), var value = clock else { return }
         let now = ProcessInfo.processInfo.systemUptime
+        recovery?.sample(nowMs: Int64(now * 1_000), state: sample.state, source: sample.source, positionMs: sample.positionMs)
         let changed = value.state != sample.state
         value.sample(now: now, state: sample.state); clock = value
         payload?["positionMs"] = max(0, sample.positionMs)
@@ -87,17 +91,24 @@ final class PlaybackTelemetry {
         if force || changed || now - lastSent >= 15 { send() }
     }
     func error() { let count = (payload?["errorCount"] as? Int ?? 0) + 1; payload?["errorCount"] = count; observe(force: true) }
+    func sourcePrepared(_ url: URL, automatic: Bool) {
+        if recovery == nil { recovery = RecoveryPlaybackMetrics(nowMs: Int64(ProcessInfo.processInfo.systemUptime * 1_000)) }
+        recovery?.prepare(url, automatic: automatic)
+    }
+    func seek(to target: Int64) { recovery?.seek(to: target) }
+    func seekDispatched() { recovery?.didDispatchSeek() }
     func sourceSwitch() { let count = (payload?["sourceSwitches"] as? Int ?? 0) + 1; payload?["sourceSwitches"] = count; observe(force: true) }
     func end() {
         timer?.cancel(); timer = nil
         if var value = clock { value.sample(now: ProcessInfo.processInfo.systemUptime, state: "ended"); clock = value; send() }
-        clock = nil; payload = nil; sampler = nil; endpoint = nil
+        clock = nil; recovery = nil; payload = nil; sampler = nil; endpoint = nil
     }
     private func send() {
         guard let endpoint, let value = clock, var data = payload else { return }
         sequence += 1
         data["sequence"] = sequence; data["state"] = value.state
         data["playedMs"] = value.playedMs; data["bufferedMs"] = value.bufferedMs
+        if let recovery { data.merge(recovery.payload) { _, new in new } }
         data["timestampMs"] = Int64(Date().timeIntervalSince1970 * 1_000)
         guard let body = try? JSONSerialization.data(withJSONObject: data) else { return }
         lastSent = ProcessInfo.processInfo.systemUptime

@@ -33,6 +33,10 @@ pub struct Config {
     pub live_tv: LiveTv,
     #[serde(default)]
     pub live_sports: LiveSports,
+    #[serde(default)]
+    pub repair: crate::repair::RepairConfig,
+    #[serde(default)]
+    pub stream_buffer: crate::stream::BufferConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -164,6 +168,7 @@ mod tests {
         assert!(cfg.providers.iter().all(|p| p.username.is_empty() && p.password.is_empty()));
         assert!(cfg.indexers.iter().all(|i| i.api_key.is_empty()));
         assert!(!cfg.category_ai.enabled && !cfg.live_tv.enabled && !cfg.live_sports.enabled);
+        assert!(!cfg.repair.enabled && !cfg.stream_buffer.enabled);
         assert!(cfg.live_tv.direct_tve_url.is_none());
         assert!(cfg.live_tv.native_spectrum_url.is_none());
         assert_eq!(cfg.public_base_url.as_deref(), Some("https://velvet.example.com"));

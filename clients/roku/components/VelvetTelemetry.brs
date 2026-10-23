@@ -3,6 +3,9 @@
 sub initTelemetry()
     m.telemetry = invalid
     m.telemetryStartClock = invalid
+    m.recoveryGeneration = 0
+    m.recoveryLastHeartbeat = 0
+    m.manualSourceSwitch = false
     m.telemetryTask = invalid
     m.telemetryPending = []
     m.telemetryDevice = CreateObject("roDeviceInfo")
@@ -75,9 +78,11 @@ sub telemetrySourceStarted()
     if m.telemetry = invalid then return
     sampleTelemetry(false)
     source = VStr(VGet(m.streams[m.sourceIndex], "url"))
-    if m.telemetry.source <> "" and source <> m.telemetry.source
-        m.telemetry.accumulator.sourceSwitches = VNum(VGet(m.telemetry.accumulator, "sourceSwitches")) + 1
-    end if
+    if m.telemetry.source <> "" and source <> m.telemetry.source then recoveryHeartbeat(true)
+    m.telemetry.accumulator = VRecoveryBeginSource(m.telemetry.accumulator, source, m.manualSourceSwitch)
+    m.manualSourceSwitch = false
+    m.recoveryGeneration += 1
+    m.recoveryLastHeartbeat = 0
     m.telemetry.source = source
     ' Restart the motion baseline across source replacement or audio preroll.
     m.telemetry.accumulator.motionState = "buffering"
@@ -90,6 +95,7 @@ sub endTelemetry(state = "ended" as string)
         m.telemetry.accumulator.errorCount = VNum(VGet(m.telemetry.accumulator, "errorCount")) + 1
     end if
     sendTelemetry(state)
+    recoveryHeartbeat(true)
     m.telemetry = invalid
 end sub
 
@@ -117,6 +123,18 @@ sub sendTelemetry(state = "" as string)
     if kind = "tv"
         body.season = VNum(VGet(m.playItem, "season"))
         body.episode = VNum(VGet(m.playItem, "episode"))
+    end if
+    if not m.isLive
+        body.telemetryVersion = 2
+        body.buildChannel = "stable"
+        body.sourceSwitchAttempts = counters.automaticSwitchAttempts + counters.manualSwitchAttempts
+        body.successfulSourceSwitches = counters.sourceSwitches
+        for each key in ["automaticSwitchAttempts", "manualSwitchAttempts", "automaticSourceSwitches", "manualSourceSwitches", "rebufferCount", "seekCount"]
+            body.AddReplace(key, VNum(VGet(counters, key)))
+        end for
+        for each key in ["rebufferedMs", "maxRebufferMs"]
+            body.AddReplace(key, VTelemetryMilliseconds(VGet(counters, key)))
+        end for
     end if
     if VNum(VGet(counters, "startupMs"), -1) >= 0 then body.startupMs = VTelemetryMilliseconds(VGet(counters, "startupMs"))
     request = {id: m.telemetry.id + ":" + m.telemetry.sequence.ToStr(), baseUrl: m.telemetry.baseUrl, token: m.telemetry.token, path: "/telemetry/playback", method: "POST", body: body, timeout: 5000}
@@ -165,4 +183,21 @@ sub resetTelemetryBackend()
         m.telemetryTask = invalid
     end if
     m.telemetryPending = []
+end sub
+
+' Position heartbeats bind the watch to verified read-ahead and exact repair.
+' No speculative buffer-time estimate is sent when Roku cannot expose one.
+sub recoveryHeartbeat(stopped = false as boolean)
+    if m.telemetry = invalid or m.isLive then return
+    source = m.telemetry.source
+    if VOrigin(source) <> VOrigin(m.telemetry.baseUrl) then return
+    sid = VStreamId(source)
+    if sid = "" then return
+    now = m.telemetry.clock.TotalMilliseconds()
+    if not stopped and now - m.recoveryLastHeartbeat < 3000 then return
+    m.recoveryLastHeartbeat = now
+    body = {sessionId: m.telemetry.id, generation: m.recoveryGeneration,
+        positionMs: VMediaMilliseconds(m.lastPosition), durationMs: VMediaMilliseconds(m.lastDuration),
+        bufferedPositionMs: 0, playing: m.playing and m.video.state <> "paused" and not m.seekShouldPause, stopped: stopped}
+    requestApi("recoveryPlayback", "/stream/" + VEncode(sid) + "/playback", "POST", body, {}, 5000)
 end sub

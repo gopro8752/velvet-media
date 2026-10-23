@@ -51,24 +51,23 @@ Keep this key private. It can view usage by profile and device, current playback
 
 Playback reports begin when compatible clients send telemetry. Historic playback is not inferred from existing watch progress. The analytics database is separate from watch-state data, defaults to `/data/velvet-analytics.db`, and can be relocated with `VELVET_ANALYTICS_DB`. Capacity samples, usage buckets, and session records are retained for 90 days.
 
-### Recovery reporting for Velvet Beta
+### Exact repair and recovery reporting
 
-The **Recovery** section at `/admin#recovery` reports the separate beta backend’s work. It keeps beta repair and viewing statistics separate from the dashboard’s existing stable capacity and playback reports. Update the beta backend and Android beta app together to enable watch-level attribution and the new source-switch counters.
+Mainline Velvet includes the verified read-ahead and exact-byte recovery engine first tested in Beta. Enable `[repair].enabled` and `[stream_buffer].enabled` in your private TOML configuration, reserve a writable private cache directory, and set the file, disk, download, concurrency, and time limits to fit your server. See the example configuration. The image includes PAR2 and FFmpeg/ffprobe. Native installations also need `par2`.
 
-To view beta reporting through your existing dashboard, configure both values on the **server hosting that dashboard**, using a backend build that supports the recovery report proxy:
+The engine tries another configured provider for the exact article first, checks yEnc lengths and checksums, and uses available PAR2 recovery blocks when needed. Repaired files become readable only after full-file verification. Playback continues through the original stream URL. Updated clients send playback position so the server can inspect actual packet timestamps ahead of the playhead; an unrepairable release can still fail over to a prepared alternative. Repair depends on available parity, provider coverage, and finishing within the configured budgets; uninterrupted playback is not guaranteed.
 
-```dotenv
-VELVET_RECOVERY_REPORT_URL=https://beta-backend.example
-VELVET_RECOVERY_REPORT_TOKEN=REPLACE_WITH_BETA_ADMIN_KEY
-```
+Playback attribution uses an explicit watch ID on each actual media request: `X-Velvet-Playback-Session` or a `playbackSessionId` query on the registered backend stream/WAV URL. The Roku compatibility-session API accepts the same ID in its JSON body. Only actual decoder reads carry it internally; metadata, keyframe, and read-ahead probes cannot claim repaired-byte delivery to a viewer. Clients must keep this ID on their configured backend and preserve the original stream URL for handoff.
 
-Replace the reserved example origin with the beta backend’s address reachable by the dashboard server. Use a bare HTTP(S) origin, without a path, query, embedded credentials, or fragment. The token is the beta backend’s **admin key**, not its client playback token. Retrieve it privately from the beta data volume; with the beta Compose example, run `docker compose -f compose.beta.yaml exec backend-beta cat /data/velvet-admin-key`. Keep both settings in private deployment configuration and pass them into the dashboard container’s environment. A Compose `.env` file alone does not inject variables unless the service’s `environment` or `env_file` configuration includes them.
+The **Recovery** section at `/admin#recovery` reads this backend's local analytics by default. Updated stable and beta clients can report watch-level source switches and buffering, while older clients remain in the existing usage reports. Keep your existing provider accounts, profiles, watch history, and data volume when enabling recovery; a separate beta database is not needed.
 
-Restart the dashboard backend after setting the variables. Your browser uses its existing dashboard admin session; the proxy token stays on the server. The beta backend need only be reachable from that server. Leave the proxy settings unset on the beta backend itself to read its local report directly. An unreachable beta service shows an unavailable state without replacing the stable reporting data.
+If upgrading a dashboard that previously proxied the beta report, remove both `VELVET_RECOVERY_REPORT_URL` and `VELVET_RECOVERY_REPORT_TOKEN` from its runtime environment so it reports the mainline backend's work. Existing beta history remains on the beta server; it is not silently merged into production's analytics.
+
+A separate recovery server can still be selected with both `VELVET_RECOVERY_REPORT_URL` and `VELVET_RECOVERY_REPORT_TOKEN`. Use a bare HTTP(S) origin and that server's private admin key, not its client token. The browser uses its existing dashboard admin session and never receives the proxy credential. Leave these variables unset to report locally.
 
 The report distinguishes provider article rescues, completed and unsuccessful PAR2 jobs with reasons, prepared data without observed playback delivery, and repaired bytes delivered on an active stream. It also shows successful source switches per measured movie/episode watch, manual and automatic attempts, startup, post-start buffering, title breakdowns, session details, and a CSV of the latest 5,000 instrumented sessions. The per-watch average includes watches with zero switches and excludes attempts with no reported playing time; a source is counted as switched only when replacement playback starts.
 
-Collection begins with the updated components. No historic repair activity is reconstructed. A repair started by look-ahead is not proof that it completed before playback reached the missing data; server delivery is not proof that every frame was displayed. Post-start buffering is measured separately. Recovery events are retained for up to 90 days or 250,000 records, whichever limit is reached first; dropped-event warnings identify incomplete collection. See [the beta guide](https://github.com/gopro8752/velvet-media/blob/beta/BETA.md) for isolation, resource limits, and testing.
+Collection begins with the updated components. No historic repair activity is reconstructed. A repair started by look-ahead is not proof that it completed before playback reached the missing data; server delivery is not proof that every frame was displayed. Post-start buffering is measured separately. Recovery events are retained for up to 90 days or 250,000 records, whichever limit is reached first; dropped-event warnings identify incomplete collection. The optional [beta guide](../BETA.md) describes how to keep an independent test instance.
 
 ## Optional integrations
 
@@ -110,7 +109,7 @@ Provider entitlements, concurrent-stream limits, channel availability, and perio
 
 ## Run from source
 
-Use a current stable Rust toolchain. The full test suite requires FFmpeg and `ffprobe`; playback compatibility uses the same tools. Chromaprint (`fpcalc`) supplies intro detection. On Debian/Ubuntu, install these with `sudo apt-get install ffmpeg libchromaprint-tools` before running the commands below.
+Use a current stable Rust toolchain. The full test suite requires FFmpeg and `ffprobe`; playback compatibility uses the same tools. Chromaprint (`fpcalc`) supplies intro detection. On Debian/Ubuntu, install these with `sudo apt-get install ffmpeg libchromaprint-tools par2` before running the commands below.
 
 ```sh
 cargo test --locked

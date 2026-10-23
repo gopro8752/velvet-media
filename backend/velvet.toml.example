@@ -52,3 +52,23 @@ guide_enabled = false
 # Optional external event discovery/embed adapter; no channels are bundled.
 [live_sports]
 enabled = false
+
+# Exact-byte recovery. Enable after reserving disk space and provider capacity.
+# Repair files and metadata belong on a private writable volume.
+[repair]
+enabled = false
+cache_dir = "/data/recovery"
+max_job_bytes = 17179869184
+max_cache_bytes = 34359738368
+max_jobs = 1
+max_job_seconds = 180
+
+# Real packet timestamps from ffprobe, never duration * file-size estimates.
+[stream_buffer]
+enabled = false
+lookahead_seconds = 90
+max_probe_bytes = 268435456
+max_probe_seconds = 40
+max_memory_bytes = 268435456
+heartbeat_timeout_seconds = 15
+ffprobe_binary = "ffprobe"

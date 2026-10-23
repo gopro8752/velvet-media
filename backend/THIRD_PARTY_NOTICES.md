@@ -6,7 +6,7 @@ The dependency sources and their license/notice files are available from each li
 
 ## Container runtime
 
-The Dockerfile separately installs Debian packages including FFmpeg, Chromaprint, certificate bundles, and their dependencies. Their copyright and license files remain under `/usr/share/doc` in the image. FFmpeg and some libraries have GPL/LGPL obligations; anyone distributing a complete container must provide the corresponding source and other materials required by those components' applicable licenses. The source-available Velvet license does not cover or restrict those components. Debian source package versions should match the actual built image; base image tags and package repositories can change between builds.
+The Dockerfile separately installs Debian packages including FFmpeg, Chromaprint, PAR2, certificate bundles, and their dependencies. Their copyright and license files remain under `/usr/share/doc` in the image. FFmpeg and some libraries have GPL/LGPL obligations; anyone distributing a complete container must provide the corresponding source and other materials required by those components' applicable licenses. The source-available Velvet license does not cover or restrict those components. Debian source package versions should match the actual built image; base image tags and package repositories can change between builds.
 
 The optional `with-codex` target includes Node.js (MIT with third-party notices) and the official Codex CLI package (Apache-2.0 with third-party components). Their own package notices and upstream licenses apply. Authentication is created at runtime and is not a distributed component.
 
@@ -98,6 +98,7 @@ No fonts, photographs, posters, stream media, or external guide listings are bun
 | [lru-slab](https://crates.io/crates/lru-slab/0.1.2) | 0.1.2 | MIT OR Apache-2.0 OR Zlib |
 | [matchers](https://crates.io/crates/matchers/0.2.0) | 0.2.0 | MIT |
 | [matchit](https://crates.io/crates/matchit/0.7.3) | 0.7.3 | MIT AND BSD-3-Clause |
+| [md5](https://crates.io/crates/md5/0.7.0) | 0.7.0 | Apache-2.0 OR MIT |
 | [memchr](https://crates.io/crates/memchr/2.8.3) | 2.8.3 | Unlicense OR MIT |
 | [mime](https://crates.io/crates/mime/0.3.17) | 0.3.17 | MIT OR Apache-2.0 |
 | [miniz_oxide](https://crates.io/crates/miniz_oxide/0.9.1) | 0.9.1 | MIT OR Zlib OR Apache-2.0 |

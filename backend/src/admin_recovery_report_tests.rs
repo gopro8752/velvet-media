@@ -97,6 +97,43 @@ fn switch_average_includes_zero_switch_watches_excludes_failed_starts_and_legacy
 }
 
 #[test]
+fn stable_and_beta_v2_watches_report_together_without_legacy_backfill() {
+    let c = fixture();
+    watch(&c, "stable", "Mainline episode", 60_000, 2, true);
+    c.execute(
+        "UPDATE admin_recovery_playback SET channel='stable' WHERE session_id='stable'",
+        [],
+    )
+    .unwrap();
+    watch(&c, "beta", "Beta episode", 60_000, 0, true);
+    watch(&c, "older-stable", "Older episode", 60_000, 50, false);
+    c.execute(
+        "UPDATE admin_recovery_playback SET channel='stable' WHERE session_id='older-stable'",
+        [],
+    )
+    .unwrap();
+    let result = report(&c, 1, NOW).unwrap();
+    assert_eq!(result["scope"], "server");
+    assert_eq!(result["summary"]["watches"], 2);
+    assert_eq!(result["summary"]["sourceSwitches"], 2);
+    assert_eq!(result["summary"]["avgSwitchesPerWatch"], 1.0);
+    assert_eq!(result["daily"][0]["watches"], 2);
+    assert_eq!(result["daily"][0]["sourceSwitches"], 2);
+    let sessions = result["sessions"].as_array().unwrap();
+    assert!(sessions
+        .iter()
+        .any(|s| s["id"] == "stable" && s["buildChannel"] == "stable"));
+    assert!(sessions
+        .iter()
+        .any(|s| s["id"] == "beta" && s["buildChannel"] == "beta"));
+    assert!(!sessions.iter().any(|s| s["id"] == "older-stable"));
+    let csv = export(&c, 1, NOW).unwrap();
+    assert!(csv.starts_with("id,buildChannel,title,"));
+    assert!(csv.contains("Mainline episode"));
+    assert!(!csv.contains("Older episode"));
+}
+
+#[test]
 fn reporting_period_uses_usage_deltas_instead_of_lifetime_counters() {
     let c = fixture();
     watch(&c, "spanning", "Episode", 60_000, 2, true);

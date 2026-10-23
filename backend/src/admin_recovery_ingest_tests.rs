@@ -22,6 +22,41 @@ fn beta() -> PlaybackEvent {
     e
 }
 
+#[test]
+fn stable_v2_watch_preserves_channel_and_records_recovery_counters() {
+    let mut c = db();
+    let mut e = beta();
+    e.recovery.build_channel = Some("stable".into());
+    assert!(e.validate());
+    ingest(&mut c, &e, 100_000).unwrap();
+    e.sequence = 2;
+    e.played_ms = 1000;
+    set_switches(&mut e, 1);
+    assert!(ingest(&mut c, &e, 101_000).unwrap());
+    assert_eq!(saved(&c), (2, 1, 1000));
+    let channel: String = c
+        .query_row("SELECT channel FROM admin_recovery_playback", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(channel, "stable");
+    let counters: (u64, u64) = c
+        .query_row(
+            "SELECT sum(attempts),sum(automatic_switches) FROM admin_recovery_usage",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counters, (1, 1));
+    e.sequence = 3;
+    e.recovery.build_channel = Some("beta".into());
+    assert!(
+        ingest(&mut c, &e, 102_000).is_err(),
+        "a watch cannot change channel while active"
+    );
+    assert_eq!(saved(&c), (2, 1, 1000));
+}
+
 fn db() -> Connection {
     let c = Connection::open_in_memory().unwrap();
     migrate(&c).unwrap();

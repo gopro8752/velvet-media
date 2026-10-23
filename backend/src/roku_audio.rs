@@ -96,6 +96,7 @@ struct StartRequest {
     position_ms: u64,
     audio_track: Option<u32>,
     subtitle_track: Option<u32>,
+    playback_session_id: Option<String>,
 }
 #[derive(Debug)]
 struct AudioError(StatusCode, &'static str);
@@ -236,8 +237,11 @@ impl Session {
 async fn start(
     State(state): State<AudioState>,
     Path(sid): Path<String>,
+    headers: HeaderMap,
     Json(request): Json<StartRequest>,
 ) -> Result<Json<SessionInfo>> {
+    let playback_session = crate::stream::requested_playback_session(&headers, request.playback_session_id.as_deref())
+        .map_err(|status| AudioError(status, "invalid_playback_session"))?;
     let source = state.source(&sid)?;
     if request.position_ms > MAX_DURATION_MS {
         return Err(AudioError(StatusCode::BAD_REQUEST, "invalid_position"));
@@ -309,8 +313,11 @@ async fn start(
         status: Mutex::new("starting"),
         metadata: info.clone(),
     });
+    // Probe/keyframe reads above are speculative. Associate only media reads
+    // by the running encoder, using the server-owned loopback URL.
+    let encoder_source = crate::stream::attributed_source(&source, playback_session.as_deref());
     let child = match encoder(
-        &source,
+        &encoder_source,
         request.position_ms as f64 / 1000.0,
         offset,
         track,
@@ -1421,11 +1428,15 @@ mod tests {
             String::from_utf8_lossy(&generated.stderr)
         );
         let bytes = Arc::new(std::fs::read(&original).unwrap());
+        let source_queries = Arc::new(Mutex::new(Vec::<String>::new()));
+        let queries = source_queries.clone();
         let source = Router::new().route(
             "/stream/:sid",
-            get(move |headers: HeaderMap| {
+            get(move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri, headers: HeaderMap| {
                 let bytes = bytes.clone();
+                let queries = queries.clone();
                 async move {
+                    queries.lock().unwrap().push(uri.query().unwrap_or("").to_owned());
                     let n = bytes.len() as u64;
                     let (start, end, partial) =
                         range(headers.get(header::RANGE).and_then(|v| v.to_str().ok()), n).unwrap();
@@ -1459,13 +1470,19 @@ mod tests {
         let client = reqwest::Client::new();
         let response = client
             .post(format!("{base}/stream/{sid}/roku/session"))
-            .json(&serde_json::json!({"positionMs":5300,"audioTrack":1,"subtitleTrack":2}))
+            .json(&serde_json::json!({"positionMs":5300,"audioTrack":1,"subtitleTrack":2,"playbackSessionId":"roku-watch-1"}))
             .send()
             .await
             .unwrap();
         let code = response.status();
         let info: serde_json::Value = response.json().await.unwrap();
         assert_eq!(code, StatusCode::OK, "{info}");
+        {
+            let queries = source_queries.lock().unwrap();
+            assert!(queries.iter().any(String::is_empty), "metadata and keyframe probes remain unassociated");
+            assert!(queries.iter().any(|q| q == "playbackSessionId=roku-watch-1"), "actual encoder reads carry the explicit watch");
+            assert!(queries.iter().all(|q| q.is_empty() || q == "playbackSessionId=roku-watch-1"));
+        }
         assert_eq!(info["sourceOffsetMs"], 4000);
         assert_eq!(info["durationMs"], 16000);
         assert_eq!(info["subtitleTracks"][0]["index"], 2);

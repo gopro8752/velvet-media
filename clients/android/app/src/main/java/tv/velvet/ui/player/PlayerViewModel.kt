@@ -30,6 +30,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -44,6 +46,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tv.velvet.VelvetApp
+import tv.velvet.BuildConfig
+import tv.velvet.data.telemetry.PlaybackSessionInterceptor
+import tv.velvet.data.telemetry.SourceSwitchReason
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import tv.velvet.data.local.DEFAULT_PROFILE_ID
 import tv.velvet.data.local.WatchProgressEntity
 import tv.velvet.data.local.WatchedEpisodeEntity
@@ -129,6 +135,8 @@ data class PlayerUiState(
     val blockedGroups: List<ReleaseGroup> = emptyList(),
     val canBlockCurrentRelease: Boolean = false,
     val groupActionError: String? = null,
+    val recoveryDiagnostics: ExactRecoveryState? = null,
+    val repairDiagnostics: ExactRepairState? = null,
     /** Display name of the active embedded subtitle track; null = subtitles off. */
     val subtitleLabel: String? = null,
     val subtitleAvailable: Boolean = false,
@@ -325,6 +333,9 @@ class PlayerViewModel(
     private val playbackHttpClient = container.okHttpClient.newBuilder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)
+        .apply {
+            if (BuildConfig.EXACT_RECOVERY) addNetworkInterceptor(PlaybackSessionInterceptor { settings.syncUrl })
+        }
         .build()
     private val httpDataSourceFactory = OkHttpDataSource.Factory(playbackHttpClient)
 
@@ -381,6 +392,14 @@ class PlayerViewModel(
             if (!isPlaying) recoveryBudget.interrupt()
             _state.update { it.copy(isPlaying = isPlaying) }
             telemetry.observe()
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (BuildConfig.EXACT_RECOVERY) telemetry.observe()
+        }
+
+        override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+            if (BuildConfig.EXACT_RECOVERY) telemetry.observe()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -745,7 +764,7 @@ class PlayerViewModel(
         )
     }
 
-    private fun play(stream: StreamOption) {
+    private fun play(stream: StreamOption, reason: SourceSwitchReason = SourceSwitchReason.AUTOMATIC) {
         if (handoffAborted || (handoffFinished && !handoffAccepted)) return
         val lease = handoffLease
         if (lease != null && !handoffFinished) {
@@ -758,24 +777,34 @@ class PlayerViewModel(
                         abortHandoff("Send to TV is no longer active.")
                     } else {
                         if (status.state == "started") acceptHandoff()
-                        prepareStream(stream)
+                        prepareStream(stream, reason)
                     }
                 } catch (cancelled: CancellationException) { throw cancelled
                 } catch (_: Exception) { abortHandoff("Couldn't confirm Send to TV. Please try again.") }
             }
-        } else prepareStream(stream)
+        } else prepareStream(stream, reason)
     }
 
-    private fun prepareStream(stream: StreamOption) {
-        if (currentStream != null && currentStream?.url != stream.url) telemetry.sourceSwitch()
+    private fun prepareStream(stream: StreamOption, reason: SourceSwitchReason) {
         if (handoffAccepted && isBlocked(stream)) return
         if (handoffAborted || (handoffFinished && !handoffAccepted)) return
+        if (BuildConfig.EXACT_RECOVERY) telemetry.sourcePrepared(stream.url, reason)
+        else if (currentStream != null && currentStream?.url != stream.url) telemetry.sourceSwitch()
         currentStream = stream
         val sourceGeneration = recoveryBudget.sourceChanged()
         failoverWatchdog.reset(android.os.SystemClock.elapsedRealtime())
         stream.bingeGroup?.let { lastBingeGroup = it }
         if (target.type == MediaType.SHOW && handoffAccepted) reportPlayAndWatchForIntro(stream)
-        httpDataSourceFactory.setDefaultRequestProperties(stream.headers)
+        val mediaHeaders = if (BuildConfig.EXACT_RECOVERY) {
+            val headers = stream.headers.filterKeys { !it.equals(PlaybackSessionInterceptor.HEADER, true) }.toMutableMap()
+            val url = stream.url.toHttpUrlOrNull()
+            val watchId = telemetry.sessionId
+            if (watchId != null && url != null && PlaybackSessionInterceptor.allowsAttribution(settings.syncUrl, url)) {
+                headers[PlaybackSessionInterceptor.HEADER] = watchId
+            }
+            headers
+        } else stream.headers
+        httpDataSourceFactory.setDefaultRequestProperties(mediaHeaders)
         val mediaSource = DefaultMediaSourceFactory(httpDataSourceFactory)
             .setLoadErrorHandlingPolicy(StreamLoadErrorPolicy(recoveryBudget, sourceGeneration))
             .createMediaSource(ExoMediaItem.fromUri(stream.url))
@@ -798,6 +827,8 @@ class PlayerViewModel(
                 errorMessage = null,
                 canChooseStream = false,
                 currentStreamUrl = stream.url,
+                recoveryDiagnostics = null,
+                repairDiagnostics = null,
                 canBlockCurrentRelease = canBlockCurrentRelease(),
                 isBuffering = true,
             )
@@ -863,7 +894,9 @@ class PlayerViewModel(
      * the candidates are exhausted (or [MAX_AUTO_RETRIES] auto-swaps have been spent).
      */
     private fun handlePlayerError(error: PlaybackException) {
-        telemetry.error()
+        if (!BuildConfig.EXACT_RECOVERY || !(swapping || queueAdvancing || queueDetached || queueClosed || hostStopped)) {
+            telemetry.error()
+        }
         if (handoffLease != null && !handoffFinished) {
             Log.w("Handoff", "The phone's exact stream failed on TV (${error.errorCodeName})")
             abortHandoff("The phone's stream couldn't play on this TV. Playback can continue on your phone.")
@@ -918,64 +951,95 @@ class PlayerViewModel(
         recoveryRevision++
         recoveryPrepareRequested = true
         preparedFallback = null
+        if (BuildConfig.EXACT_RECOVERY) _state.update { it.copy(recoveryDiagnostics = null, repairDiagnostics = null) }
     }
 
-    /** Keep a verified alternative warm while the current stream is still buffered. */
+    /** Report playback for exact recovery and keep an alternate available as ordinary fallback. */
     private fun watchRecovery(stream: StreamOption) {
         if (!handoffAccepted) return
         recoveryJob?.cancel()
         requestRecoveryPreparation()
+        // Capture this watch before launching: a late stop from the old episode
+        // must never cancel or attribute bytes to the next episode's session.
+        val recoverySessionId = telemetry.sessionId
         recoveryJob = viewModelScope.launch {
             var lastPrepareAt = 0L
             var prepareJob: Job? = null
             var preparedRevision = -1L
             var requestedFraction = 0.0
-            while (isActive && currentStream?.url == stream.url) {
-                val revision = recoveryRevision
-                val duration = player.duration.takeIf { it > 0 }
-                    ?: lastKnownDurationMs.takeIf { it > 0 }
-                    ?: currentEpisodeMeta?.runtimeMinutes?.toLong()?.times(60_000)
-                    ?: details?.item?.runtimeMinutes?.toLong()?.times(60_000) ?: 0L
-                val position = pendingSeek?.positionMs ?: player.currentPosition
-                val fraction = if (duration > 0) position.toDouble() / duration else 0.0
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (prepareJob?.isActive != true && (recoveryPrepareRequested || now - lastPrepareAt >= 30_000)) {
-                    recoveryPrepareRequested = false
-                    lastPrepareAt = now
-                    preparedRevision = revision
-                    requestedFraction = fraction.coerceIn(0.0, 0.999)
-                    prepareJob = launch { container.streamRecoveryApi.prepare(stream, fraction) }
+            var lastPlayback: RecoveryPlaybackPosition? = null
+            try {
+                while (isActive && currentStream?.url == stream.url) {
+                    val revision = recoveryRevision
+                    val duration = player.duration.takeIf { it > 0 }
+                        ?: lastKnownDurationMs.takeIf { it > 0 }
+                        ?: currentEpisodeMeta?.runtimeMinutes?.toLong()?.times(60_000)
+                        ?: details?.item?.runtimeMinutes?.toLong()?.times(60_000) ?: 0L
+                    val position = pendingSeek?.positionMs ?: player.currentPosition
+                    val fraction = if (duration > 0) position.toDouble() / duration else 0.0
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (prepareJob?.isActive != true && (recoveryPrepareRequested || now - lastPrepareAt >= 30_000)) {
+                        recoveryPrepareRequested = false
+                        lastPrepareAt = now
+                        preparedRevision = revision
+                        requestedFraction = fraction.coerceIn(0.0, 0.999)
+                        prepareJob = launch { container.streamRecoveryApi.prepare(stream, fraction) }
+                    }
+                    if (BuildConfig.EXACT_RECOVERY && recoverySessionId != null) {
+                        val sample = RecoveryPlaybackPosition(
+                            positionMs = position.coerceAtLeast(0),
+                            // Only measured player duration belongs in the server's timing map.
+                            durationMs = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L,
+                            bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0),
+                            playing = player.playWhenReady && !hostStopped,
+                            sessionId = recoverySessionId,
+                            generation = revision,
+                        )
+                        lastPlayback = sample
+                        container.streamRecoveryApi.playback(stream, sample)
+                    }
+                    val health = container.streamRecoveryApi.health(stream, recoverySessionId?.takeIf { BuildConfig.EXACT_RECOVERY })
+                    if (currentStream?.url != stream.url) break
+                    // A seek while the request was in flight invalidates the old warm point.
+                    if (revision != recoveryRevision) continue
+                    val exactRecovery = health?.exactRecovery?.takeIf { BuildConfig.EXACT_RECOVERY }
+                    _state.update { it.copy(recoveryDiagnostics = exactRecovery, repairDiagnostics = health?.repair?.takeIf { BuildConfig.EXACT_RECOVERY }) }
+                    preparedFallback = health?.takeIf { preparedRevision == revision }?.let {
+                        StreamRecoveryApi.preparedCandidate(stream, it, candidates, requestedFraction)
+                            ?.takeIf { candidate -> candidate.url !in blacklistedUrls && !isBlocked(candidate) }
+                    }
+                    val next = preparedFallback
+                    if (health?.status == "incomplete" && exactRecovery?.shouldHoldProactiveFallback() != true &&
+                        next != null && !swapping && !queueAdvancing && !queueDetached && !queueClosed &&
+                        !hostStopped && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
+                        _state.value.phase == PlayerPhase.PLAYING && recoveryBudget.tryAutomaticSwitch()) {
+                        blacklistedUrls.add(stream.url)
+                        // Best-effort timeline seek: different release cuts may not match exactly.
+                        failoverTo(next)
+                        return@launch
+                    }
+                    delay(if (player.playbackState == Player.STATE_BUFFERING) 1_000 else 3_000)
                 }
-                val health = container.streamRecoveryApi.health(stream)
-                if (currentStream?.url != stream.url) break
-                // A seek while the request was in flight invalidates the old warm point.
-                if (revision != recoveryRevision) continue
-                preparedFallback = health?.takeIf { preparedRevision == revision }?.let {
-                    StreamRecoveryApi.preparedCandidate(stream, it, candidates, requestedFraction)
-                        ?.takeIf { candidate -> candidate.url !in blacklistedUrls && !isBlocked(candidate) }
+            } finally {
+                // Captured values avoid touching a released player. A lower generation stop
+                // cannot cancel a later seek/resume heartbeat for the same session.
+                lastPlayback?.let { last ->
+                    withContext(NonCancellable) {
+                        container.streamRecoveryApi.playback(stream, last.copy(playing = false, stopped = true))
+                    }
                 }
-                val next = preparedFallback
-                if (health?.status == "incomplete" && next != null && !swapping && !queueAdvancing && !queueDetached && !queueClosed &&
-                    !hostStopped && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
-                    _state.value.phase == PlayerPhase.PLAYING && recoveryBudget.tryAutomaticSwitch()) {
-                    blacklistedUrls.add(stream.url)
-                    // Timeline seek preserves the scene across differently sized releases.
-                    failoverTo(next)
-                    return@launch
-                }
-                delay(if (player.playbackState == Player.STATE_BUFFERING) 1_000 else 3_000)
             }
         }
     }
 
     /** Swap to [next] at the last known position, showing the brief non-blocking pill. */
-    private fun failoverTo(next: StreamOption) {
+    private fun failoverTo(next: StreamOption, reason: SourceSwitchReason = SourceSwitchReason.AUTOMATIC) {
         val shouldPlay = player.playWhenReady
         val resumeAt = player.currentPosition.takeIf { it > 1_000 } ?: lastKnownPositionMs
         if (resumeAt > 1_000) pendingSeek = PendingSeek(resumeAt, guardNearEnd = false)
         endedHandled = false
         _state.update { it.copy(switchingSource = true, errorMessage = null) }
-        play(next)
+        play(next, reason)
         player.playWhenReady = shouldPlay
     }
 
@@ -996,6 +1060,9 @@ class PlayerViewModel(
         hostStopped = false
         resetStallDeadline()
         if (recoveryJob?.isActive != true) currentStream?.let(::watchRecovery)
+        // Leaving playback cancels expensive repair. If that interrupted a paused
+        // network read, prepare the same resource/position when the viewer resumes.
+        if (BuildConfig.EXACT_RECOVERY && currentStream != null && player.playerError != null) player.prepare()
         player.play()
     }
 
@@ -1006,7 +1073,9 @@ class PlayerViewModel(
         val dur = player.duration.takeIf { it > 0 }
         val clamped = positionMs.coerceIn(0L, dur ?: Long.MAX_VALUE)
         recoveryBudget.interrupt()
+        if (BuildConfig.EXACT_RECOVERY) telemetry.seek(clamped)
         player.seekTo(clamped)
+        if (BuildConfig.EXACT_RECOVERY) telemetry.seekDispatched()
         resetStallDeadline()
         requestRecoveryPreparation()
         // Seeking out of the ended/credits zone resumes playback (playWhenReady is true):
@@ -1095,7 +1164,7 @@ class PlayerViewModel(
         val pos = player.currentPosition.takeIf { it > 0 } ?: lastKnownPositionMs
         if (pos > 1_000) pendingSeek = PendingSeek(pos, guardNearEnd = false)
         endedHandled = false
-        play(option)
+        play(option, SourceSwitchReason.MANUAL)
     }
 
     private fun isBlocked(stream: StreamOption) = target.type == MediaType.SHOW && stream.isReleaseGroupBlocked(blockedGroups)
@@ -1133,7 +1202,7 @@ class PlayerViewModel(
                 _state.update { it.copy(groupActionError = null) }
                 if (currentStream?.let(::isBlocked) == true) {
                     val next = candidates.firstOrNull { it.url !in blacklistedUrls && !isBlocked(it) }
-                    if (next != null) failoverTo(next)
+                    if (next != null) failoverTo(next, SourceSwitchReason.MANUAL)
                     else { saveProgressNow(); player.stop(); showError("This release is blocked for this show. Choose another stream or reset blocked releases in Playback options.", true) }
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -1280,7 +1349,8 @@ class PlayerViewModel(
         if (identity == telemetryIdentity) return
         telemetryIdentity = identity
         telemetry.start(if (target.type == MediaType.SHOW) "tv" else "movie", target.mediaId.toString(),
-            details?.item?.title ?: _state.value.showTitle, curSeason, curEpisode, activeProfileId) {
+            details?.item?.title ?: _state.value.showTitle, curSeason, curEpisode, activeProfileId,
+            trackRecovery = BuildConfig.EXACT_RECOVERY) {
             val status = when {
                 hostStopped -> "paused"
                 player.playerError != null || _state.value.phase == PlayerPhase.ERROR -> "error"
@@ -1289,7 +1359,10 @@ class PlayerViewModel(
                 player.playbackState == Player.STATE_BUFFERING || _state.value.phase == PlayerPhase.LOADING || currentStream == null -> "buffering"
                 else -> "paused"
             }
-            tv.velvet.data.telemetry.PlaybackTelemetry.Sample(status, player.currentPosition)
+            tv.velvet.data.telemetry.PlaybackTelemetry.Sample(status, player.currentPosition,
+                sourceId = player.currentMediaItem?.localConfiguration?.uri?.toString(),
+                rebufferEligible = player.playWhenReady && !hostStopped && !swapping && !queueAdvancing &&
+                    !queueDetached && !queueClosed && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE)
         }
     }
 

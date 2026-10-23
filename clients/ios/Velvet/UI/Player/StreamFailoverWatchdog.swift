@@ -6,7 +6,7 @@ import Foundation
 struct StreamFailoverWatchdog {
     static let startupNoProgressMs: Int64 = 6_000
     static let startupMaxBufferingMs: Int64 = 12_000
-    static let rebufferNoProgressMs: Int64 = 5_000
+    static let rebufferNoProgressMs: Int64 = 15_000
 
     private var generation: UInt64?
     private var bufferingStartedAt: Int64?
@@ -18,14 +18,14 @@ struct StreamFailoverWatchdog {
     private var triggered = false
 
     mutating func reset(nowMs: Int64, generation: UInt64, positionMs: Int64 = 0,
-                        bufferedPositionMs: Int64 = 0, durationMs: Int64 = 0) {
+                        bufferedPositionMs: Int64 = 0, durationMs: Int64 = 0, established: Bool = false) {
         self.generation = generation
         bufferingStartedAt = nowMs
         lastProgressAt = nowMs
         lastPositionMs = max(positionMs, 0)
         lastBufferedPositionMs = max(bufferedPositionMs, 0)
         hasDuration = durationMs > 0
-        hasPlayed = false
+        hasPlayed = established
         triggered = false
     }
 

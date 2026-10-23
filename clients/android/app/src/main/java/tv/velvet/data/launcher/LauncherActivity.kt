@@ -1,5 +1,7 @@
 package tv.velvet.data.launcher
 
+import tv.velvet.BuildConfig
+
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -17,7 +19,7 @@ class LauncherActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val source = intent
         val request = runCatching {
-            if (source.action != "tv.velvet.action.LAUNCHER" || source.data != null) return@runCatching null
+            if (source.action != "${BuildConfig.APPLICATION_ID}.action.LAUNCHER" || source.data != null) return@runCatching null
             LauncherRequest.validated(source.getStringExtra("destination"), source.getStringExtra("profile"),
                 source.getIntExtra("mediaId", -1).takeIf { source.hasExtra("mediaId") }, source.getStringExtra("type"),
                 source.getIntExtra("season", -1).takeIf { source.hasExtra("season") },

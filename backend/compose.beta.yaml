@@ -1,0 +1,31 @@
+# Independent beta runtime. Never mount stable /data into this service.
+name: velvet-recovery-beta
+services:
+  backend-beta:
+    build:
+      context: .
+      target: runtime
+    image: velvet-backend:recovery-beta-local
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${VELVET_BETA_BIND_ADDRESS:-127.0.0.1}:${VELVET_BETA_PORT:-8801}:8799"
+    environment:
+      VELVET_CONFIG: /config/velvet.toml
+      VELVET_DB: /data/velvet.db
+      VELVET_TOKEN: ${VELVET_BETA_TOKEN:?Set a separate beta bearer token}
+      VELVET_PUBLIC_BASE_URL: ${VELVET_BETA_PUBLIC_BASE_URL:?Set the beta URL your TV can reach}
+      VELVET_TMDB_KEY: ${VELVET_TMDB_KEY:?Set your own TMDB key at runtime}
+    volumes:
+      - ./beta-config:/config:ro
+      - beta-data:/data
+    mem_limit: 2g
+    cpus: 3
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  beta-data:

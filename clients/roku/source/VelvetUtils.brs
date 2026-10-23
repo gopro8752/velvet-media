@@ -194,7 +194,7 @@ function VWireValue(value as dynamic, names = invalid as dynamic) as dynamic
     ' Preserve the backend's camelCase JSON contract independently of that behavior.
     if names = invalid
         names = {}
-        for each name in ["profileId", "mediaId", "imdbId", "posterUrl", "backdropUrl", "logoUrl", "episodeTitle", "positionMs", "durationMs", "createdAt", "updatedAt", "addedAt", "watchedAt", "channelId", "categoryId", "stillUrl", "runtimeMinutes", "airDate", "buttonIsDisabled", "deviceId", "sessionId", "deviceName", "profileName", "appVersion", "playedMs", "bufferedMs", "errorCount", "sourceSwitches", "startupMs"]
+        for each name in ["profileId", "mediaId", "imdbId", "posterUrl", "backdropUrl", "logoUrl", "episodeTitle", "positionMs", "durationMs", "createdAt", "updatedAt", "addedAt", "watchedAt", "channelId", "categoryId", "stillUrl", "runtimeMinutes", "airDate", "buttonIsDisabled", "deviceId", "sessionId", "deviceName", "profileName", "appVersion", "playedMs", "bufferedMs", "errorCount", "sourceSwitches", "startupMs", "telemetryVersion", "buildChannel", "sourceSwitchAttempts", "successfulSourceSwitches", "automaticSwitchAttempts", "manualSwitchAttempts", "automaticSourceSwitches", "manualSourceSwitches", "rebufferCount", "rebufferedMs", "maxRebufferMs", "seekCount", "bufferedPositionMs", "playbackSessionId"]
             names.AddReplace(LCase(name), name)
         end for
     end if
@@ -214,4 +214,25 @@ function VWireValue(value as dynamic, names = invalid as dynamic) as dynamic
         return output
     end if
     return value
+end function
+
+' Playback attribution is only attached to an exact owned stream resource.
+' The original selected URL stays untouched for handoff and source identity.
+function VAttributedMediaUrl(base as string, url as string, session as string) as string
+    if VOrigin(base) = "" or VOrigin(base) <> VOrigin(url) or Instr(1, url, "#") > 0 then return url
+    if Len(session) < 1 or Len(session) > 80 then return url
+    validSession = CreateObject("roRegex", "^[A-Za-z0-9-]+$", "")
+    if not validSession.IsMatch(session) then return url
+    pieces = url.Split("?")
+    validPath = CreateObject("roRegex", "/stream/[0-9a-f]{16}$", "")
+    if not validPath.IsMatch(pieces[0]) then return url
+    query = []
+    if pieces.Count() > 1
+        for each part in pieces[1].Split("&")
+            name = part.Split("=")[0]
+            if name <> "playbackSessionId" and part <> "" then query.Push(part)
+        end for
+    end if
+    query.Push("playbackSessionId=" + VEncode(session))
+    return pieces[0] + "?" + query.Join("&")
 end function

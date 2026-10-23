@@ -1,5 +1,7 @@
 package tv.velvet.data.launcher
 
+import tv.velvet.BuildConfig
+
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.database.Cursor
@@ -16,10 +18,10 @@ import tv.velvet.data.categories.Category
 /** Signature protected, read-only, bounded local snapshot. No network, tokens, or stream URLs. */
 class LauncherProvider : ContentProvider() {
     override fun onCreate() = true
-    override fun getType(uri: Uri) = "vnd.android.cursor.item/vnd.tv.velvet.launcher.snapshot"
+    override fun getType(uri: Uri) = "vnd.android.cursor.item/vnd.${BuildConfig.APPLICATION_ID}.launcher.snapshot"
 
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
-        require(uri.authority == "tv.velvet.launcher" && uri.path == "/snapshot" && uri.query == null && uri.fragment == null)
+        require(uri.authority == "${BuildConfig.APPLICATION_ID}.launcher" && uri.path == "/snapshot" && uri.query == null && uri.fragment == null)
         require(selection == null && selectionArgs == null && sortOrder == null)
         require(projection == null || projection.toList() == listOf("snapshot"))
         val app = requireNotNull(context).applicationContext as VelvetApp

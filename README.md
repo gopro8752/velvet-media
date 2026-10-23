@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/assets/velvet-hero.svg" alt="Velvet — Your library. Your screens. Your server." width="100%"></p>
 
+> **Playback recovery is now in mainline Velvet.** The backend can validate articles, recover from another provider, and repair original bytes with PAR2. Updated clients report playback position to drive bounded look-ahead. See [setup, reporting, and limits](RECOVERY.md).
+
 <p align="center">
   <a href="#get-started">Get started</a> ·
   <a href="#on-the-big-screen">Screenshots</a> ·
@@ -78,7 +80,8 @@ AI categories are optional. The backend can invoke the official Codex CLI after 
 ### Stay in control of playback
 
 - Choose a source, audio track, or subtitle; seek, move to the previous/next episode, and keep autoplay going.
-- Recover from failed sources, prepare alternative playback paths, and block a troublesome release group for an individual show.
+- Recover original stream bytes using another provider or PAR2, look ahead from playback position, and prepare alternative playback paths. Recovery is bounded and cannot guarantee uninterrupted playback for every release. [Recovery setup →](RECOVERY.md)
+- Retry temporary connection failures without immediately abandoning a working stream, and block a troublesome release group for an individual show.
 - Use backend compatibility processing for formats a client cannot play directly, including mobile audio conversion when needed. Capable TV clients can retain the original audio path; actual passthrough depends on the device, player, and sound system.
 - Use intro skipping where detection data is available.
 
@@ -117,6 +120,7 @@ The private admin portal brings viewing activity and server capacity together:
 - Profile, device, and title breakdowns, active sessions, and CSV exports.
 - Provider connection limits, busy/free capacity, queues, traffic, and errors.
 - Startup, buffering, source switches, and other playback-quality measurements.
+- Article rescues, PAR2 outcomes, failure reasons, repair traffic, repaired bytes delivered, and average source switches per measured watch.
 - CPU, memory, and disk visibility, with retained analytics for the last 90 days.
 
 Reports start when compatible clients send measured playback events. Existing watch progress is not retroactively converted into viewing history. Provider headroom reflects this backend's configured limits and usage; it cannot see connections used by separate downloaders on the same account. Admin access has its own private key, separate from the client token. [Admin setup →](backend/README.md#admin-portal)

@@ -41,6 +41,10 @@ The guide uses a shared two-hour timeline with half-hour markers, channel logos,
 - Search finds channel names, numbers, program titles, and episode titles. A program match opens at its scheduled time. Now or Rewind returns to the current broadcast; Fast Forward moves down a page of channels.
 - Back returns from program details or opens Velvet's navigation dock. Schedules refresh every five minutes while the guide is open.
 
+## Playback recovery and reporting
+
+For on-demand playback, the client sends small position heartbeats to its configured backend so verified read-ahead and exact repair can run ahead of the viewer. Admin reports correlate repair results to the same watch and distinguish source attempts, replacements that actually start advancing, manual versus automatic changes, buffering after startup, and intentional seeks. The server performs recovery; the Roku does not download or decode a second movie. Established playback has a bounded 15-second no-progress window before normal source recovery.
+
 ## Current limitations
 
 - Developer-mode sideloading is a per-device setup and supports one developer app at a time. This is not an automatic family-and-friends installation or update service.

@@ -222,6 +222,9 @@ sub seekPlayer(position as dynamic)
     position = Int(position)
     if position < 0 then position = 0
     if position >= m.lastDuration then position = Int(m.lastDuration - 1)
+    if m.telemetry <> invalid then m.telemetry.accumulator = VRecoverySeek(m.telemetry.accumulator, position * 1000#)
+    m.recoveryGeneration += 1
+    m.recoveryLastHeartbeat = 0
     m.lastAdvanced = VNowMs()
     ' Preserve paused intent even if another seek is still buffering.
     m.seekShouldPause = m.seekShouldPause or m.video.state = "paused"
@@ -464,6 +467,7 @@ sub handlePlayerMenu(id as string)
         index = Int(Val(Mid(id, 8)))
         if index < 0 or index >= m.streams.Count() then return
         closePlayerMenu()
+        m.manualSourceSwitch = true
         m.sourceIndex = index
         m.formatRetry = false
         playCurrentStream()
@@ -734,6 +738,7 @@ sub reopenRokuAudio(position as double, track as integer)
     m.video.visible = false
     if VRokuAudioSessionId(old) <> "" then requestApi("rokuAudioStop", "/roku/audio/" + VEncode(old), "DELETE")
     body = {positionMs: VMediaMilliseconds(position)}
+    if m.telemetry <> invalid then body.AddReplace("playbackSessionId", m.telemetry.id)
     if track >= 0 then body.AddReplace("audioTrack", track)
     if m.rokuSubtitleTrack >= 0 then body.AddReplace("subtitleTrack", m.rokuSubtitleTrack)
     requestApi("rokuAudioStart", "/stream/" + VEncode(m.rokuAudioSid) + "/roku/session", "POST", body, rokuAudioContext(), 70000)

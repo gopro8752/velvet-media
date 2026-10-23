@@ -231,6 +231,7 @@ sub playNativeStream(url as string, forcedFormat as string, startPosition as int
     telemetrySourceStarted()
     stream = m.streams[m.sourceIndex]
     content = CreateObject("roSGNode", "ContentNode")
+    if m.telemetry <> invalid and not m.isLive then url = VAttributedMediaUrl(m.baseUrl, url, m.telemetry.id)
     content.url = url
     content.title = VStr(VGet(m.playItem, "title"))
     if VStr(VGet(m.playItem, "episodeTitle")) <> "" then content.title += " · " + m.playItem.episodeTitle
@@ -375,6 +376,7 @@ end sub
 sub onPlaybackTick()
     keepRokuAudioAlive()
     if not m.playing then return
+    recoveryHeartbeat()
     if m.pendingSourceRetry
         m.pendingSourceRetry = false
         failoverStream()
@@ -387,6 +389,7 @@ sub onPlaybackTick()
         return
     end if
     stallBudget = 10000
+    if m.sourceHasAdvanced then stallBudget = 15000
     ' Rolling HLS needs its initial playback window; ordinary file candidates
     ' keep the short deadline, and every stream returns to it once advancing.
     if (m.isLive or m.rokuAudioSession <> "") and not m.sourceHasAdvanced then stallBudget = 45000

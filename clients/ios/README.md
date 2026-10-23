@@ -23,6 +23,12 @@ Open `Velvet.xcodeproj` in Xcode to choose a Simulator and run the app. The gene
 
 Credentials entered in Settings are device-local app preferences. An app built with a credential embedded in code or build settings is not a secret store; do not redistribute such a build. Use HTTPS for connections outside a trusted LAN. No bundled media or live-service subscription is supplied.
 
+## Playback recovery and reporting
+
+A configured recovery-enabled backend receives small playback-position heartbeats for each movie or episode, allowing it to verify upcoming bytes, try another provider, and repair the original release before the player reaches missing data. The app uses the same watch identifier for the admin recovery report and reports attempted versus successful source switches, manual versus automatic switches, rebuffering, and seeks. These requests never send provider credentials to a different origin.
+
+Established playback receives bounded retries before changing releases. After 30 seconds of continuously advancing video, the automatic source-switch budget renews without reusing failed releases. Startup still has a short deadline. Repair and alternative playback remain best-effort: a release with insufficient parity or incompatible alternate encoding cannot be guaranteed seamless.
+
 ## Tests
 
 The `VelvetTests` and `VelvetUITests` targets run through Xcode. Local fixture scripts live in `scripts/`, with startup behavior checks in `Tests/sports-playback-startup.test.mjs`:

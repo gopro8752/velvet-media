@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import tv.velvet.VelvetApp
+import tv.velvet.BuildConfig
 import tv.velvet.data.companion.HandoffLease
 import tv.velvet.data.companion.ReceiverPresence
 import tv.velvet.data.model.MediaType
@@ -40,8 +41,9 @@ fun HandoffReceiver(onPlay: (PlayTarget) -> Unit) {
         val sessions = container.tvHandoffSession
         sessions.visible = { power.isInteractive && view.hasWindowFocus() &&
             lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) }
-        val name = Settings.Global.getString(context.contentResolver, "device_name")
+        val deviceName = Settings.Global.getString(context.contentResolver, "device_name")
             ?.takeIf { it.isNotBlank() } ?: Build.MODEL
+        val name = if (BuildConfig.RECOVERY_BETA) "$deviceName · Velvet Beta" else deviceName
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             var presence: ReceiverPresence? = null
             var heartbeatAt = 0L

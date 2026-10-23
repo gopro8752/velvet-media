@@ -152,7 +152,7 @@ sub onApiResult(event as object)
             end if
             return
         end if
-        if kind = "sync" or kind = "push" or kind = "report" or kind = "prepare" or kind = "liveStop" then return
+        if kind = "sync" or kind = "push" or kind = "report" or kind = "prepare" or kind = "recoveryPlayback" or kind = "liveStop" then return
         if kind = "halloween" or kind = "playerEpisodes" or kind = "segments" then return
         m.model.busy = false
         m.model.message = VStr(VGet(result, "error"), "Something went wrong. Please try again.")
@@ -669,7 +669,7 @@ sub handleChoice(index as integer)
 end sub
 
 function isBackgroundRequest(kind as string) as boolean
-    return Left(kind, 4) = "hand" or Left(kind, 9) = "rokuAudio" or kind = "sync" or kind = "push" or kind = "report" or kind = "prepare" or kind = "liveStop"
+    return Left(kind, 4) = "hand" or Left(kind, 9) = "rokuAudio" or kind = "sync" or kind = "push" or kind = "report" or kind = "prepare" or kind = "recoveryPlayback" or kind = "liveStop"
 end function
 
 function findCategory(id as string) as dynamic

@@ -18,6 +18,11 @@ use tokio_rustls::TlsConnector;
 
 use crate::config::Provider;
 
+/// Hard wire-memory limits. A successful BODY must not grow memory without
+/// bound while withholding a newline or terminator.
+pub(crate) const MAX_ARTICLE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ARTICLE_LINE: usize = 64 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum NntpError {
     #[error("io: {0}")]
@@ -54,6 +59,7 @@ pub struct NntpConn {
     /// Group currently selected, to skip redundant GROUP commands.
     current_group: Option<String>,
     io_timeout: Duration,
+    body_wire_bytes: usize,
 }
 
 /// Result of asking for one article body.
@@ -86,7 +92,7 @@ impl NntpConn {
             Transport::Plain(BufReader::new(tcp))
         };
 
-        let mut conn = NntpConn { transport, current_group: None, io_timeout };
+        let mut conn = NntpConn { transport, current_group: None, io_timeout, body_wire_bytes: 0 };
 
         // Greeting: 200 (posting allowed) or 201 (no posting) both fine.
         let (code, text) = conn.read_status().await?;
@@ -132,11 +138,18 @@ impl NntpConn {
     /// Fetch an article body by message-id (angle brackets added automatically).
     /// 430/423 → `Missing` (never an error — that's the whole point of the rewrite).
     pub async fn body(&mut self, message_id: &str) -> Result<ArticleBody, NntpError> {
+        self.body_with_limit(message_id, MAX_ARTICLE_BYTES).await
+    }
+
+    pub fn body_wire_bytes(&self) -> usize { self.body_wire_bytes }
+
+    pub async fn body_with_limit(&mut self, message_id: &str, max_bytes: usize) -> Result<ArticleBody, NntpError> {
+        self.body_wire_bytes = 0;
         self.write_line(&format!("BODY <{message_id}>")).await?;
         let (code, text) = self.read_status().await?;
         match code {
             222 => {
-                let raw = self.read_multiline().await?;
+                let raw = self.read_multiline(max_bytes.min(MAX_ARTICLE_BYTES)).await?;
                 Ok(ArticleBody::Found(raw))
             }
             430 | 423 => Ok(ArticleBody::Missing),
@@ -179,13 +192,14 @@ impl NntpConn {
     async fn read_status(&mut self) -> Result<(u16, String), NntpError> {
         let mut line = String::new();
         let n = timeout(self.io_timeout, async {
-            on_transport!(self, c => c.read_line(&mut line).await)
+            on_transport!(self, c => (&mut *c).take(MAX_ARTICLE_LINE as u64).read_line(&mut line).await)
         })
         .await
         .map_err(|_| NntpError::Timeout)??;
         if n == 0 {
             return Err(NntpError::Protocol("connection closed".into()));
         }
+        if line.len() >= MAX_ARTICLE_LINE && !line.ends_with('\n') { return Err(NntpError::Protocol("status line exceeds limit".into())); }
         let trimmed = line.trim_end();
         let code: u16 = trimmed
             .get(..3)
@@ -196,18 +210,27 @@ impl NntpConn {
 
     /// Read a dot-terminated multiline block; unstuff leading '..' → '.', drop
     /// the final "." line. Returns the raw body bytes for the yEnc decoder.
-    async fn read_multiline(&mut self) -> Result<Vec<u8>, NntpError> {
-        let mut out = Vec::with_capacity(768 * 1024);
+    async fn read_multiline(&mut self, max_bytes: usize) -> Result<Vec<u8>, NntpError> {
+        let mut out = Vec::with_capacity((768 * 1024).min(max_bytes));
         let mut line = Vec::with_capacity(1024);
         loop {
             line.clear();
+            let line_limit = max_bytes.saturating_sub(self.body_wire_bytes).min(MAX_ARTICLE_LINE);
+            if line_limit == 0 { return Err(NntpError::Protocol("article body exceeds limit".into())); }
             let n = timeout(self.io_timeout, async {
-                on_transport!(self, c => c.read_until(b'\n', &mut line).await)
+                on_transport!(self, c => (&mut *c).take(line_limit as u64).read_until(b'\n', &mut line).await)
             })
             .await
             .map_err(|_| NntpError::Timeout)??;
             if n == 0 {
                 return Err(NntpError::Protocol("eof mid-body".into()));
+            }
+            self.body_wire_bytes = self.body_wire_bytes.saturating_add(n);
+            if line.len() >= line_limit && line.last() != Some(&b'\n') {
+                return Err(NntpError::Protocol("article line exceeds limit".into()));
+            }
+            if self.body_wire_bytes > max_bytes {
+                return Err(NntpError::Protocol("article body exceeds limit".into()));
             }
             let content = strip_crlf(&line);
             // Terminator: a line that is exactly ".".
@@ -282,5 +305,22 @@ mod tests {
         assert_eq!(strip_crlf(b"abc\r\n"), b"abc");
         assert_eq!(strip_crlf(b"abc\n"), b"abc");
         assert_eq!(strip_crlf(b"abc"), b"abc");
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+    async fn rejects_body(body: Vec<u8>) {
+        let (provider, server) = crate::pool::verified_fixtures::provider(std::collections::HashMap::from([("oversized".into(), body)])).await;
+        let mut connection = NntpConn::connect(&provider).await.unwrap();
+        let error = connection.body("oversized").await.err().expect("oversized response must fail");
+        assert!(matches!(error, NntpError::Protocol(ref message) if message.contains("limit")));
+        server.abort();
+    }
+    #[tokio::test]
+    async fn multiline_limits_unterminated_line_and_total_body() {
+        rejects_body(vec![b'A'; MAX_ARTICLE_LINE + 1]).await;
+        rejects_body([vec![b'A'; 1022], b"\r\n".to_vec()].concat().repeat(MAX_ARTICLE_BYTES / 1024 + 1)).await;
     }
 }

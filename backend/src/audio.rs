@@ -385,9 +385,12 @@ fn byte_range(headers: &HeaderMap, total: u64) -> Option<(u64, u64, bool)> {
 async fn wave(
     State(state): State<AudioState>,
     Path((sid, track)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<crate::stream::PlaybackSessionQuery>,
     method: Method,
     headers: HeaderMap,
 ) -> AudioResult<Response> {
+    let playback_session = crate::stream::requested_playback_session(&headers, query.playback_session_id.as_deref())
+        .map_err(|status| AudioError(status, "invalid_playback_session"))?;
     let index = track
         .strip_suffix(".wav")
         .and_then(|s| s.parse::<u32>().ok())
@@ -438,7 +441,9 @@ async fn wave(
     if pcm_length == 0 {
         return Ok(response.body(Body::from(prefix)).unwrap());
     }
-    let source = state.source_url(&sid)?;
+    // Metadata probes stay unassociated; only the decoder's actual media read
+    // carries the client's explicit watch identity.
+    let source = crate::stream::attributed_source(&state.source_url(&sid)?, playback_session.as_deref());
     let slot = acquire(state.audio_slots.clone()).await?;
     let pcm_offset = start.saturating_sub(header_size);
     let mut decoder = Decoder::spawn(&source, index, pcm_offset, pcm_length, slot)?;
@@ -746,13 +751,17 @@ mod tests {
             std::fs::remove_file(path).unwrap();
             let source_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let reads = source_reads.clone();
+            let source_queries = Arc::new(Mutex::new(Vec::<String>::new()));
+            let queries = source_queries.clone();
             let source_app = Router::new().route(
                 "/stream/:sid",
-                axum::routing::get(move |headers: HeaderMap| {
+                axum::routing::get(move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri, headers: HeaderMap| {
                     let source_bytes = source_bytes.clone();
                     let reads = reads.clone();
+                    let queries = queries.clone();
                     async move {
                         reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        queries.lock().unwrap().push(uri.query().unwrap_or("").to_owned());
                         let total = source_bytes.len() as u64;
                         let (start, end, partial) = byte_range(&headers, total).unwrap();
                         let mut response = Response::builder()
@@ -804,7 +813,9 @@ mod tests {
                 .unwrap();
             assert_eq!(info["audioTracks"][0]["codec"], "truehd");
             let index = info["audioTracks"][0]["index"].as_u64().unwrap();
-            let url = format!("{base}/stream/{sid}/audio/{index}.wav");
+            assert!(source_queries.lock().unwrap().iter().all(String::is_empty), "metadata must remain unassociated");
+            source_queries.lock().unwrap().clear();
+            let url = format!("{base}/stream/{sid}/audio/{index}.wav?playbackSessionId=audio-watch-1");
             let before_head = source_reads.load(std::sync::atomic::Ordering::SeqCst);
             let head = client.head(&url).send().await.unwrap();
             assert_eq!(head.status(), 200);
@@ -817,6 +828,8 @@ mod tests {
             let full_response = client.get(&url).send().await.unwrap();
             assert_eq!(full_response.status(), 200);
             let full = full_response.bytes().await.unwrap();
+            assert!(!source_queries.lock().unwrap().is_empty());
+            assert!(source_queries.lock().unwrap().iter().all(|q| q == "playbackSessionId=audio-watch-1"), "only decoder reads carry the explicit watch");
             assert_eq!(&full[..4], b"RIFF");
             assert!(full[44..].iter().any(|b| *b != 0));
             assert_eq!(
@@ -890,6 +903,7 @@ mod tests {
             let response = wave(
                 State(state.clone()),
                 Path((sid, index.to_string() + ".wav")),
+                axum::extract::Query(crate::stream::PlaybackSessionQuery::default()),
                 Method::GET,
                 HeaderMap::new(),
             )

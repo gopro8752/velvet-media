@@ -6,7 +6,64 @@ enum StreamLookahead {
     struct Health: Decodable {
         let status: String
         let recovery: Recovery?
+        let exactRecovery: ExactRecovery?
     }
+    struct ExactRecovery: Decodable {
+        let enabled: Bool
+        let holdFallback: Bool
+        let updatedAgoSeconds: Double?
+        var holdsProactiveFallback: Bool {
+            enabled && holdFallback && updatedAgoSeconds.map { $0.isFinite && $0 >= 0 && $0 <= 8 } == true
+        }
+    }
+    struct Playback: Encodable {
+        let sessionId: String
+        let generation: Int
+        let positionMs: Int64
+        let durationMs: Int64
+        // VLC does not expose a trustworthy media-time buffered position.
+        let bufferedPositionMs: Int64 = 0
+        let playing: Bool
+        let stopped: Bool
+    }
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 5
+        configuration.timeoutIntervalForResource = 5
+        configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration, delegate: LookaheadRedirectPolicy(), delegateQueue: nil)
+    }()
+
+    static func belongsToBackend(_ stream: URL, base: String) -> Bool {
+        guard let backend = URL(string: base), streamId(stream) != nil else { return false }
+        func port(_ url: URL) -> Int { url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80) }
+        return stream.scheme?.lowercased() == backend.scheme?.lowercased()
+            && stream.host?.lowercased() == backend.host?.lowercased() && port(stream) == port(backend)
+    }
+
+    /// The session belongs only to our own media resource. Leave the selected
+    /// source unchanged so handoff and source identity retain their original URL.
+    static func attributedMediaURL(_ url: URL, backend: String, sessionId: String?) -> URL {
+        guard let sessionId, UUID(uuidString: sessionId) != nil,
+              let base = URL(string: backend), url.scheme == base.scheme, url.host == base.host,
+              (url.port ?? (url.scheme == "https" ? 443 : 80)) == (base.port ?? (base.scheme == "https" ? 443 : 80)),
+              url.path.range(of: #"/stream/[0-9a-f]{16}(?:/audio/[0-9]+\.wav)?$"#, options: .regularExpression) != nil,
+              url.fragment == nil, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var query = components.queryItems ?? []
+        query.removeAll { $0.name == "playbackSessionId" }
+        query.append(.init(name: "playbackSessionId", value: sessionId)); components.queryItems = query
+        return components.url ?? url
+    }
+
+    static func playback(_ stream: StreamOption, value: Playback) async {
+        guard let url = endpoint(stream, suffix: "playback") else { return }
+        var request = request(url, stream: stream)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(value)
+        _ = try? await session.data(for: request)
+    }
+
     struct Recovery: Decodable {
         let status: String
         let streamId: String?
@@ -42,13 +99,20 @@ enum StreamLookahead {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONEncoder().encode(["fraction": min(max(fraction, 0), 1)])
-        _ = try? await URLSession.shared.data(for: request)
+        _ = try? await session.data(for: request)
     }
 
-    static func health(_ stream: StreamOption) async -> Health? {
-        guard let url = endpoint(stream, suffix: "health") else { return nil }
+    static func health(_ stream: StreamOption, sessionId: String? = nil) async -> Health? {
+        guard let endpoint = endpoint(stream, suffix: "health"),
+              var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else { return nil }
+        if let sessionId {
+            var query = components.queryItems ?? []
+            query.removeAll { $0.name == "sessionId" }
+            query.append(URLQueryItem(name: "sessionId", value: sessionId)); components.queryItems = query
+        }
+        guard let url = components.url else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request(url, stream: stream))
+            let (data, response) = try await session.data(for: request(url, stream: stream))
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
             return try JSONDecoder().decode(Health.self, from: data)
         } catch { return nil }
@@ -60,4 +124,10 @@ enum StreamLookahead {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         return request
     }
+}
+
+private final class LookaheadRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }

@@ -47,6 +47,33 @@ sub main()
     for each key in ["deviceName", "appVersion", "profileName", "bufferedMs", "errorCount", "sourceSwitches", "startupMs"]
         expect(Instr(1, wire, Chr(34) + key + Chr(34)) > 0, "wire name retained: " + key)
     end for
+    recovered = VRecoveryBeginSource(VTelemetryAccumulator(), "a", false)
+    recovered = VTelemetrySample(recovered, 500, 500, "playing", true)
+    recovered = VTelemetrySample(recovered, 1000, 1000, "playing", true)
+    recovered = VRecoveryBeginSource(recovered, "b", false)
+    recovered = VRecoveryBeginSource(recovered, "b", false)
+    expect(recovered.automaticSwitchAttempts = 1 and recovered.sourceSwitches = 0, "a retry is not a successful source switch")
+    recovered = VTelemetrySample(recovered, 1500, 1500, "playing", true)
+    recovered = VTelemetrySample(recovered, 2000, 2000, "playing", true)
+    expect(recovered.sourceSwitches = 1 and recovered.automaticSourceSwitches = 1, "confirmed replacement movement completes one switch")
+    recovered = VRecoverySeek(recovered, 60000)
+    recovered = VTelemetrySample(recovered, 2500, 2000, "buffering", false)
+    expect(recovered.rebufferCount = 0 and recovered.seekCount = 1, "intentional seek buffering is excluded")
+    recovered = VTelemetrySample(recovered, 3000, 60000, "playing", true)
+    recovered = VTelemetrySample(recovered, 3500, 60500, "playing", true)
+    recovered = VTelemetrySample(recovered, 4000, 60500, "buffering", false)
+    recovered = VTelemetrySample(recovered, 5000, 60500, "buffering", false)
+    expect(recovered.rebufferCount = 1 and recovered.rebufferedMs = 1000, "a genuine post-start network stall is measured")
+    wire2 = FormatJson(VWireValue({telemetryversion: 2, buildchannel: "stable", bufferedpositionms: 0, successfulsourceswitches: 1, sourceswitchattempts: 1}))
+    for each key in ["telemetryVersion", "buildChannel", "bufferedPositionMs", "successfulSourceSwitches", "sourceSwitchAttempts"]
+        expect(Instr(1, wire2, Chr(34) + key + Chr(34)) > 0, "recovery wire name retained: " + key)
+    end for
+    own = "https://velvet.example/stream/0123456789abcdef?token=fixture"
+    attributed = VAttributedMediaUrl("https://velvet.example", own, "watch-1")
+    expect(attributed = own + "&playbackSessionId=watch-1", "owned stream preserves token and adds exact watch attribution")
+    expect(VAttributedMediaUrl("https://other.example", own, "watch-1") = own, "third party receives no playback identity")
+    probe = "https://velvet.example/stream/0123456789abcdef/audio"
+    expect(VAttributedMediaUrl("https://velvet.example", probe, "watch-1") = probe, "metadata probes are never counted as delivered repaired bytes")
     if m.failures = 0 then print "VELVET_TEST_PASS"
 end sub
 

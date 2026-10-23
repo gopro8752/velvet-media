@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -23,7 +24,42 @@ import kotlin.math.abs
     val streamId: String? = null,
     val preparedFraction: Double? = null,
 )
-@Serializable data class StreamHealth(val status: String = "unverified", val recovery: RecoveryState = RecoveryState())
+@Serializable data class ExactRecoveryState(
+    val enabled: Boolean = false,
+    val status: String = "idle",
+    // Null means there is no trustworthy media-time mapping. Never derive this from file fraction.
+    val verifiedAheadSeconds: Double? = null,
+    val indexStatus: String = "pending",
+    val holdFallback: Boolean = false,
+    val lookaheadTargetSeconds: Double = 0.0,
+    val updatedAgoSeconds: Double? = null,
+) {
+    /** Only a fresh server decision can defer speculative switching; player errors still fail over. */
+    fun shouldHoldProactiveFallback(): Boolean = enabled && holdFallback &&
+        updatedAgoSeconds?.let { it.isFinite() && it >= 0.0 && it <= 8.0 } == true
+}
+
+@Serializable data class ExactRepairState(
+    val phase: String = "idle",
+    @SerialName("charged_download_bytes") val chargedDownloadBytes: Long = 0,
+)
+
+@Serializable data class StreamHealth(
+    val status: String = "unverified",
+    val recovery: RecoveryState = RecoveryState(),
+    val exactRecovery: ExactRecoveryState? = null,
+    val repair: ExactRepairState? = null,
+)
+
+@Serializable data class RecoveryPlaybackPosition(
+    val positionMs: Long,
+    val durationMs: Long,
+    val bufferedPositionMs: Long,
+    val playing: Boolean,
+    val stopped: Boolean = false,
+    val sessionId: String,
+    val generation: Long,
+)
 @Serializable private data class PrepareRecovery(val fraction: Double)
 
 /** Optional backend extension; unsupported sources continue using ordinary error recovery. */
@@ -39,8 +75,21 @@ class StreamRecoveryApi(client: OkHttpClient, private val settings: SettingsRepo
         }
     }
 
-    suspend fun health(stream: StreamOption): StreamHealth? {
-        val url = endpoint(stream.url, "health") ?: return null
+    suspend fun playback(stream: StreamOption, position: RecoveryPlaybackPosition) {
+        val url = endpoint(stream.url, "playback") ?: return
+        if (position.positionMs < 0 || position.durationMs < 0 || position.bufferedPositionMs < 0 ||
+            position.generation < 0 || position.sessionId.isBlank()) return
+        safely {
+            val body = json.encodeToString(RecoveryPlaybackPosition.serializer(), position)
+                .toRequestBody("application/json".toMediaType())
+            client.await(request(stream, url).post(body).build()).use { }
+        }
+    }
+
+    suspend fun health(stream: StreamOption, sessionId: String? = null): StreamHealth? {
+        val base = endpoint(stream.url, "health") ?: return null
+        val url = if (sessionId == null) base else base.newBuilder()
+            .setQueryParameter("sessionId", sessionId).build()
         return safely {
             client.await(request(stream, url).get().build()).use { response ->
                 if (!response.isSuccessful) null

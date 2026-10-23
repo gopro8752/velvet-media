@@ -67,12 +67,12 @@ impl Proxy {
             .header("X-Velvet-Recovery-Proxy", "1")
             .send()
             .await?;
-        anyhow::ensure!(response.status().is_success(), "beta report unavailable");
+        anyhow::ensure!(response.status().is_success(), "recovery report unavailable");
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             anyhow::ensure!(
                 bytes.len() + chunk.len() <= 4 * 1024 * 1024,
-                "beta report exceeds size limit"
+                "recovery report exceeds size limit"
             );
             bytes.extend_from_slice(&chunk);
         }
@@ -104,7 +104,8 @@ impl ClientCounters {
         )
     }
     pub fn supported(&self) -> bool {
-        self.build_channel.as_deref() == Some("beta") && self.telemetry_version == Some(2)
+        matches!(self.build_channel.as_deref(), Some("stable" | "beta"))
+            && self.telemetry_version == Some(2)
     }
     pub fn validate(&self, switches: u64) -> bool {
         if self
@@ -148,7 +149,7 @@ impl ClientCounters {
     }
 }
 /// A session cannot be relabeled halfway through a watch. Sessions recorded
-/// before this registry existed are legacy v1, never retroactively beta v2.
+/// before this registry existed are legacy v1, never retroactively v2.
 pub fn validate_cohort(
     c: &Connection,
     id: &str,
@@ -195,7 +196,7 @@ pub fn record_client(
     validate_cohort(tx, id, e, false)?;
     if !e.supported() {
         // Keep the original cohort even for clients without recovery counters;
-        // report queries continue to select only channel=beta/version=2.
+        // report queries include only instrumented stable/beta version 2 sessions.
         let (channel, version) = e.cohort();
         tx.execute(
             "INSERT INTO admin_recovery_playback VALUES(?1,?2,?3,?4,?5)
@@ -230,13 +231,13 @@ pub fn record_client(
     let seeks = delta(e.seek_count, old.seek_count)?;
     delta(e.max_rebuffer_ms, old.max_rebuffer_ms)?;
     // The base playback ledger caps a heartbeat at 1,000 switch events. Reject
-    // an impossible beta jump rather than clipping one ledger but not the other.
+    // an impossible counter jump rather than clipping one ledger but not the other.
     anyhow::ensure!(
         auto + manual <= 1_000 && attempts <= 1_000,
         "recovery switch delta exceeds limit"
     );
-    tx.execute("INSERT INTO admin_recovery_playback VALUES(?1,'beta',2,?2,?3)
-      ON CONFLICT(session_id) DO UPDATE SET counters=excluded.counters,updated_at=excluded.updated_at",params![id,serde_json::to_string(e)?,now])?;
+    tx.execute("INSERT INTO admin_recovery_playback VALUES(?1,?2,2,?3,?4)
+      ON CONFLICT(session_id) DO UPDATE SET counters=excluded.counters,updated_at=excluded.updated_at",params![id,e.build_channel.as_deref().unwrap(),serde_json::to_string(e)?,now])?;
     tx.execute("INSERT INTO admin_recovery_usage(bucket,session_id,attempts,automatic_attempts,manual_attempts,automatic_switches,manual_switches,rebuffer_count,seek_count)
       VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(bucket,session_id) DO UPDATE SET
       attempts=attempts+excluded.attempts,automatic_attempts=automatic_attempts+excluded.automatic_attempts,
@@ -323,9 +324,9 @@ fn table_exists(c: &Connection, name: &str) -> bool {
 // One row per watch, irrespective of the number of telemetry heartbeats or sources.
 const WATCH_CTE:&str="WITH u AS (SELECT session_id,sum(played_ms) AS played,sum(buffered_ms) AS buffered,sum(switches) AS switches FROM admin_usage WHERE bucket>=?1 AND bucket<=?2 GROUP BY session_id),
  r AS (SELECT session_id,sum(attempts) AS attempts,sum(automatic_attempts) AS aa,sum(manual_attempts) AS ma,sum(automatic_switches) AS a,sum(manual_switches) AS m,sum(rebuffer_count) AS rc,sum(rebuffered_ms) AS rb,sum(seek_count) AS seeks FROM admin_recovery_usage WHERE bucket>=?1 AND bucket<=?2 GROUP BY session_id),
- w AS (SELECT s.*,coalesce(u.played,0) AS p,coalesce(u.buffered,0) AS b,coalesce(u.switches,0) AS sw,
+ w AS (SELECT s.*,cp.channel AS build_channel,coalesce(u.played,0) AS p,coalesce(u.buffered,0) AS b,coalesce(u.switches,0) AS sw,
  coalesce(r.attempts,0) AS attempts,coalesce(r.aa,0) AS aa,coalesce(r.ma,0) AS ma,coalesce(r.a,0) AS a,coalesce(r.m,0) AS m,coalesce(r.rc,0) AS rc,coalesce(r.rb,0) AS rb,coalesce(r.seeks,0) AS seeks
- FROM admin_sessions s JOIN admin_recovery_playback cp ON cp.session_id=s.id AND cp.channel='beta' AND cp.telemetry_version=2
+ FROM admin_sessions s JOIN admin_recovery_playback cp ON cp.session_id=s.id AND cp.channel IN ('stable','beta') AND cp.telemetry_version=2
  LEFT JOIN u ON u.session_id=s.id LEFT JOIN r ON r.session_id=s.id WHERE s.kind IN ('tv','movie') AND s.last_seen>=?1 AND s.first_seen<=?2) ";
 fn percentile(c: &Connection, sql: &str, args: &[&dyn ToSql], q: f64) -> anyhow::Result<Value> {
     let count: i64 = c.query_row(&format!("SELECT count(*) FROM ({sql})"), args, |r| r.get(0))?;
@@ -344,7 +345,7 @@ pub fn report(c: &Connection, days: u32, now: i64) -> anyhow::Result<Value> {
     anyhow::ensure!((1..=90).contains(&days), "invalid reporting period");
     if !table_exists(c, "recovery_events") {
         return Ok(
-            json!({"available":false,"scope":"beta","message":"Recovery reporting is not configured on this server."}),
+            json!({"available":false,"scope":"server","message":"Recovery reporting is not configured on this server."}),
         );
     }
     let start = now.div_euclid(DAY) * DAY - (days as i64 - 1) * DAY;
@@ -404,7 +405,7 @@ pub fn report(c: &Connection, days: u32, now: i64) -> anyhow::Result<Value> {
     let reasons=rows(c,"SELECT coalesce(json_extract(payload,'$.reason'),'unknown') AS reason,count(*) AS count FROM recovery_events WHERE kind='repair_job' AND json_extract(payload,'$.outcome') IN ('failed','deadline','quota') AND occurred_at>=?1 AND occurred_at<=?2 GROUP BY reason ORDER BY count DESC",&args)?;
     let daily_events=rows(c,"SELECT occurred_at/86400000 AS day,sum(kind='provider_rescue') AS providerRescuedArticles,sum(kind='repair_job' AND json_extract(payload,'$.outcome')='success') AS par2Succeeded,sum(kind='repair_job' AND json_extract(payload,'$.outcome') IN ('failed','deadline','quota')) AS par2Failed FROM recovery_events WHERE occurred_at>=?1 AND occurred_at<=?2 GROUP BY day",&args)?;
     let daily_usage=rows(c,"SELECT u.bucket/86400000 AS day,count(DISTINCT CASE WHEN u.played_ms>0 THEN u.session_id END) AS watches,sum(u.switches) AS sourceSwitches
-      FROM admin_usage u JOIN admin_recovery_playback r ON r.session_id=u.session_id AND r.channel='beta' AND r.telemetry_version=2
+      FROM admin_usage u JOIN admin_recovery_playback r ON r.session_id=u.session_id AND r.channel IN ('stable','beta') AND r.telemetry_version=2
       JOIN admin_sessions s ON s.id=u.session_id AND s.kind IN ('movie','tv') WHERE u.bucket>=?1 AND u.bucket<=?2 GROUP BY day",&args)?;
     let mut daily = Vec::new();
     for offset in 0..days {
@@ -454,10 +455,10 @@ pub fn report(c: &Connection, days: u32, now: i64) -> anyhow::Result<Value> {
         |r| r.get(0),
     )?;
     Ok(
-        json!({"available":true,"scope":"beta","generatedAt":now,"periodStart":start,"periodEnd":now,
+        json!({"available":true,"scope":"server","generatedAt":now,"periodStart":start,"periodEnd":now,
       "collectionStartedAt":collected,"firstEventAt":meta["firstEventAt"],"lastEventAt":meta["lastEventAt"],"summary":summary,
       "reasons":reasons,"daily":daily,"titles":titles,"sessions":sessions,"coverage":{"droppedEvents":dropped,"retainedEvents":meta["retainedEvents"],"retentionDays":90,"eventLimit":250000,"sessionLimit":200,"titleLimit":50,
-      "message":"Watches are beta movie/episode sessions with measured playing time in this period. Successful source starts and attempts are separate. Delivery of repaired bytes is observed at the server; it is not proof that every frame was displayed. Repairs include speculative work. Events are retained for up to 90 days or 250,000 records."}}),
+      "message":"Watches are instrumented movie/episode sessions with measured playing time in this period. Successful source starts and attempts are separate. Delivery of repaired bytes is observed at the server; it is not proof that every frame was displayed. Repairs include speculative work. Events are retained for up to 90 days or 250,000 records."}}),
     )
 }
 fn association_stats(c: &Connection, scope: &str, args: &[&dyn ToSql]) -> anyhow::Result<Value> {
@@ -485,12 +486,13 @@ fn normalize_event(mut event: Value) -> Value {
     event
 }
 fn watch_rows(c: &Connection, start: i64, now: i64, limit: usize) -> anyhow::Result<Vec<Value>> {
-    rows(c,&format!("{WATCH_CTE} SELECT id,title,kind,media_id AS mediaId,season,episode,profile_name AS profileName,device_name AS deviceName,first_seen AS startedAt,last_seen AS lastSeen,state,p AS playedMs,b AS bufferedMs,rb AS rebufferedMs,rc AS rebufferCount,startup_ms AS startupMs,sw AS sourceSwitches,a AS automaticSwitches,m AS manualSwitches,attempts AS sourceSwitchAttempts,aa AS automaticSwitchAttempts,ma AS manualSwitchAttempts FROM w ORDER BY last_seen DESC LIMIT {}",limit.min(5000)),&[&start,&now])
+    rows(c,&format!("{WATCH_CTE} SELECT id,build_channel AS buildChannel,title,kind,media_id AS mediaId,season,episode,profile_name AS profileName,device_name AS deviceName,first_seen AS startedAt,last_seen AS lastSeen,state,p AS playedMs,b AS bufferedMs,rb AS rebufferedMs,rc AS rebufferCount,startup_ms AS startupMs,sw AS sourceSwitches,a AS automaticSwitches,m AS manualSwitches,attempts AS sourceSwitchAttempts,aa AS automaticSwitchAttempts,ma AS manualSwitchAttempts FROM w ORDER BY last_seen DESC LIMIT {}",limit.min(5000)),&[&start,&now])
 }
 pub fn export(c: &Connection, days: u32, now: i64) -> anyhow::Result<String> {
     let start = now.div_euclid(DAY) * DAY - (days as i64 - 1) * DAY;
     let keys = [
         "id",
+        "buildChannel",
         "title",
         "kind",
         "season",

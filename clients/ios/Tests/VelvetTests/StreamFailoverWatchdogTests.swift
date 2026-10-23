@@ -38,19 +38,19 @@ final class StreamFailoverWatchdogTests: XCTestCase {
         XCTAssertTrue(timer.check(7_000, duration: 100_000))
     }
 
-    func testRebufferAfterActualPlaybackHasFiveSecondBudget() {
+    func testRebufferAfterActualPlaybackHasFifteenSecondBudget() {
         var timer = watchdog()
         XCTAssertFalse(timer.check(1_000, position: 1_000, playing: true))
         XCTAssertFalse(timer.check(2_000, position: 1_000))
-        XCTAssertFalse(timer.check(6_999, position: 1_000))
-        XCTAssertTrue(timer.check(7_000, position: 1_000))
+        XCTAssertFalse(timer.check(16_999, position: 1_000))
+        XCTAssertTrue(timer.check(17_000, position: 1_000))
     }
 
     func testVLCPlayingClaimWithoutAdvancementCannotSuppressStall() {
         var timer = watchdog()
         XCTAssertFalse(timer.check(1_000, position: 1_000, playing: true))
         XCTAssertFalse(timer.check(2_000, position: 1_000, playing: true))
-        XCTAssertTrue(timer.check(7_000, position: 1_000, playing: true))
+        XCTAssertTrue(timer.check(17_000, position: 1_000, playing: true))
         var startup = watchdog()
         XCTAssertTrue(startup.check(6_000, playing: true))
     }
@@ -102,7 +102,7 @@ final class StreamFailoverWatchdogTests: XCTestCase {
         XCTAssertFalse(timer.check(6_500))
         XCTAssertFalse(timer.check(7_000, position: 1_000, playing: true))
         XCTAssertFalse(timer.check(8_000, position: 1_000))
-        XCTAssertTrue(timer.check(13_000, position: 1_000))
+        XCTAssertTrue(timer.check(23_000, position: 1_000))
     }
 }
 

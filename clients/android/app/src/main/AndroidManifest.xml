@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <permission android:name="tv.velvet.permission.LAUNCHER_ACCESS" android:protectionLevel="signature" />
+    <permission android:name="${applicationId}.permission.LAUNCHER_ACCESS" android:protectionLevel="signature" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -34,15 +34,15 @@
 
         <provider
             android:name=".data.launcher.LauncherProvider"
-            android:authorities="tv.velvet.launcher"
+            android:authorities="${applicationId}.launcher"
             android:exported="true"
-            android:readPermission="tv.velvet.permission.LAUNCHER_ACCESS"
-            android:writePermission="tv.velvet.permission.LAUNCHER_ACCESS" />
+            android:readPermission="${applicationId}.permission.LAUNCHER_ACCESS"
+            android:writePermission="${applicationId}.permission.LAUNCHER_ACCESS" />
         <activity
             android:name=".data.launcher.LauncherActivity"
             android:exported="true"
-            android:permission="tv.velvet.permission.LAUNCHER_ACCESS"
-            android:taskAffinity="tv.velvet.launcher.entry"
+            android:permission="${applicationId}.permission.LAUNCHER_ACCESS"
+            android:taskAffinity="${applicationId}.launcher.entry"
             android:relinquishTaskIdentity="true"
             android:noHistory="true"
             android:excludeFromRecents="true"

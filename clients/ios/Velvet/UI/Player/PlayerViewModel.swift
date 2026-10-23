@@ -212,6 +212,13 @@ final class PlayerViewModel: ObservableObject {
     private var failedStreamUrls = Set<URL>()
     /// Automatic failovers used this session (capped at maxAutoRetries).
     private var autoRetryCount = 0
+    private var sourceEstablished = false
+    private var sameSourceRetryCount = 0
+    private var sameSourceRetryUntilMs: Int64 = 0
+    private var sameSourceRetryTask: Task<Void, Never>?
+    private var sameSourceRetryID: UUID?
+    private var healthyPlaybackMs: Int64 = 0
+    private var healthySample: (time: Int64, position: Int64)?
     private var lastBingeGroup: String?
     private var pendingSeek: PendingSeek?
     private var lastKnownPositionMs: Int64 = 0
@@ -292,7 +299,7 @@ final class PlayerViewModel: ObservableObject {
     private var monotonicMs: Int64 { Int64(ProcessInfo.processInfo.systemUptime * 1_000) }
     private func resetStallDeadline() {
         failoverWatchdog.reset(nowMs: monotonicMs, generation: mediaGeneration,
-            positionMs: engine.positionMs, durationMs: engine.durationMs)
+            positionMs: engine.positionMs, durationMs: engine.durationMs, established: sourceEstablished)
     }
 
     // MARK: - Init
@@ -570,18 +577,26 @@ final class PlayerViewModel: ObservableObject {
         play(stream: pick)
     }
 
-    private func play(stream: StreamOption, startPlaying: Bool? = nil) {
+    private func play(stream: StreamOption, startPlaying: Bool? = nil, automatic: Bool = true) {
         // Never (re)start playback on a dismissed/replaced queue item.
         guard !tornDown, !queueTransitionStarted, !isBlocked(stream) else { return }
         handoffProgressSuspended = false
         cancelTvHandoff()
+        sameSourceRetryTask?.cancel()
+        sameSourceRetryTask = nil
+        sameSourceRetryID = nil
+        if currentStream?.url != stream.url {
+            sourceEstablished = false; sameSourceRetryCount = 0; sameSourceRetryUntilMs = 0
+        }
+        healthyPlaybackMs = 0
+        healthySample = nil
         mediaGeneration &+= 1
         queueErrorTask?.cancel()
         queueErrorTask = nil
         cancelAudioPreparation()
         compatibleAudioSlaves = [:]
         externalAudioTrackIds = []
-        if let previous = currentStream, previous.url != stream.url { telemetry.sourceSwitch() }
+        telemetry.sourcePrepared(stream.url, automatic: automatic)
         currentStream = stream
         if let group = stream.bingeGroup { lastBingeGroup = group }
         // Skip intro: tell the fingerprint worker what actually plays and start
@@ -589,7 +604,8 @@ final class PlayerViewModel: ObservableObject {
         // failover/stream-switch included — the worker keys per episode and
         // takes the latest URL (same as Android).
         if isShow { reportPlayAndWatchForIntro(stream) }
-        engine.setMedia(url: stream.url, headers: stream.headers,
+        let mediaURL = StreamLookahead.attributedMediaURL(stream.url, backend: settings.syncUrl, sessionId: telemetry.sessionId)
+        engine.setMedia(url: mediaURL, headers: stream.headers,
                         hardwareDecoding: settings.hardwareDecoding)
         // Only now can the OLD item no longer emit ENDED — re-arming any earlier
         // (e.g. at the top of swapToEpisode) lets a late ENDED corrupt the new
@@ -617,9 +633,13 @@ final class PlayerViewModel: ObservableObject {
     /// reaches a missing article. Generation + exact URL/episode checks prevent
     /// a delayed health response from changing a manually selected/new episode.
     private func startStreamLookahead(_ stream: StreamOption) {
+        sameSourceRetryTask?.cancel()
+        sameSourceRetryTask = nil
+        sameSourceRetryID = nil
         lookaheadTask?.cancel()
         lookaheadGeneration &+= 1
-        guard StreamLookahead.streamId(stream.url) != nil else { return }
+        guard StreamLookahead.belongsToBackend(stream.url, base: settings.syncUrl),
+              let playbackSessionId = telemetry.sessionId else { return }
         let generation = lookaheadGeneration
         let season = curSeason
         let episode = curEpisode
@@ -627,11 +647,22 @@ final class PlayerViewModel: ObservableObject {
             var lastPrepareAt: TimeInterval = 0
             var requestedFraction: Double?
             var prepareTask: Task<Void, Never>?
-            defer { prepareTask?.cancel() }
+            defer {
+                prepareTask?.cancel()
+                Task { await StreamLookahead.playback(stream, value: .init(sessionId: playbackSessionId,
+                    generation: generation, positionMs: 0, durationMs: 0, playing: false, stopped: true)) }
+            }
             while !Task.isCancelled {
                 guard let self, !self.tornDown, self.lookaheadGeneration == generation,
                       self.currentStream?.url == stream.url,
                       self.curSeason == season, self.curEpisode == episode else { return }
+                await StreamLookahead.playback(stream, value: .init(sessionId: playbackSessionId,
+                    generation: generation, positionMs: max(self.pendingSeek?.positionMs ?? self.seekGrace?.targetMs ?? self.engine.positionMs, 0),
+                    durationMs: max(self.engine.durationMs, 0),
+                    playing: !self.queueAutoAdvanceSuspended && !self.hostStopped && !self.handoffHoldsPlayback
+                        && !self.handoffProgressSuspended && !self.swapping && !self.queueTransitionStarted,
+                    stopped: false))
+                guard !Task.isCancelled, self.lookaheadGeneration == generation else { return }
                 if self.phase == .playing, !self.queueAutoAdvanceSuspended, !self.hostStopped,
                    !self.swapping, !self.queueTransitionStarted, self.audioPreparationTask == nil,
                    !self.handoffHoldsPlayback, !self.handoffProgressSuspended,
@@ -649,7 +680,7 @@ final class PlayerViewModel: ObservableObject {
                         }
                         // Preparation never blocks polling. A matching position rejects
                         // readiness from an older seek while its new request is in flight.
-                        let health = await StreamLookahead.health(stream)
+                        let health = await StreamLookahead.health(stream, sessionId: playbackSessionId)
                         guard !Task.isCancelled, !self.tornDown,
                               self.lookaheadGeneration == generation,
                               self.currentStream?.url == stream.url,
@@ -666,7 +697,7 @@ final class PlayerViewModel: ObservableObject {
                            }) {
                             self.fallbackStreams.removeAll { $0.url == candidate.url }
                             self.fallbackStreams.insert(candidate, at: 0)
-                            if health?.status == "incomplete", !self.queueAutoAdvanceSuspended,
+                            if health?.status == "incomplete", health?.exactRecovery?.holdsProactiveFallback != true, !self.queueAutoAdvanceSuspended,
                                !self.hostStopped, !self.handoffHoldsPlayback, !self.handoffProgressSuspended,
                                self.audioPreparationTask == nil, !self.swapping, !self.queueTransitionStarted,
                                self.pendingSeek == nil, self.seekGrace == nil,
@@ -690,6 +721,7 @@ final class PlayerViewModel: ObservableObject {
         pendingSeek = nil
         if seek.guardNearEnd && seek.positionMs >= dur * 95 / 100 { return }
         engine.seek(toMs: max(seek.positionMs, 0), durationMs: dur)
+        telemetry.seekDispatched()
         positionMs = max(seek.positionMs, 0)
         beginSeekGrace(targetMs: positionMs)
     }
@@ -705,6 +737,9 @@ final class PlayerViewModel: ObservableObject {
     private func showError(_ message: String, canChoose: Bool) {
         guard !tornDown, !queueTransitionStarted else { return }
         upNextTask?.cancel()
+        sameSourceRetryTask?.cancel()
+        sameSourceRetryTask = nil
+        sameSourceRetryID = nil
         lookaheadTask?.cancel()
         lookaheadGeneration &+= 1
         cancelAudioPreparation()
@@ -767,7 +802,7 @@ final class PlayerViewModel: ObservableObject {
     /// position (same identity, same profile, no navigation, no re-resolution).
     /// The error screen appears only once the fallback list is exhausted or the
     /// per-session auto-retry cap is hit.
-    private func handlePlayerError() {
+    private func handlePlayerError(allowInPlaceRetry: Bool = true) {
         guard !tornDown, !queueTransitionStarted, !hostStopped,
               !handoffHoldsPlayback, !handoffProgressSuspended else { return }
         // A late `.error` from the OLD media while swapToEpisode is in flight
@@ -776,6 +811,36 @@ final class PlayerViewModel: ObservableObject {
         // swap. Same guard as handleEnded — the incoming episode's own
         // startStreamsAndPlay owns the outcome for this window.
         if swapping { return }
+        if sameSourceRetryTask != nil { return }
+        // VLC does not expose reliable HTTP status codes. Probe the original
+        // backend resource before giving an established stream a bounded retry.
+        // Known missing data still advances directly to another release.
+        if allowInPlaceRetry, sourceEstablished, sameSourceRetryCount < 2,
+           let stream = currentStream, StreamLookahead.belongsToBackend(stream.url, base: settings.syncUrl),
+           sameSourceRetryUntilMs == 0 || monotonicMs < sameSourceRetryUntilMs {
+            if sameSourceRetryUntilMs == 0 { sameSourceRetryUntilMs = monotonicMs + 15_000 }
+            sameSourceRetryCount += 1
+            let attempt = sameSourceRetryCount
+            let retryID = UUID()
+            sameSourceRetryID = retryID
+            let generation = mediaGeneration
+            let position = pendingSeek?.positionMs ?? seekGrace?.targetMs ?? max(engine.positionMs, lastKnownPositionMs)
+            sameSourceRetryTask = Task { [weak self] in
+                let health = await StreamLookahead.health(stream)
+                try? await Task.sleep(nanoseconds: attempt == 1 ? 250_000_000 : 750_000_000)
+                guard let self, self.sameSourceRetryID == retryID else { return }
+                self.sameSourceRetryTask = nil
+                self.sameSourceRetryID = nil
+                guard !Task.isCancelled, !self.tornDown, self.mediaGeneration == generation,
+                      self.currentStream?.url == stream.url, !self.hostStopped, !self.queueTransitionStarted else { return }
+                guard health?.status != "incomplete", self.monotonicMs < self.sameSourceRetryUntilMs else {
+                    self.handlePlayerError(allowInPlaceRetry: false); return
+                }
+                if position > 1_000 { self.pendingSeek = PendingSeek(positionMs: position, guardNearEnd: false) }
+                self.play(stream: stream, startPlaying: !self.queueAutoAdvanceSuspended)
+            }
+            return
+        }
         telemetry.error()
         let pos = pendingSeek?.positionMs ?? seekGrace?.targetMs ?? engine.positionMs
         if pos > 0 { lastKnownPositionMs = pos }
@@ -917,6 +982,7 @@ final class PlayerViewModel: ObservableObject {
         let isDead = state == .ended || state == .stopped
         let dur: Int64? = durationMs > 0 ? durationMs : nil
         let clamped = min(max(requested, 0), dur ?? Int64.max)
+        telemetry.seek(to: clamped)
         if isDead {
             // VLC cannot seek a stopped/ended item — restart the current stream
             // at the target position (play() resets endedHandled).
@@ -929,6 +995,7 @@ final class PlayerViewModel: ObservableObject {
             return
         }
         engine.seek(toMs: clamped, durationMs: durationMs)
+        telemetry.seekDispatched()
         // Seeking out of the credits zone: let the episode end "again" later,
         // and drop a stale EndChoice card.
         if let dur, clamped < dur * 95 / 100 {
@@ -1166,6 +1233,7 @@ final class PlayerViewModel: ObservableObject {
         queueInitialRetryUsed = false
         endedHandled = false
         autoRetryCount = 0
+        sameSourceRetryCount = 0; sameSourceRetryUntilMs = 0
         failoverNotice = false
         if let stream = currentStream, !isBlocked(stream) {
             failedStreamUrls.remove(stream.url)
@@ -1206,7 +1274,7 @@ final class PlayerViewModel: ObservableObject {
         autoRetryCount = 0
         failoverNotice = false
         endedHandled = false
-        play(stream: option)
+        play(stream: option, automatic: false)
     }
 
     private func isBlocked(_ stream: StreamOption) -> Bool {
@@ -1367,6 +1435,9 @@ final class PlayerViewModel: ObservableObject {
     func onHostStop() {
         hostStopped = true
         telemetry.observe(force: true)
+        sameSourceRetryTask?.cancel()
+        sameSourceRetryTask = nil
+        sameSourceRetryID = nil
         lookaheadTask?.cancel()
         lookaheadGeneration &+= 1
         cancelTvHandoff()
@@ -1436,6 +1507,9 @@ final class PlayerViewModel: ObservableObject {
         cancelAudioPreparation()
         cancelTvHandoff()
         queueErrorTask?.cancel()
+        sameSourceRetryTask?.cancel()
+        sameSourceRetryTask = nil
+        sameSourceRetryID = nil
         lookaheadTask?.cancel()
         lookaheadGeneration &+= 1
         resetStallDeadline()
@@ -1465,7 +1539,7 @@ final class PlayerViewModel: ObservableObject {
             else if self.engine.isPlayingNow && !self.isBuffering { status = "playing" }
             else if self.isBuffering || self.phase == .loading || self.currentStream == nil { status = "buffering" }
             else { status = "paused" }
-            return .init(state: status, positionMs: self.engine.positionMs)
+            return .init(state: status, positionMs: self.engine.positionMs, source: self.currentStream?.url)
         }
     }
 
@@ -1504,6 +1578,21 @@ final class PlayerViewModel: ObservableObject {
         durationMs = dur
         if isPlaying != engine.isPlayingNow { isPlaying = engine.isPlayingNow }
         applyPendingSeekIfReady()
+        let sampleTime = monotonicMs
+        let healthy = engine.isPlayingNow && !queueAutoAdvanceSuspended && !hostStopped
+            && pendingSeek == nil && seekGrace == nil && !handoffHoldsPlayback && !handoffProgressSuspended
+        if healthy, let previous = healthySample {
+            let elapsed = sampleTime - previous.time
+            let advanced = pos - previous.position
+            if elapsed > 0 && elapsed <= 2_000 && advanced > 0 && advanced <= elapsed * 2 + 750 {
+                healthyPlaybackMs += min(elapsed, advanced)
+                if healthyPlaybackMs >= 1_000 { sourceEstablished = true }
+                if healthyPlaybackMs >= 30_000 {
+                    autoRetryCount = 0; sameSourceRetryCount = 0; sameSourceRetryUntilMs = 0
+                }
+            } else { healthyPlaybackMs = 0 }
+        } else { healthyPlaybackMs = 0 }
+        healthySample = healthy ? (sampleTime, pos) : nil
         if failoverWatchdog.shouldFailover(
             nowMs: monotonicMs, generation: mediaGeneration, positionMs: pos,
             bufferedPositionMs: 0, durationMs: dur, buffering: true,
@@ -1897,6 +1986,9 @@ final class PlayerViewModel: ObservableObject {
         }
         swapping = true
         cancelAudioPreparation()
+        sameSourceRetryTask?.cancel()
+        sameSourceRetryTask = nil
+        sameSourceRetryID = nil
         lookaheadTask?.cancel()
         lookaheadGeneration &+= 1
         defer { swapping = false }
@@ -2178,7 +2270,8 @@ final class PlayerViewModel: ObservableObject {
                       self.phase == .playing, !self.swapping, self.curSeason == identity.0, self.curEpisode == identity.1,
                       self.currentStream?.url == stream.url else { return }
                 let previousIds = Set(self.engine.audioTracks.map(\.id))
-                guard self.engine.addCompatibleAudio(url: url) else { throw AudioCompatibility.Failure.unavailable }
+                let audioURL = StreamLookahead.attributedMediaURL(url, backend: self.settings.syncUrl, sessionId: self.telemetry.sessionId)
+                guard self.engine.addCompatibleAudio(url: audioURL) else { throw AudioCompatibility.Failure.unavailable }
                 let deadline = Date().addingTimeInterval(45)
                 var added: Int?
                 while Date() < deadline {

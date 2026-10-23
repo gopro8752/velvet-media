@@ -875,7 +875,7 @@ async fn recovery_report(
         }
         return match proxy.fetch(q.days,false).await {
             Ok(bytes)=>match serde_json::from_slice::<Value>(&bytes){Ok(v) if v.is_object()=>Json(v).into_response(),_=>StatusCode::BAD_GATEWAY.into_response()},
-            Err(_)=>(StatusCode::SERVICE_UNAVAILABLE,Json(json!({"available":false,"scope":"beta","message":"The beta backend is unavailable. Existing server reporting is unaffected."}))).into_response(),
+            Err(_)=>(StatusCode::SERVICE_UNAVAILABLE,Json(json!({"available":false,"scope":"remote","message":"The configured recovery backend is unavailable. Other server reports are unaffected."}))).into_response(),
         };
     }
     let db = st.0.db.clone();
@@ -921,7 +921,7 @@ async fn recovery_export(
                 (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
                 (
                     header::CONTENT_DISPOSITION,
-                    "attachment; filename=\"velvet-beta-watches.csv\"",
+                    "attachment; filename=\"velvet-recovery-watches.csv\"",
                 ),
             ],
             value,
@@ -1155,7 +1155,7 @@ mod tests {
         assert_eq!(recovery.headers()["cache-control"], "no-store");
         let recovery = recovery.json::<Value>().await.unwrap();
         assert_eq!(recovery["available"], false);
-        assert_eq!(recovery["scope"], "beta");
+        assert_eq!(recovery["scope"], "server");
         for route in ["/admin/api/recovery", "/admin/api/recovery/export"] {
             for days in [0, 91] {
                 assert_eq!(

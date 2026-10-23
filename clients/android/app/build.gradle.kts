@@ -15,8 +15,24 @@ android {
         applicationId = "tv.velvet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "1.12.2"
+        versionCode = 33
+        versionName = "1.13.0"
+        // Recovery is production functionality; the flavor only isolates install identity.
+        buildConfigField("boolean", "EXACT_RECOVERY", "true")
+    }
+
+    flavorDimensions += "channel"
+    productFlavors {
+        create("stable") {
+            dimension = "channel"
+            buildConfigField("boolean", "RECOVERY_BETA", "false")
+        }
+        create("beta") {
+            dimension = "channel"
+            applicationIdSuffix = ".beta"
+            versionNameSuffix = "-beta"
+            buildConfigField("boolean", "RECOVERY_BETA", "true")
+        }
     }
 
     // Keep supported TV architectures without shipping every browser binary to each device.
@@ -24,7 +40,8 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            include(*providers.gradleProperty("velvetAbis").orElse("arm64-v8a,armeabi-v7a,x86_64")
+                .get().split(",").map(String::trim).toTypedArray())
         }
     }
 
@@ -40,6 +57,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources.merges += "/META-INF/AL2.0"

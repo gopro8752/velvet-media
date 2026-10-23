@@ -77,7 +77,7 @@
     capacity:{label:'Capacity',eyebrow:'KEEP THE GOOD TIMES PLAYING',title:'Know your headroom.',description:'Understand connection demand before adding more server capacity.'},
     playback:{label:'Playback',eyebrow:'WHAT’S KEEPING EVERYONE WATCHING',title:'Every kind of evening.',description:'Movies, shows, live channels, and sports — in one clear picture.'},
     profiles:{label:'People & devices',eyebrow:'YOUR INNER CIRCLE',title:'Everyone has a place.',description:'Understand viewing across profiles, devices, and platforms.'},
-    recovery:{label:'Recovery',eyebrow:'EVERY BYTE COUNTS',title:'Keep the story going.',description:'See what beta recovered, what it could not, and how each watch played out.'},
+    recovery:{label:'Recovery',eyebrow:'EVERY BYTE COUNTS',title:'Keep the story going.',description:'See what Velvet recovered, what it could not, and how each watch played out.'},
     health:{label:'Health & quality',eyebrow:'BEHIND THE SCENES',title:'A smoother experience.',description:'Spot playback friction, provider issues, and reporting gaps.'}
   };
   function empty(title, detail, symbol = 'signal', compact = false) {
@@ -164,9 +164,9 @@
   const exactNumber = value => finite(value) ? new Intl.NumberFormat('en-US',{maximumFractionDigits:2}).format(value) : '—';
   function recoveryPage() {
     const r = state.recovery;
-    const scope = `<div class="recovery-scope"><div><span class="badge beta">VELVET BETA</span><p>Recovery events and viewing are measured separately, then linked by watch. Stable playback remains in the other reports.</p></div><div><a class="button button-secondary" href="/admin/api/recovery/export?days=${state.days}">Export sessions ↓</a><span class="recovery-export-note">CSV · latest 5,000 sessions</span></div></div>`;
-    const warning = state.recoveryError ? `<aside class="notice notice-error">${icon('warning')}<div><strong>Beta reporting is temporarily unavailable.</strong> ${escape(state.recoveryError)} ${r ? 'Showing the last successful snapshot.' : 'Existing server reports are still available.'} <button data-recovery-retry>Try again</button></div></aside>` : '';
-    if (!r || r.available === false) return `${scope}${warning}<section class="panel">${empty(state.recoveryBusy ? 'Getting your recovery report ready' : 'Recovery reporting is not available yet',state.recoveryBusy ? 'Checking the beta backend for measured repair and playback events.' : 'The beta backend has not returned compatible recovery telemetry. Earlier watches are not reconstructed.','recovery')}</section>`;
+    const scope = `<div class="recovery-scope"><div><span class="badge beta">PLAYBACK RECOVERY</span><p>Repair work and playback are measured separately, then linked by watch. Includes updated clients with recovery reporting.</p></div><div><a class="button button-secondary" href="/admin/api/recovery/export?days=${state.days}">Export sessions ↓</a><span class="recovery-export-note">CSV · latest 5,000 sessions</span></div></div>`;
+    const warning = state.recoveryError ? `<aside class="notice notice-error">${icon('warning')}<div><strong>Recovery reporting is temporarily unavailable.</strong> ${escape(state.recoveryError)} ${r ? 'Showing the last successful snapshot.' : 'Existing server reports are still available.'} <button data-recovery-retry>Try again</button></div></aside>` : '';
+    if (!r || r.available === false) return `${scope}${warning}<section class="panel">${empty(state.recoveryBusy ? 'Getting your recovery report ready' : 'Recovery reporting is not available yet',state.recoveryBusy ? 'Checking the backend for measured repair and playback events.' : 'The backend has not returned compatible recovery telemetry. Earlier watches are not reconstructed.','recovery')}</section>`;
     const s = r.summary || {};
     const watched = finite(s.watches) && s.watches > 0;
     const jobs = finite(s.par2Jobs) && s.par2Jobs > 0;
@@ -216,7 +216,7 @@
   }
   function recoveryChart(data) {
     const rows = array(data).filter(row => row.date && row.observed !== false), keys = [['par2Succeeded','PAR2 completed','#80d9bf'],['par2Failed','PAR2 unsuccessful','#ebc18b'],['sourceSwitches','Source switches','#b9a0ff']];
-    if (!rows.some(row => keys.some(([key]) => finite(row[key]) && row[key] > 0))) return empty('The pattern will appear here','Days are counted only from received events. Start a beta watch to collect recovery and switching history.','recovery');
+    if (!rows.some(row => keys.some(([key]) => finite(row[key]) && row[key] > 0))) return empty('The pattern will appear here','Days are counted only from received events. Start a watch on an updated client to collect recovery and switching history.','recovery');
     const width = window.innerWidth <= 700 ? 420 : 660, height=250, left=35, right=14, top=24, bottom=38, plotH=height-top-bottom, plotW=width-left-right;
     const max=niceMax(Math.max(...rows.flatMap(row => keys.map(([key]) => numeric(row[key]))))), step=plotW/rows.length, barW=Math.min(10,step*.18);
     const grid=Array.from({length:5},(_,i) => {const value=max*i/4,y=top+plotH-i/4*plotH;return `<line class="gridline" x1="${left}" x2="${width-right}" y1="${y}" y2="${y}"/><text x="${left-9}" y="${y+3}" text-anchor="end">${number(value)}</text>`;}).join('');
@@ -226,7 +226,7 @@
   function recoveryTitlesTable() {
     const search=(state.search['recovery-titles']||'').toLowerCase(), filter=state.filter['recovery-titles'];
     const rows=sortedRows('recovery-titles',array(state.recovery?.titles).filter(row => (!filter||row.kind===filter)&&`${row.title} ${labels[row.kind]||''}`.toLowerCase().includes(search)),'sourceSwitches');
-    return `<div class="table-scroll"><table class="data-table"><thead><tr>${sortHeader('recovery-titles','title','Title')}${sortHeader('recovery-titles','watches','Watches',true)}${sortHeader('recovery-titles','avgSwitchesPerWatch','Switches / watch',true)}${sortHeader('recovery-titles','sourceSwitches','Switches',true,'sourceSwitches')}${sortHeader('recovery-titles','playbacksUsingRepairedBytes','Received repairs',true)}${sortHeader('recovery-titles','par2Failed','PAR2 jobs',true)}${sortHeader('recovery-titles','providerRescuedArticles','Article rescues',true)}${sortHeader('recovery-titles','bufferRatioPct','Buffering',true)}</tr></thead><tbody>${rows.length?rows.map(row=>`<tr><td class="title-cell"><strong>${escape(row.title||'Untitled')}</strong><small>${escape(labels[row.kind]||row.kind||'Playback')}${row.season!=null&&row.episode!=null?` · S${escape(row.season)} E${escape(row.episode)}`:''}</small></td><td class="number">${count(row.watches)}</td><td class="number recovery-number">${exactNumber(row.watches>0?row.avgSwitchesPerWatch:null)}</td><td class="number">${count(row.sourceSwitches)}<small class="table-subline">${count(row.automaticSwitches)} auto · ${count(row.manualSwitches)} manual</small></td><td class="number">${count(row.playbacksUsingRepairedBytes)}<small class="table-subline">watches</small></td><td class="number">${count(row.par2Succeeded)} / ${count(row.par2Failed)}<small class="table-subline">completed / failed</small></td><td class="number">${count(row.providerRescuedArticles)}</td><td class="number">${percent(row.bufferRatioPct)}</td></tr>`).join(''):`<tr><td colspan="8" class="table-empty">${search||filter?'No titles match these filters.':'Movie and episode watches will appear as the beta app reports activity.'}</td></tr>`}</tbody></table></div>`;
+    return `<div class="table-scroll"><table class="data-table"><thead><tr>${sortHeader('recovery-titles','title','Title')}${sortHeader('recovery-titles','watches','Watches',true)}${sortHeader('recovery-titles','avgSwitchesPerWatch','Switches / watch',true)}${sortHeader('recovery-titles','sourceSwitches','Switches',true,'sourceSwitches')}${sortHeader('recovery-titles','playbacksUsingRepairedBytes','Received repairs',true)}${sortHeader('recovery-titles','par2Failed','PAR2 jobs',true)}${sortHeader('recovery-titles','providerRescuedArticles','Article rescues',true)}${sortHeader('recovery-titles','bufferRatioPct','Buffering',true)}</tr></thead><tbody>${rows.length?rows.map(row=>`<tr><td class="title-cell"><strong>${escape(row.title||'Untitled')}</strong><small>${escape(labels[row.kind]||row.kind||'Playback')}${row.season!=null&&row.episode!=null?` · S${escape(row.season)} E${escape(row.episode)}`:''}</small></td><td class="number">${count(row.watches)}</td><td class="number recovery-number">${exactNumber(row.watches>0?row.avgSwitchesPerWatch:null)}</td><td class="number">${count(row.sourceSwitches)}<small class="table-subline">${count(row.automaticSwitches)} auto · ${count(row.manualSwitches)} manual</small></td><td class="number">${count(row.playbacksUsingRepairedBytes)}<small class="table-subline">watches</small></td><td class="number">${count(row.par2Succeeded)} / ${count(row.par2Failed)}<small class="table-subline">completed / failed</small></td><td class="number">${count(row.providerRescuedArticles)}</td><td class="number">${percent(row.bufferRatioPct)}</td></tr>`).join(''):`<tr><td colspan="8" class="table-empty">${search||filter?'No titles match these filters.':'Movie and episode watches will appear as updated clients report activity.'}</td></tr>`}</tbody></table></div>`;
   }
   function recoverySessionsTable() {
     const name='recovery-sessions', search=(state.search[name]||'').toLowerCase(), filter=state.filter[name];
@@ -444,7 +444,7 @@
     $('#collection-label').textContent = coverage.collectionStartedAt ? 'Reporting online' : 'Starting collection';
     $('#collection-since').textContent = coverage.collectionStartedAt ? `Collecting since ${date(coverage.collectionStartedAt)} UTC` : 'Gathering your first samples';
     updateTableCounts();
-    $('#coverage-footer').textContent = state.tab === 'recovery' ? 'Beta recovery covers reporting movie and episode watches only. No earlier repairs are reconstructed.' : `Playback covers reporting clients only. ${count(coverage.capacitySampleCount)} capacity samples · ${number(state.report.range?.observedDays)} observed days · ${count(coverage.retentionDays || 90)}-day retention.`;
+    $('#coverage-footer').textContent = state.tab === 'recovery' ? 'Recovery reporting covers reporting movie and episode watches only. No earlier repairs are reconstructed.' : `Playback covers reporting clients only. ${count(coverage.capacitySampleCount)} capacity samples · ${number(state.report.range?.observedDays)} observed days · ${count(coverage.retentionDays || 90)}-day retention.`;
   }
   function renderLive() {
     $$('[data-live-panel="capacity"]').forEach(el => {el.innerHTML = capacityNow();});
@@ -520,7 +520,7 @@
     try {
       const recovery = await api(`/admin/api/recovery?days=${days}`);
       if (requestId !== state.recoveryRequestId || days !== state.days || !state.authenticated) return;
-      if (!recovery || typeof recovery !== 'object' || (recovery.available !== false && !recovery.summary)) throw new Error('The beta backend returned an incomplete recovery report.');
+      if (!recovery || typeof recovery !== 'object' || (recovery.available !== false && !recovery.summary)) throw new Error('The backend returned an incomplete recovery report.');
       state.recovery = recovery;
       state.recoveryError = null;
     } catch (error) {
