@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::archive::{read_volume_range, Extent};
+use crate::archive::{read_volume_range, read_volume_range_background, Extent};
 use crate::nzb::{NzbFile, Segment};
 use crate::pool::{Fetched, Pool};
 
@@ -313,8 +313,10 @@ pub fn seven_zip_file(files: &[NzbFile]) -> Result<NzbFile, SzError> {
         .clone())
 }
 
-async fn seg0_part_size(pool: &Arc<Pool>, group: &str, seg: &Segment) -> Option<(Vec<u8>, u64)> {
-    match pool.fetch(group, &seg.message_id).await {
+async fn seg0_part_size(pool: &Arc<Pool>, group: &str, seg: &Segment, background: bool) -> Option<(Vec<u8>, u64)> {
+    let fetched = if background { pool.fetch_background(group, &seg.message_id).await }
+        else { pool.fetch(group, &seg.message_id).await };
+    match fetched {
         Fetched::Found(raw) => crate::yenc::decode(&raw).ok().map(|d| {
             let n = d.data.len() as u64;
             (d.data, n)
@@ -329,13 +331,25 @@ pub async fn build_extents(
     pool: &Arc<Pool>,
     files: &[NzbFile],
 ) -> Result<(Vec<Extent>, u64), SzError> {
+    build_extents_with_admission(pool, files, false).await
+}
+
+pub async fn build_extents_background(
+    pool: &Arc<Pool>, files: &[NzbFile],
+) -> Result<(Vec<Extent>, u64), SzError> {
+    build_extents_with_admission(pool, files, true).await
+}
+
+async fn build_extents_with_admission(
+    pool: &Arc<Pool>, files: &[NzbFile], background: bool,
+) -> Result<(Vec<Extent>, u64), SzError> {
     let file = seven_zip_file(files)?;
     let group = file.groups.first().cloned().unwrap_or_default();
     let segments = file.segments.clone();
     let seg0 = segments.first().ok_or(SzError::NoFile)?;
 
     // First segment gives us both the signature header and the uniform part size.
-    let (head0, part_size) = seg0_part_size(pool, &group, seg0)
+    let (head0, part_size) = seg0_part_size(pool, &group, seg0, background)
         .await
         .ok_or(SzError::Truncated)?;
     let sig = parse_sig(&head0)?;
@@ -343,8 +357,11 @@ pub async fn build_extents(
     // The next header sits at body offset next_offset (i.e. archive offset
     // 32 + next_offset), length next_size. Read it across segments.
     let header_start = 32 + sig.next_offset;
-    let header_bytes =
-        read_volume_range(pool, &group, &segments, part_size, header_start, sig.next_size).await;
+    let header_bytes = if background {
+        read_volume_range_background(pool, &group, &segments, part_size, header_start, sig.next_size).await
+    } else {
+        read_volume_range(pool, &group, &segments, part_size, header_start, sig.next_size).await
+    };
     if (header_bytes.len() as u64) < sig.next_size {
         return Err(SzError::Truncated);
     }

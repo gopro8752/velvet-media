@@ -932,13 +932,12 @@ async fn fetch(
     let file = &e.nzb.files[fi];
     let article = &file.segments[si];
     let group = file.groups.first().map(String::as_str).unwrap_or("");
-    let _background = inner.pool.background_permit().await;
     let started = Instant::now();
     match tokio::time::timeout(
         Duration::from_secs(inner.cfg.max_article_seconds.max(1)),
         inner
             .pool
-            .fetch_decoded_budgeted_observed(group, &article.message_id, &e.download_budget),
+            .fetch_decoded_budgeted_observed_background(group, &article.message_id, &e.download_budget),
     )
     .await
     {
@@ -975,7 +974,11 @@ async fn fetch(
             Ok(Some(seg))
         }
         Ok(Err(_)) => Err(RepairError::DownloadBudget),
-        _ => Ok(None),
+        // Capacity waits are included in this bounded attempt. Expiry does not
+        // prove supporting data is absent: propagate the deadline,
+        // rather than reporting insufficient parity from an article never read.
+        Err(_) => Err(RepairError::Timeout),
+        Ok(Ok(_)) => Ok(None),
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1544,6 +1547,57 @@ async fn verify_file(path: &Path, d: &Description) -> Result<(), RepairError> {
 mod tests {
     use super::*;
     use crate::nzb::{NzbFile, Segment};
+
+    #[tokio::test]
+    async fn queued_article_deadline_is_not_missing_parity_and_can_retry_after_capacity_returns() {
+        async fn check(provider_gate: bool) {
+            use crate::pool::{background_admission_tests::gated_provider, DecodedFetch};
+            let (secondary, release, entered, _, server) = gated_provider(2).await;
+            let mut primary_server = None;
+            let providers = if provider_gate {
+                let (mut primary, task) = crate::pool::verified_fixtures::provider(Default::default()).await;
+                primary.max_connections = 4;
+                primary_server = Some(task);
+                vec![primary, secondary]
+            } else { vec![secondary] };
+            let pool = Pool::new_verified(&providers, true);
+            let blocker_pool = pool.clone();
+            let blocker = tokio::spawn(async move {
+                blocker_pool.fetch_decoded_background("", "blocked-repair").await
+            });
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while entered.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; }
+            }).await.unwrap();
+            let root = temporary();
+            let mut cfg = config(&root);
+            cfg.max_article_seconds = 1;
+            let registry = RepairRegistry::new(cfg, pool);
+            let nzb = Arc::new(Nzb { files: vec![NzbFile {
+                subject: "\"fixture.par2\" yEnc".into(), groups: vec![], total_bytes: 100,
+                segments: vec![Segment { number: 1, bytes: 100, message_id: "repair-article".into() }],
+            }] });
+            registry.register("queued", nzb.clone()).await.unwrap();
+            let entry = registry.entry("queued").await.unwrap();
+            assert!(matches!(fetch(&registry.inner, &entry, 0, 0).await, Err(RepairError::Timeout)),
+                "a queued article must report its deadline, never absent parity");
+            assert_eq!(entered.load(Ordering::SeqCst), 1);
+            assert_eq!(entry.download_budget.used(), 0, "admission expiry downloaded no bytes");
+            release.add_permits(1);
+            assert!(matches!(blocker.await.unwrap(), DecodedFetch::Found(_)));
+            registry.cancel("queued").await;
+            registry.register("queued", nzb).await.unwrap();
+            let next = registry.entry("queued").await.unwrap();
+            let decoded = fetch(&registry.inner, &next, 0, 0).await.unwrap().unwrap();
+            assert_eq!(decoded.data, b"healthy");
+            registry.cancel("queued").await;
+            drop(entry); drop(next); drop(registry);
+            server.abort();
+            if let Some(task) = primary_server { task.abort(); }
+            let _ = std::fs::remove_dir_all(root);
+        }
+        tokio::join!(check(false), check(true));
+    }
+
     struct Fixture {
         root: PathBuf,
         nzb: Arc<Nzb>,

@@ -95,7 +95,7 @@ struct WarmCoordinator {
 }
 impl WarmCoordinator {
     fn new(concurrency: usize) -> Arc<Self> {
-        let concurrency = concurrency.clamp(1, 8);
+        let concurrency = concurrency.clamp(1, 50);
         let maintenance_concurrency = concurrency.saturating_sub(1).clamp(1, 2);
         Arc::new(Self {
             slots: Arc::new(tokio::sync::Semaphore::new(concurrency)),
@@ -109,7 +109,13 @@ impl WarmCoordinator {
 }
 fn coordinator(capacity: usize) -> Arc<WarmCoordinator> {
     static COORDINATOR: OnceLock<Arc<WarmCoordinator>> = OnceLock::new();
-    COORDINATOR.get_or_init(|| WarmCoordinator::new(capacity / 8)).clone()
+    COORDINATOR.get_or_init(|| WarmCoordinator::new(discovery_capacity(capacity))).clone()
+}
+
+pub(crate) fn discovery_capacity(capacity: usize) -> usize {
+    // Every source first uses the primary. Large backup budgets must not inflate
+    // discovery for an installation with a small primary connection allowance.
+    capacity.clamp(1, 50)
 }
 struct ActiveWarm {
     coordinator: Arc<WarmCoordinator>,
@@ -212,7 +218,7 @@ where
 
 async fn discover_startup(st: StreamState, candidates: Vec<WarmCandidate>, priority: WarmPriority) -> Option<String> {
     let scope = Arc::as_ptr(&st.cache) as usize;
-    run_discovery(coordinator(st.pool.total_capacity()), scope, candidates, priority, STARTUP_PROBE_TIMEOUT, |candidate| {
+    run_discovery(coordinator(st.pool.primary_capacity()), scope, candidates, priority, STARTUP_PROBE_TIMEOUT, |candidate| {
         let st = st.clone();
         async move {
             match st.source_readiness(&candidate.sid).status {
@@ -230,7 +236,7 @@ async fn discover_startup(st: StreamState, candidates: Vec<WarmCandidate>, prior
 /// permits reserve provider room for playback. Every probe has a deadline; the
 /// finite candidate list continues until best-ready plus backups are found.
 pub(crate) fn spawn_warm_streams(st: StreamState, candidates: Vec<WarmCandidate>) {
-    let coordinator = coordinator(st.pool.total_capacity());
+    let coordinator = coordinator(st.pool.primary_capacity());
     let mut ids: Vec<_> = candidates.iter().map(|c| c.sid.clone()).collect();
     ids.sort(); ids.dedup();
     let key = DiscoveryKey { scope: Arc::as_ptr(&st.cache) as usize, ids };
@@ -431,6 +437,13 @@ async fn sweep_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_width_scales_from_primary_and_caps_at_fifty() {
+        for (primary, expected) in [(0, 1), (1, 1), (4, 4), (30, 30), (64, 50), (100, 50), (500, 50)] {
+            assert_eq!(discovery_capacity(primary), expected);
+        }
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn candidate(index: usize, title: &str, size: u64) -> WarmCandidate {

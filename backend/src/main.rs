@@ -114,6 +114,11 @@ async fn serve() -> anyhow::Result<()> {
     }
 
     let pool = pool::Pool::new_verified(&cfg.providers, cfg.repair.enabled);
+    tracing::info!(
+        startup_sources = warm::discovery_capacity(pool.primary_capacity()),
+        background_requests = pool.background_request_capacity(),
+        "adaptive startup discovery limits (per-provider background maximum is half, minimum one)"
+    );
     let names: Vec<&str> = cfg
         .providers
         .iter()

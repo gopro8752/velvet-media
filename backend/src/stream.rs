@@ -1308,10 +1308,7 @@ pub async fn warm_startup(st: StreamState, sid: String) -> anyhow::Result<()> {
                     let segment = &extent.segments[idx];
                     // Legacy cache writers may predate strict CRC validation;
                     // establish this readiness from actual verified bodies.
-                    let fetched = {
-                        let _background = st.pool.background_permit().await;
-                        st.pool.fetch_decoded(&extent.group, &segment.message_id).await
-                    };
+                    let fetched = st.pool.fetch_decoded_background(&extent.group, &segment.message_id).await;
                     let decoded = match fetched {
                         crate::pool::DecodedFetch::Found(decoded) => decoded,
                         failure => {
@@ -1798,6 +1795,7 @@ async fn ensure_loaded_context(
     trigger: &'static str,
     session: Option<String>,
 ) -> anyhow::Result<()> {
+    let background = trigger != "foreground";
     // Fast path: already loaded (brief lock, no await held).
     if entry.loaded.lock().unwrap().is_some() {
         if st.repair_enabled {
@@ -1857,8 +1855,9 @@ async fn ensure_loaded_context(
             .ok_or_else(|| anyhow::anyhow!("no segments"))?;
         let (part_size, total) = if st.repair_enabled || trigger == "startup" {
             let started = std::time::Instant::now();
-            let (attempt, rescued) = {
-                let _background = if trigger == "startup" { Some(st.pool.background_permit().await) } else { None };
+            let (attempt, rescued) = if background {
+                st.pool.fetch_decoded_observed_background(&group, &first.message_id).await
+            } else {
                 st.pool.fetch_decoded_observed(&group, &first.message_id).await
             };
             let decoded = match attempt {
@@ -1910,7 +1909,12 @@ async fn ensure_loaded_context(
             );
             (part, total)
         } else {
-            match st.pool.fetch_checked(&group, &first.message_id).await {
+            let fetched = if background {
+                st.pool.fetch_checked_background(&group, &first.message_id).await
+            } else {
+                st.pool.fetch_checked(&group, &first.message_id).await
+            };
+            match fetched {
                 crate::pool::CheckedFetch::Found(raw) => {
                     let dec = crate::yenc::decode(&raw)?;
                     let part = dec.data.len() as u64;
@@ -1943,13 +1947,14 @@ async fn ensure_loaded_context(
         // when they don't apply (empty volume list / no .7z), so this adds no
         // cost to the common raw/rar path.
         let vols = archive::rar_volumes(&parsed.files);
-        let rar_layout = if trigger == "startup" {
+        let rar_layout = if background {
             archive::build_extents_background(&st.pool, &vols).await
         } else { archive::build_extents(&st.pool, &vols).await };
         match rar_layout {
             Ok(res) => res,
-            Err(rar_err) => match {
-                let _background = if trigger == "startup" { Some(st.pool.background_permit().await) } else { None };
+            Err(rar_err) => match if background {
+                crate::sevenzip::build_extents_background(&st.pool, &parsed.files).await
+            } else {
                 crate::sevenzip::build_extents(&st.pool, &parsed.files).await
             } {
                 Ok(res) => res,
@@ -2061,11 +2066,17 @@ async fn fetch_streaming(
     seg: &crate::nzb::Segment,
     part_size: u64,
     idx: usize,
+    background: bool,
 ) -> Result<(Vec<u8>, u64), FetchFailure> {
     if let Some((data, start)) = cache.get(&seg.message_id) {
         return Ok((data.as_ref().clone(), start));
     }
-    match pool.fetch_checked(group, &seg.message_id).await {
+    let fetched = if background {
+        pool.fetch_checked_background(group, &seg.message_id).await
+    } else {
+        pool.fetch_checked(group, &seg.message_id).await
+    };
+    match fetched {
         crate::pool::CheckedFetch::Found(raw) => match crate::yenc::decode(&raw) {
             Ok(d) if !d.data.is_empty() => {
                 let start = d
@@ -2119,7 +2130,7 @@ async fn fetch_recovering_context(
     trigger: &'static str,
 ) -> Result<(Vec<u8>, u64), FetchFailure> {
     if !st.repair_enabled {
-        return fetch_streaming(&st.pool, &st.cache, group, seg, part_size, idx).await;
+        return fetch_streaming(&st.pool, &st.cache, group, seg, part_size, idx, background).await;
     }
     if let Some((data, start)) = st.cache.get(&seg.message_id) {
         return Ok((data.as_ref().clone(), start));
@@ -2128,12 +2139,9 @@ async fn fetch_recovering_context(
         decoded
     } else {
         let started = std::time::Instant::now();
-        let (attempt, rescued) = {
-            let _background = if background {
-                Some(st.pool.background_permit().await)
-            } else {
-                None
-            };
+        let (attempt, rescued) = if background {
+            st.pool.fetch_decoded_observed_background(group, &seg.message_id).await
+        } else {
             st.pool.fetch_decoded_observed(group, &seg.message_id).await
         };
         match attempt {
@@ -2506,12 +2514,11 @@ impl StreamGen {
                             refreshed_position = true;
                             let segment = &ext.segments[self.seg_idx];
                             let refresh = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                                let _background = if self.probe_budget.is_some() {
-                                    Some(self.state.pool.background_permit().await)
+                                if self.probe_budget.is_some() {
+                                    self.state.pool.fetch_decoded_background(&ext.group, &segment.message_id).await
                                 } else {
-                                    None
-                                };
-                                self.state.pool.fetch_decoded(&ext.group, &segment.message_id).await
+                                    self.state.pool.fetch_decoded(&ext.group, &segment.message_id).await
+                                }
                             }).await;
                             if let Ok(crate::pool::DecodedFetch::Found(fresh)) = refresh {
                                 let fresh_start = fresh.part_begin.unwrap_or(1) - 1;

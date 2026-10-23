@@ -167,8 +167,10 @@ pub enum RarError {
 }
 
 /// Fetch + decode a volume's first segment (holds the header for a store file).
-async fn fetch_seg0(pool: &Arc<Pool>, group: &str, seg: &Segment) -> Option<Vec<u8>> {
-    match pool.fetch(group, &seg.message_id).await {
+async fn fetch_seg0(pool: &Arc<Pool>, group: &str, seg: &Segment, background: bool) -> Option<Vec<u8>> {
+    let fetched = if background { pool.fetch_background(group, &seg.message_id).await }
+        else { pool.fetch(group, &seg.message_id).await };
+    match fetched {
         Fetched::Found(raw) => crate::yenc::decode(&raw).ok().map(|d| d.data),
         Fetched::Missing => None,
     }
@@ -204,8 +206,7 @@ async fn build_extents_with_admission(
         let seg0 = vol.segments.first().cloned();
         async move {
             let seg0 = seg0?;
-            let _background = if background { Some(pool.background_permit().await) } else { None };
-            fetch_seg0(&pool, &group, &seg0).await
+            fetch_seg0(&pool, &group, &seg0, background).await
         }
     }).collect();
     let heads = if background {
@@ -262,9 +263,11 @@ async fn build_extents_with_admission(
 /// Fetch + decode one segment, returning its bytes and real 0-based decoded start
 /// (from =ypart), falling back to the uniform estimate / zero-fill.
 pub(crate) async fn fetch_seg(
-    pool: &Arc<Pool>, group: &str, seg: &Segment, part_size: u64, idx: usize,
+    pool: &Arc<Pool>, group: &str, seg: &Segment, part_size: u64, idx: usize, background: bool,
 ) -> (Vec<u8>, u64) {
-    match pool.fetch(group, &seg.message_id).await {
+    let fetched = if background { pool.fetch_background(group, &seg.message_id).await }
+        else { pool.fetch(group, &seg.message_id).await };
+    match fetched {
         Fetched::Found(raw) => match crate::yenc::decode(&raw) {
             Ok(d) => {
                 let start = d.part_begin.map(|b| b - 1).unwrap_or(idx as u64 * part_size);
@@ -281,6 +284,18 @@ pub(crate) async fn fetch_seg(
 pub async fn read_volume_range(
     pool: &Arc<Pool>, group: &str, segments: &[Segment], part_size: u64, start: u64, len: u64,
 ) -> Vec<u8> {
+    read_volume_range_with_admission(pool, group, segments, part_size, start, len, false).await
+}
+
+pub(crate) async fn read_volume_range_background(
+    pool: &Arc<Pool>, group: &str, segments: &[Segment], part_size: u64, start: u64, len: u64,
+) -> Vec<u8> {
+    read_volume_range_with_admission(pool, group, segments, part_size, start, len, true).await
+}
+
+async fn read_volume_range_with_admission(
+    pool: &Arc<Pool>, group: &str, segments: &[Segment], part_size: u64, start: u64, len: u64, background: bool,
+) -> Vec<u8> {
     let end = start + len;
     let mut out = Vec::with_capacity(len as usize);
     let mut idx = ((start / part_size.max(1)) as usize).min(segments.len().saturating_sub(1));
@@ -289,7 +304,7 @@ pub async fn read_volume_range(
         if idx >= segments.len() {
             return out;
         }
-        let (data, seg_start) = fetch_seg(pool, group, &segments[idx], part_size, idx).await;
+        let (data, seg_start) = fetch_seg(pool, group, &segments[idx], part_size, idx, background).await;
         let seg_end = seg_start + data.len() as u64;
         if start < seg_start && idx > 0 {
             idx -= 1;
@@ -309,7 +324,7 @@ pub async fn read_volume_range(
     }
     // Append contiguous following segments until satisfied.
     while (out.len() as u64) < len && idx < segments.len() {
-        let (data, _) = fetch_seg(pool, group, &segments[idx], part_size, idx).await;
+        let (data, _) = fetch_seg(pool, group, &segments[idx], part_size, idx, background).await;
         let remaining = (len - out.len() as u64) as usize;
         let take = remaining.min(data.len());
         out.extend_from_slice(&data[..take]);

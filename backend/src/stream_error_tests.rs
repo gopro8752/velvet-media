@@ -279,3 +279,50 @@ async fn bulk_readiness_is_authenticated_bounded_and_never_probes_sources() {
     assert_eq!(response.status(),StatusCode::PAYLOAD_TOO_LARGE);
     server.abort();
 }
+
+#[tokio::test]
+async fn startup_admission_deadline_leaves_source_unverified_and_retryable() {
+    async fn check(provider_gate: bool) {
+        use crate::pool::{background_admission_tests::gated_provider, DecodedFetch};
+        let (secondary, release, entered, _, server) = gated_provider(2).await;
+        let mut primary_server = None;
+        let providers = if provider_gate {
+            let (mut primary, task) = crate::pool::verified_fixtures::provider(Default::default()).await;
+            primary.max_connections = 4;
+            primary_server = Some(task);
+            vec![primary, secondary]
+        } else { vec![secondary] };
+        let pool = Pool::new_verified(&providers, true);
+        let blocker_pool = pool.clone();
+        let blocker = tokio::spawn(async move {
+            blocker_pool.fetch_decoded_background("", "blocked-startup").await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while entered.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        let (url, _, indexer_server) = indexer(nzb(&["fixture.mp4"]), false).await;
+        let (st, path) = repairing_state(pool);
+        let sid = st.register(&url).await;
+        // Exercise warm_startup's own ten-second deadline while its BODY is
+        // queued, with a saturated primary and then a smaller saturated fallback.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(12),
+            warm_startup(st.clone(), sid.clone())).await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(entered.load(Ordering::SeqCst), 1, "queued source must not issue BODY");
+        assert_eq!(st.source_readiness(&sid).status, "unverified");
+        assert!(st.lookup(&sid).unwrap().preparation_failure().is_none());
+        assert!(!st.is_condemned(&url));
+        assert_eq!(st.repair.status(&sid).await.unwrap().charged_download_bytes, 0);
+        release.add_permits(1);
+        assert!(matches!(blocker.await.unwrap(), DecodedFetch::Found(_)));
+        warm_startup(st.clone(), sid.clone()).await.unwrap();
+        assert_eq!(st.source_readiness(&sid).status, "ready", "capacity expiry must not poison the next attempt");
+        st.repair.cancel(&sid).await;
+        drop(st);
+        server.abort();
+        indexer_server.abort();
+        if let Some(task) = primary_server { task.abort(); }
+        let _ = std::fs::remove_dir_all(path);
+    }
+    tokio::join!(check(false), check(true));
+}

@@ -316,6 +316,9 @@ struct PooledConn {
 struct ProviderPool {
     provider: Provider,
     sem: Arc<Semaphore>,
+    /// Request admission, not socket ownership: idle connections remain usable
+    /// by foreground playback regardless of which class opened them.
+    background: Semaphore,
     idle: Mutex<Vec<PooledConn>>,
     available: Notify,
     metrics: Arc<Metrics>,
@@ -324,10 +327,12 @@ struct ProviderPool {
 impl ProviderPool {
     fn new(provider: Provider) -> Self {
         let sem = Arc::new(Semaphore::new(provider.max_connections.max(1)));
+        let background = Semaphore::new(provider_background_capacity(provider.max_connections));
         let metrics = Metrics::new(provider.max_connections.max(1));
         ProviderPool {
             provider,
             sem,
+            background,
             idle: Mutex::new(Vec::new()),
             available: Notify::new(),
             metrics,
@@ -410,7 +415,9 @@ impl ProviderPool {
     /// STAT one segment on THIS provider: Some(true)=present, Some(false)=missing
     /// (confirmed 430), None=couldn't check (connection/timeout). STAT is by
     /// message-id and needs no GROUP. Retries transient errors before giving up.
-    async fn stat(&self, message_id: &str) -> Option<bool> {
+    async fn stat(&self, message_id: &str, global: &Semaphore) -> Option<bool> {
+        let _background = self.background.acquire().await.expect("semaphore closed");
+        let _global = global.acquire().await.expect("semaphore closed");
         // Two tries: a reused pooled socket can be half-dead; a fresh one usually
         // works. More than that just churns connections and slows the sweep.
         for _ in 0..2 {
@@ -441,8 +448,8 @@ impl ProviderPool {
 
     /// Try to fetch one segment from THIS provider. Reconnects once on an I/O
     /// error (a stale pooled socket), then gives up (caller tries next provider).
-    async fn fetch(&self, group: &str, message_id: &str) -> ProviderOutcome {
-        self.fetch_budgeted(group, message_id, None)
+    async fn fetch(&self, group: &str, message_id: &str, background: Option<&Semaphore>) -> ProviderOutcome {
+        self.fetch_budgeted(group, message_id, None, background)
             .await
             .unwrap_or(ProviderOutcome::ProviderDown)
     }
@@ -452,7 +459,18 @@ impl ProviderPool {
         group: &str,
         message_id: &str,
         budget: Option<&FetchBudget>,
+        background: Option<&Semaphore>,
     ) -> Result<ProviderOutcome, FetchBudgetExceeded> {
+        // Keep this through retries, then release it before the pool advances
+        // to another provider. Foreground requests skip only this admission
+        // gate; both classes still obey the provider's socket limit.
+        // Reserve this provider first: requests queued on a small or slow
+        // fallback must not hold the shared BODY budget needed by primary reads.
+        let _background = if let Some(global) = background {
+            let provider = self.background.acquire().await.expect("semaphore closed");
+            let global = global.acquire().await.expect("semaphore closed");
+            Some((provider, global))
+        } else { None };
         for attempt in 0..2 {
             let mut conn = match self.checkout().await {
                 Ok(c) => c,
@@ -575,6 +593,14 @@ impl Pool {
             .sum()
     }
 
+    pub fn background_request_capacity(&self) -> usize {
+        provider_background_capacity(self.primary_capacity()).min(50)
+    }
+
+    pub fn primary_capacity(&self) -> usize {
+        self.providers.first().map(|p| p.provider.max_connections).unwrap_or(1).max(1)
+    }
+
     /// Safe to sample during traffic. Provider gauges are individually atomic;
     /// the aggregate is their sum, sampled without holding a lock across I/O.
     pub async fn metrics_snapshot(&self) -> PoolMetricsSnapshot {
@@ -616,13 +642,28 @@ impl Pool {
         }
     }
 
+    pub async fn fetch_background(&self, group: &str, message_id: &str) -> Fetched {
+        match self.fetch_checked_background(group, message_id).await {
+            CheckedFetch::Found(raw) => Fetched::Found(raw),
+            CheckedFetch::Missing | CheckedFetch::Unavailable => Fetched::Missing,
+        }
+    }
+
     pub async fn fetch_checked(&self, group: &str, message_id: &str) -> CheckedFetch {
+        self.fetch_checked_inner(group, message_id, false).await
+    }
+
+    pub async fn fetch_checked_background(&self, group: &str, message_id: &str) -> CheckedFetch {
+        self.fetch_checked_inner(group, message_id, true).await
+    }
+
+    async fn fetch_checked_inner(&self, group: &str, message_id: &str, background: bool) -> CheckedFetch {
         let mut all_missing = !self.providers.is_empty();
         for (index, pp) in self.providers.iter().enumerate() {
             if index > 0 {
                 pp.metrics.update(|m| m.fallback_attempts += 1);
             }
-            match pp.fetch(group, message_id).await {
+            match pp.fetch(group, message_id, background.then_some(&self.background)).await {
                 ProviderOutcome::Found(raw) => {
                     if self.strict && crate::yenc::decode_verified(&raw).is_err() {
                         pp.metrics.update(|m| m.article_errors += 1);
@@ -650,6 +691,17 @@ impl Pool {
         self.fetch_decoded_observed(group, message_id).await.0
     }
 
+    pub async fn fetch_decoded_background(&self, group: &str, message_id: &str) -> DecodedFetch {
+        self.fetch_decoded_observed_background(group, message_id).await.0
+    }
+
+    pub async fn fetch_decoded_observed_background(
+        &self, group: &str, message_id: &str,
+    ) -> (DecodedFetch, bool) {
+        self.fetch_decoded_inner(group, message_id, None, true)
+            .await.unwrap_or((DecodedFetch::Unavailable, false))
+    }
+
     /// Whether another provider rescued this exact validated article. Kept per
     /// request rather than inferred by subtracting shared concurrent counters.
     pub async fn fetch_decoded_observed(
@@ -657,7 +709,7 @@ impl Pool {
         group: &str,
         message_id: &str,
     ) -> (DecodedFetch, bool) {
-        self.fetch_decoded_inner(group, message_id, None)
+        self.fetch_decoded_inner(group, message_id, None, false)
             .await
             .unwrap_or((DecodedFetch::Unavailable, false))
     }
@@ -679,8 +731,14 @@ impl Pool {
         message_id: &str,
         budget: &FetchBudget,
     ) -> Result<(DecodedFetch, bool), FetchBudgetExceeded> {
-        self.fetch_decoded_inner(group, message_id, Some(budget))
+        self.fetch_decoded_inner(group, message_id, Some(budget), false)
             .await
+    }
+
+    pub async fn fetch_decoded_budgeted_observed_background(
+        &self, group: &str, message_id: &str, budget: &FetchBudget,
+    ) -> Result<(DecodedFetch, bool), FetchBudgetExceeded> {
+        self.fetch_decoded_inner(group, message_id, Some(budget), true).await
     }
 
     async fn fetch_decoded_inner(
@@ -688,6 +746,7 @@ impl Pool {
         group: &str,
         message_id: &str,
         budget: Option<&FetchBudget>,
+        background: bool,
     ) -> Result<(DecodedFetch, bool), FetchBudgetExceeded> {
         let mut unavailable = self.providers.is_empty();
         let mut corrupt = false;
@@ -695,7 +754,7 @@ impl Pool {
             if index > 0 {
                 pp.metrics.update(|m| m.fallback_attempts += 1);
             }
-            match pp.fetch_budgeted(group, message_id, budget).await? {
+            match pp.fetch_budgeted(group, message_id, budget, background.then_some(&self.background)).await? {
                 ProviderOutcome::Found(raw) => match crate::yenc::decode_verified(&raw) {
                     Ok(decoded) => {
                         if index > 0 {
@@ -721,17 +780,12 @@ impl Pool {
         }
     }
 
-    pub async fn background_permit(&self) -> tokio::sync::SemaphorePermit<'_> {
-        self.background.acquire().await.expect("semaphore closed")
-    }
-
     /// Present if any provider confirms it, missing only if ALL providers
     /// confirm absence. A provider outage leaves the answer unknown.
     pub async fn present_anywhere(&self, message_id: &str) -> Option<bool> {
-        let _background = self.background_permit().await;
         let mut all_missing = !self.providers.is_empty();
         for pp in &self.providers {
-            match pp.stat(message_id).await {
+            match pp.stat(message_id, &self.background).await {
                 Some(true) => return Some(true),
                 Some(false) => {}
                 None => all_missing = false,
@@ -783,7 +837,201 @@ pub struct Completeness {
 fn background_capacity(providers: &[Provider]) -> usize {
     // Most requests first hit the primary provider, so reserve headroom there
     // rather than sizing against the sum of unrelated provider budgets.
-    (providers.first().map(|p| p.max_connections).unwrap_or(1) / 4).clamp(1, 12)
+    provider_background_capacity(providers.first().map(|p| p.max_connections).unwrap_or(1)).min(50)
+}
+
+fn provider_background_capacity(capacity: usize) -> usize {
+    (capacity / 2).max(1)
+}
+
+#[cfg(test)]
+pub(crate) mod background_admission_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    pub(crate) async fn gated_provider(capacity: usize) -> (
+        Provider, Arc<Semaphore>, Arc<AtomicUsize>, Arc<AtomicUsize>, tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let release = Arc::new(Semaphore::new(0));
+        let entered = Arc::new(AtomicUsize::new(0));
+        let retries = Arc::new(AtomicUsize::new(0));
+        let (r, e, retry) = (release.clone(), entered.clone(), retries.clone());
+        let server = tokio::spawn(async move {
+            let mut peers = tokio::task::JoinSet::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                let (release, entered, retries) = (r.clone(), e.clone(), retry.clone());
+                peers.spawn(async move {
+                    let mut socket = BufReader::new(socket);
+                    if socket.get_mut().write_all(b"200 fixture\r\n").await.is_err() { return; }
+                    loop {
+                        let mut line = String::new();
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 { break; }
+                        let id = line.trim().split(' ').nth(1).unwrap_or("").trim_matches(['<', '>']);
+                        let response = if line.starts_with("AUTHINFO") {
+                            b"281 accepted\r\n".to_vec()
+                        } else if line.starts_with("GROUP") {
+                            b"211 test\r\n".to_vec()
+                        } else {
+                            entered.fetch_add(1, Ordering::SeqCst);
+                            if id == "retry" && retries.fetch_add(1, Ordering::SeqCst) == 0 {
+                                if socket.get_mut().write_all(b"451 temporary\r\n").await.is_err() { break; }
+                                continue;
+                            }
+                            if id.starts_with("blocked") || id == "retry" {
+                                release.acquire().await.unwrap().forget();
+                            }
+                            if line.starts_with("STAT") { b"223 present\r\n".to_vec() }
+                            else {
+                                let body = verified_fixtures::article(b"healthy", 1, 7, 1);
+                                [b"222 body\r\n".as_slice(), &body, b".\r\n"].concat()
+                            }
+                        };
+                        if socket.get_mut().write_all(&response).await.is_err() { break; }
+                    }
+                });
+            }
+        });
+        (Provider { name: "gated fixture".into(), host: "127.0.0.1".into(), port,
+            tls: false, username: "fixture".into(), password: "fixture".into(), max_connections: capacity },
+            release, entered, retries, server)
+    }
+
+    async fn wait_for(counter: &AtomicUsize, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while counter.load(Ordering::SeqCst) < expected { tokio::task::yield_now().await; }
+        }).await.expect("fixture requests should reach the provider");
+    }
+
+    #[test]
+    fn adaptive_limits_reserve_provider_headroom_and_cap_global_requests() {
+        for (capacity, background) in [(0, 1), (1, 1), (2, 1), (10, 5), (30, 15), (100, 50), (200, 100)] {
+            assert_eq!(provider_background_capacity(capacity), background);
+        }
+    }
+
+    async fn foreground_survives_background_saturation(fallback: bool) {
+        let (provider, release, entered, _, server) = gated_provider(4).await;
+        let (missing, missing_server) = if fallback {
+            let (mut missing, server) = super::tests::fake_provider(430).await;
+            missing.max_connections = 20;
+            (Some(missing), Some(server))
+        } else { (None, None) };
+        let providers: Vec<_> = missing.into_iter().chain([provider]).collect();
+        let pool = Pool::new_verified(&providers, true);
+        let tasks: Vec<_> = (0..6).map(|index| {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                pool.fetch_decoded_background("", &format!("blocked{index}")).await
+            })
+        }).collect();
+        wait_for(&entered, 2).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(entered.load(Ordering::SeqCst), 2, "background cannot occupy more than half the provider");
+        let foreground = tokio::time::timeout(Duration::from_secs(1), pool.fetch_decoded("", "foreground"))
+            .await.expect("foreground must bypass saturated background admission");
+        assert!(matches!(foreground, DecodedFetch::Found(_)));
+        assert_eq!(entered.load(Ordering::SeqCst), 3);
+        release.add_permits(6);
+        for task in tasks { assert!(matches!(task.await.unwrap(), DecodedFetch::Found(_))); }
+        assert_eq!(pool.background.available_permits(), pool.background_request_capacity());
+        assert_eq!(pool.providers.last().unwrap().background.available_permits(), 2);
+        server.abort();
+        if let Some(server) = missing_server { server.abort(); }
+    }
+
+    #[tokio::test]
+    async fn primary_background_saturation_leaves_foreground_capacity() {
+        foreground_survives_background_saturation(false).await;
+    }
+
+    #[tokio::test]
+    async fn fallback_background_saturation_leaves_foreground_capacity() {
+        foreground_survives_background_saturation(true).await;
+    }
+
+    #[tokio::test]
+    async fn queued_slow_fallback_does_not_hold_primary_background_body_capacity() {
+        let (mut primary, primary_server) = verified_fixtures::provider(std::collections::HashMap::from([
+            ("healthy".into(), verified_fixtures::article(b"primary", 1, 7, 1)),
+        ])).await;
+        primary.max_connections = 8;
+        let (fallback, _, entered, _, fallback_server) = gated_provider(2).await;
+        let pool = Pool::new_verified(&[primary, fallback], true);
+        let blocked: Vec<_> = (0..8).map(|i| {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.fetch_decoded_background("", &format!("blocked{i}")).await })
+        }).collect();
+        wait_for(&entered, 1).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while pool.metrics_snapshot().await.providers[0].metrics.articles_missing < 8 {
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("fallback waiters must release global capacity for later primary attempts");
+        let ready = tokio::time::timeout(Duration::from_secs(1), pool.fetch_decoded_background("", "healthy"))
+            .await.expect("primary success must progress while fallback requests remain queued");
+        assert!(matches!(ready, DecodedFetch::Found(decoded) if decoded.data == b"primary"));
+        assert_eq!(entered.load(Ordering::SeqCst), 1, "fallback remains blocked during the primary read");
+        assert_eq!(pool.background.available_permits(), 3, "only the actual fallback attempt holds a BODY slot");
+        for task in &blocked { task.abort(); }
+        for task in blocked { let _ = task.await; }
+        assert_eq!(pool.background.available_permits(), 4);
+        primary_server.abort(); fallback_server.abort();
+    }
+
+    #[tokio::test]
+    async fn cancelling_active_and_queued_background_reads_returns_both_gates() {
+        let (provider, _, entered, _, server) = gated_provider(4).await;
+        let (mut missing, missing_server) = super::tests::fake_provider(430).await;
+        missing.max_connections = 20;
+        let pool = Pool::new_verified(&[missing, provider], true);
+        let tasks: Vec<_> = (0..6).map(|i| {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.fetch_decoded_background("", &format!("blocked{i}")).await })
+        }).collect();
+        wait_for(&entered, 2).await;
+        for task in &tasks { task.abort(); }
+        for task in tasks { assert!(task.await.is_err()); }
+        assert_eq!(pool.background.available_permits(), 10);
+        assert_eq!(pool.providers[1].background.available_permits(), 2);
+        assert!(matches!(tokio::time::timeout(Duration::from_secs(1), pool.fetch_decoded_background("", "fresh")).await.unwrap(), DecodedFetch::Found(_)));
+        server.abort(); missing_server.abort();
+    }
+
+    #[tokio::test]
+    async fn background_retry_keeps_reservation_and_releases_it_when_cancelled() {
+        let (provider, _, _, retries, server) = gated_provider(4).await;
+        let pool = Pool::new_verified(&[provider], true);
+        let other = pool.clone();
+        let task = tokio::spawn(async move { other.fetch_decoded_background("", "retry").await });
+        wait_for(&retries, 2).await;
+        assert_eq!(pool.background.available_permits(), 1);
+        assert_eq!(pool.providers[0].background.available_permits(), 1);
+        task.abort(); assert!(task.await.is_err());
+        assert_eq!(pool.background.available_permits(), 2);
+        assert_eq!(pool.providers[0].background.available_permits(), 2);
+        assert!(matches!(pool.fetch_decoded_background("", "fresh").await, DecodedFetch::Found(_)));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn one_connection_background_wrappers_do_not_nest_admission() {
+        let (provider, _, _, _, server) = gated_provider(1).await;
+        let pool = Pool::new_verified(&[provider], true);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            assert!(matches!(pool.fetch_background("", "raw").await, Fetched::Found(_)));
+            assert!(matches!(pool.fetch_decoded_background("", "decoded").await, DecodedFetch::Found(_)));
+            let budget = FetchBudget::new(65536);
+            assert!(matches!(pool.fetch_decoded_budgeted_observed_background("", "budgeted", &budget).await.unwrap().0, DecodedFetch::Found(_)));
+            assert_eq!(pool.present_anywhere("stat").await, Some(true));
+        }).await.expect("each background API must acquire each gate only once");
+        assert_eq!(pool.background.available_permits(), 1);
+        assert_eq!(pool.providers[0].background.available_permits(), 1);
+        server.abort();
+    }
 }
 
 impl Completeness {
