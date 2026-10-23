@@ -28,6 +28,41 @@ sub main()
     expect(displayLimited.streams[1].id = "hevc" and displayLimited.streams[2].id = "truehd", "display guard does not disable 1080p HEVC or TrueHD")
     expect(VCompatibleStreams([streams[2]], true, hdOutput, invalid, true).streams.Count() = 0, "exact 4K handoff uses the same display guard")
     expect(VCompatibleStreams(invalid, true, true).streams.Count() = 0, "empty resolution stays empty")
+    readinessStreams = [
+        {id: "unknown", title: "Example.2160p.H264", url: "https://backend/stream/0000000000000001"},
+        {id: "readyHd", title: "Example.1080p.H264", url: "https://backend/stream/0000000000000002", behaviorHints: {velvetSourceReadiness: {status: "ready"}}},
+        {id: "dead", title: "Example.2160p.H264", url: "https://backend/stream/0000000000000003", behaviorHints: {velvetSourceReadiness: {status: "unavailable"}}},
+        {id: "readyUhd", title: "Example.2160p.H264", url: "https://backend/stream/0000000000000004", behaviorHints: {velvetSourceReadiness: {status: "ready"}}}
+    ]
+    ordered = VStartupQualityStreams(readinessStreams, "2160p")
+    expect(ordered[0].id = "readyUhd" and ordered[1].id = "readyHd", "best preferred quality among verified sources wins")
+    expect(ordered[2].id = "unknown" and ordered[3].id = "dead", "unavailable candidates remain selectable manually at the end")
+    reranked = VStartupQualityStreams([
+        {title: "Example.720p", behaviorHints: {velvetSourceReadiness: {status: "ready"}}},
+        {title: "Example.1080p", behaviorHints: {velvetSourceReadiness: {status: "ready"}}}
+    ], "2160p")
+    expect(reranked[0].title = "Example.1080p", "new ready snapshot cannot retain stale lower-resolution ordering when preferred quality is absent")
+    attempts = {}
+    attempts[ordered[0].url] = true
+    expect(VAutomaticSourceIndex(ordered, attempts) = 1, "ready backup takes priority over unknown preferred quality")
+    attempts[ordered[1].url] = true
+    expect(VAutomaticSourceIndex(ordered, attempts) = 2, "unknown candidate remains eligible when verified sources fail")
+    attempts[ordered[2].url] = true
+    expect(VAutomaticSourceIndex(ordered, attempts) = -1, "automatic selection skips temporarily unavailable sources")
+    update = {}
+    update["0000000000000003"] = {status: "ready"}
+    VApplyStartupReadiness(ordered, update)
+    expect(VAutomaticSourceIndex(ordered, attempts) = 3, "refreshed availability can revive a previously unavailable candidate")
+    many = []
+    attempts = {}
+    for number = 0 to 79
+        candidate = {url: "https://backend/stream/" + number.ToStr()}
+        many.Push(candidate)
+        if number < 79 then attempts[candidate.url] = true
+    end for
+    expect(VAutomaticSourceIndex(many, attempts) = 79, "untried eightieth candidate is reached without a four or sixty-four source cutoff")
+    attempts[many[79].url] = true
+    expect(VAutomaticSourceIndex(many, attempts) = -1, "finite source list terminates after every candidate failed")
     expect(VStreamFormat({behaviorHints: {filename: "episode.mp4"}}) = "mp4", "explicit MP4 retains its native container")
     expect(VStreamFormat({behaviorHints: {filename: "episode.mkv"}}) = "mkv", "explicit MKV uses Matroska")
     expect(VStreamFormat({title: "Release.1080p.H264"}) = "mkv", "extensionless resolver release defaults to tested Roku container")

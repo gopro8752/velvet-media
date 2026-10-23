@@ -41,6 +41,11 @@ internal class StreamRecoveryBudget(private val maximumSwitches: Int = 4) {
         return true
     }
 
+    /** Unplayable startup candidates must not consume the mid-play recovery budget.
+     * The caller excludes attempted URLs, so this can traverse the finite source list
+     * without retrying a failed source or stopping before a working candidate. */
+    @Synchronized fun tryCandidateSwitch(): Boolean = !sourceEstablished || tryAutomaticSwitch()
+
     /** True only when genuine sustained progress renews a spent failure budget. */
     @Synchronized fun observe(nowMs: Long, positionMs: Long, isPlaying: Boolean): Boolean {
         val elapsed = lastAt?.let { nowMs - it } ?: 0

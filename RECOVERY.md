@@ -11,6 +11,14 @@ Mainline Velvet includes the recovery system originally developed in the isolate
 
 The backend fixes for unequal article lengths, seek-position loops, classified HTTP errors, and bounded retries are included. An incomplete or unsupported archive is not treated as a successful stream.
 
+## Choosing a playable source
+
+The backend checks candidate releases concurrently, using up to eight source checks according to configured provider capacity. Article requests share a separate background allowance so discovery leaves room for active playback. It checks high-quality releases alongside compatible encodes, rather than allowing a long run of broken remuxes to hide a playable source farther down the list.
+
+Startup readiness means checksummed bytes cover the actual media's opening and ending windows. It does not mean every article in the release is available or that every client can decode it. Readiness expires when those cached bytes are evicted. Preparation failures receive a short cooldown instead of launching the same expensive work on every request; uncertainty about a provider is not a permanent missing-article verdict.
+
+Updated clients fetch cached readiness in one authenticated request, prefer quality among prepared candidates, and continue through untried startup candidates without the former four-failure cutoff. Discovery retains prepared backups and checks higher-quality candidates still outstanding. A failed background check does not interrupt a stream that is already playing. Mid-play alternatives still need preparation around the current playback position; another encode may require a visible player restart.
+
 ## Enable on your server
 
 Build the current backend image; it includes ffprobe and PAR2. Add these sections to your private `velvet.toml`, preserving your existing providers, indexers, token, and database:

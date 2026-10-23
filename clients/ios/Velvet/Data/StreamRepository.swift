@@ -10,11 +10,12 @@ import Foundation
 ///  - torrent infoHash-only entries (no http url) skipped
 ///  - quality parsing (2160p/4k/uhd → "2160p", 1080p/fhd, 720p, 480p) and size
 ///    parsing from behaviorHints.videoSize or "12.3 GB" text ([TGMK]iB too)
-///  - sortStreams: the backend's release::cmp_streams hierarchy — 2D before 3D,
+///  - sortStreams: verified startup readiness, then the backend's quality
+///    hierarchy — 2D before 3D,
 ///    preferred-quality match, resolution rank, REMUX, HDR rank (DoVi > HDR10+ >
 ///    HDR10/HDR), audio rank (TrueHD Atmos > DTS-X > TrueHD > DTS-HD MA > …),
 ///    then size desc as the final tiebreaker
-///  - autoPick: exact bingeGroup match first when previousBingeGroup is given
+///  - autoPick: preserve bingeGroup within the best readiness/resolution tier
 ///  - probeStreams (v1.2.0, spec §3a): parallel 128 KB Range probes, healthy ones
 ///    only, in the input's order; never throws; all-fail returns the input unchanged
 protocol StreamRepository: Sendable {
@@ -36,9 +37,12 @@ protocol StreamRepository: Sendable {
     /// `limit:` here; the implementation defaults it to 5 and the extension below
     /// gives callers the one-argument form.
     func probeStreams(_ streams: [StreamOption], limit: Int) async -> [StreamOption]
+    /// Read cached backend startup checks, never download media on the client.
+    func refreshStartupReadiness(_ streams: [StreamOption], waitForReady: Bool) async -> [StreamOption]
 }
 
 extension StreamRepository {
+    func refreshStartupReadiness(_ streams: [StreamOption], waitForReady: Bool) async -> [StreamOption] { streams }
     /// `probeStreams(sorted)` — the spec's `limit = 5` default.
     func probeStreams(_ streams: [StreamOption]) async -> [StreamOption] {
         await probeStreams(streams, limit: 5)

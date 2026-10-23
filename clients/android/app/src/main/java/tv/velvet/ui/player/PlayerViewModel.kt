@@ -129,6 +129,7 @@ data class PlayerUiState(
      * non-blocking "Trying another source…" pill. Clears as soon as playback is ready.
      */
     val switchingSource: Boolean = false,
+    val checkingSources: Boolean = false,
     val queueNotice: String? = null,
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
@@ -265,6 +266,8 @@ class PlayerViewModel(
     private val failoverWatchdog = StreamFailoverWatchdog()
     private var hostStopped = false
     private var recoveryJob: Job? = null
+    private var fallbackSelectionJob: Job? = null
+    private var pendingSourceFailure: PlaybackException? = null
     private var preparedFallback: StreamOption? = null
     private var recoveryPrepareRequested = false
     private var recoveryRevision = 0L
@@ -704,20 +707,24 @@ class PlayerViewModel(
             return
         }
         allResolvedStreams = streams
+        _state.update { it.copy(checkingSources = true) }
         val prepared = prepareStreams(streams, curSeason, curEpisode)
         if (identity != curSeason to curEpisode) return
         candidates = prepared.candidates.filterNot(::isBlocked)
         _state.update { it.copy(streams = prepared.all.filterNot(::isBlocked), episodeVerdicts = prepared.verdicts) }
         val pick = candidates.firstOrNull()
-        if (pick == null) showError("No unblocked streams are available. Open Playback options to reset blocked releases.", true)
+        if (pick == null) showError(
+            if (prepared.all.isEmpty()) "No unblocked streams are available. Open Playback options to reset blocked releases."
+            else "These sources are temporarily unavailable. Choose a stream or try again.", true)
         else play(pick)
     }
 
-    /** Rank immediately; playback and its bounded watchdog replace serial preflight probes. */
+    /** Consult concurrent cached preparation; never open sources serially just to rank them. */
     private suspend fun prepareStreams(
         streams: List<StreamOption>,
         season: Int?,
         episode: Int?,
+        refreshReadiness: Boolean = false,
     ): PreparedStreams {
         // Episode-title cross-check (EpisodeMatch.kt): demote releases whose filename
         // carries a DIFFERENT episode's title (off-by-one numbering), boost ones carrying
@@ -739,8 +746,8 @@ class PlayerViewModel(
         val sorted: List<StreamOption> =
             runCatching { streamRepo.sortStreams(streams.filterNot(::isBlocked), settings.preferredQuality) }
                 .getOrDefault(streams.filterNot(::isBlocked))
-                .sortedBy(::rankOf)
-        val healthy = sorted
+        val readiness = container.streamRecoveryApi.startupReadiness(sorted, refreshReadiness, waitForReadyMs = 3_500)
+        val healthy = startupCandidates(sorted, readiness, ::rankOf)
         // Keep explicit group continuity without delaying first playback on probe batches.
         val hint = handoffLease?.handoff?.sourceHint?.takeIf { !handoffFinished }
         val promoted = hint?.let { source ->
@@ -751,9 +758,7 @@ class PlayerViewModel(
         } ?: lastBingeGroup?.let { group ->
             healthy.firstOrNull { it.bingeGroup == group && rankOf(it) != 2 }
         }
-        val ordered =
-            if (promoted == null) healthy
-            else listOf(promoted) + healthy.filterNot { it.url == promoted.url }
+        val ordered = startupCandidates(sorted, readiness, ::rankOf, promoted)
         return PreparedStreams(
             raw = streams,
             all = sorted,
@@ -788,6 +793,9 @@ class PlayerViewModel(
     private fun prepareStream(stream: StreamOption, reason: SourceSwitchReason) {
         if (handoffAccepted && isBlocked(stream)) return
         if (handoffAborted || (handoffFinished && !handoffAccepted)) return
+        fallbackSelectionJob?.cancel()
+        fallbackSelectionJob = null
+        pendingSourceFailure = null
         if (BuildConfig.EXACT_RECOVERY) telemetry.sourcePrepared(stream.url, reason)
         else if (currentStream != null && currentStream?.url != stream.url) telemetry.sourceSwitch()
         currentStream = stream
@@ -820,10 +828,11 @@ class PlayerViewModel(
         endedHandled = false
         player.prepare()
         if (handoffAccepted) watchRecovery(stream)
-        player.playWhenReady = true
+        player.playWhenReady = !hostStopped
         _state.update {
             it.copy(
                 phase = PlayerPhase.PLAYING,
+                checkingSources = false,
                 errorMessage = null,
                 canChooseStream = false,
                 currentStreamUrl = stream.url,
@@ -860,6 +869,9 @@ class PlayerViewModel(
 
     private fun showError(message: String, canChoose: Boolean) {
         failHandoff(message)
+        fallbackSelectionJob?.cancel()
+        fallbackSelectionJob = null
+        pendingSourceFailure = null
         recoveryJob?.cancel()
         queueFailureJob?.cancel()
         upNextJob?.cancel()
@@ -871,6 +883,7 @@ class PlayerViewModel(
                 canChooseStream = (canChoose && it.streams.isNotEmpty()) || it.blockedGroups.isNotEmpty(),
                 isBuffering = false,
                 switchingSource = false,
+                checkingSources = false,
                 upNext = UpNextUi.Hidden,
             )
         }
@@ -891,7 +904,8 @@ class PlayerViewModel(
      * the next healthy candidate AT THE SAME POSITION inside this same player session —
      * same machinery as the autoplay-next swap: no navigation, no lost progress row, no
      * re-resolution of the episode identity. The error screen is the last resort, once
-     * the candidates are exhausted (or [MAX_AUTO_RETRIES] auto-swaps have been spent).
+     * the untried candidates are exhausted. Failed starts do not consume the bounded
+     * mid-play recovery budget, so a working source below dead releases is reachable.
      */
     private fun handlePlayerError(error: PlaybackException) {
         if (!BuildConfig.EXACT_RECOVERY || !(swapping || queueAdvancing || queueDetached || queueClosed || hostStopped)) {
@@ -908,24 +922,47 @@ class PlayerViewModel(
         // arm a pendingSeek at the PREVIOUS episode's position, which applyPendingSeek then
         // fires on the new episode's STATE_READY. The swap is already re-preparing the
         // player, so there is nothing to recover here.
-        if (swapping || queueAdvancing || queueDetached || queueClosed || hostStopped) return
+        if (swapping || queueAdvancing || queueDetached || queueClosed || hostStopped || fallbackSelectionJob?.isActive == true) return
         val failure = streamFailure(error)
         Log.w(TAG, "Playback failed: ${error.errorCodeName}; HTTP=${failure.status ?: "none"}; reason=${failure.reason.wire}")
         val pos = player.currentPosition
         if (pos > 0) lastKnownPositionMs = pos
         val failedUrl = currentStream?.url
         if (failedUrl != null) blacklistedUrls.add(failedUrl)
-        val next = preparedFallback?.takeIf { it.url != failedUrl && it.url !in blacklistedUrls && !isBlocked(it) }
-            ?: candidates.firstOrNull { it.url != failedUrl && it.url !in blacklistedUrls && !isBlocked(it) }
-        if (next != null && recoveryBudget.tryAutomaticSwitch()) {
-            Log.w(
-                TAG,
-                "stream failed (${error.errorCodeName}) — failover ${recoveryBudget.automaticAttempts}/$MAX_AUTO_RETRIES " +
-                    "to ${next.sourceName} at ${lastKnownPositionMs}ms",
-            )
-            failoverTo(next)
-            return
+        selectFallback(error)
+    }
+
+    private fun selectFallback(error: PlaybackException) {
+        if (swapping || queueAdvancing || queueDetached || queueClosed || hostStopped) return
+        pendingSourceFailure = error
+        val failedUrl = currentStream?.url
+        val preferred = preparedFallback
+        val identity = curSeason to curEpisode
+        // Use the full quality-ordered list: earlier cooldowns may have expired,
+        // and cached prefetch ordering must not hide newly prepared alternatives.
+        val remaining = _state.value.streams.filter { it.url != failedUrl && it.url !in blacklistedUrls && !isBlocked(it) }
+        recoveryJob?.cancel()
+        // Stop the failed/synthetic-watchdog load while consulting cached state.
+        // These requests never open another stream or spend a source-switch retry.
+        player.stop()
+        _state.update { it.copy(switchingSource = true, checkingSources = true) }
+        fallbackSelectionJob = viewModelScope.launch {
+            val readiness = container.streamRecoveryApi.startupReadiness(remaining, forceRefresh = true, waitForReadyMs = 2_000)
+            if (currentStream?.url != failedUrl || identity != curSeason to curEpisode ||
+                swapping || queueAdvancing || queueDetached || queueClosed || hostStopped) return@launch
+            fallbackSelectionJob = null
+            val next = startupCandidates(remaining, readiness,
+                verdictRank = { _state.value.episodeVerdicts[it.url]?.sortRank ?: 1 }, preferred = preferred,
+                preferPreparedPosition = recoveryBudget.sourceEstablished).firstOrNull()
+            if (next != null && recoveryBudget.tryCandidateSwitch()) {
+                Log.w(TAG, "stream failed (${error.errorCodeName}) — selecting another untried source " +
+                    "at ${lastKnownPositionMs}ms; mid-play recovery ${recoveryBudget.automaticAttempts}/$MAX_AUTO_RETRIES")
+                failoverTo(next)
+            } else finishPlayerError(error)
         }
+    }
+
+    private fun finishPlayerError(error: PlaybackException) {
         val reason = streamFailure(error)
         val message = when (reason.reason) {
             StreamFailureReason.MISSING_ARTICLES -> "This source is missing part of the video."
@@ -1306,6 +1343,7 @@ class PlayerViewModel(
     fun onHostResume() {
         hostStopped = false
         resetStallDeadline()
+        if (fallbackSelectionJob?.isActive != true) pendingSourceFailure?.let(::selectFallback)
     }
 
     /** Pause + persist when the host activity stops (HDMI off, home button, ...). */
@@ -1315,6 +1353,8 @@ class PlayerViewModel(
         resetStallDeadline()
         if (!handoffFinished) abortHandoff("The TV left Velvet before playback started.")
         recoveryJob?.cancel()
+        fallbackSelectionJob?.cancel()
+        fallbackSelectionJob = null
         if (isQueue) {
             upNextJob?.cancel()
             upNextArming = false
@@ -1372,9 +1412,11 @@ class PlayerViewModel(
             while (isActive) {
                 delay(500)
                 if (_state.value.phase != PlayerPhase.PLAYING) continue
-                val pos = player.currentPosition.coerceAtLeast(0L)
-                val dur = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
-                val buf = player.bufferedPosition.coerceAtLeast(0L)
+                val timeline = PlaybackTimeline.read(player,
+                    transitioning = swapping || queueAdvancing || queueDetached || queueClosed) ?: continue
+                val pos = timeline.positionMs
+                val dur = timeline.durationMs
+                val buf = timeline.bufferedMs
                 if (recoveryBudget.observe(android.os.SystemClock.elapsedRealtime(), pos,
                         player.isPlaying && !hostStopped && !swapping && !queueAdvancing)) {
                     Log.i(TAG, "Sustained playback renewed the automatic recovery budget")
@@ -1956,14 +1998,21 @@ class PlayerViewModel(
             _state.value.phase == PlayerPhase.PLAYING && !endedHandled
         ) return
         recoveryJob?.cancel()
+        fallbackSelectionJob?.cancel()
+        fallbackSelectionJob = null
+        pendingSourceFailure = null
         preparedFallback = null
         swapping = true
         try {
             upNextJob?.cancel()
             if (markCurrentWatched) markWatched(curSeason, curEpisode)
             else persistProgress(player.currentPosition, player.duration.coerceAtLeast(0), curSeason, curEpisode, currentEpisodeMeta)
-            player.stop() // Old media must not continue while a backward/forward target resolves.
+            telemetry.observe()
+            telemetry.end()
+            PlaybackTimeline.clearForNextEpisode(player)
             resetReplayForSwap()
+            lastKnownPositionMs = 0L
+            lastKnownDurationMs = 0L
 
             curSeason = ep.season
             curEpisode = ep.number
@@ -1979,14 +2028,18 @@ class PlayerViewModel(
             nextResolved = false
             pendingNextEpisode = null
             pendingSeek = null
-            lastKnownPositionMs = 0L
-            lastKnownDurationMs = 0L
             // A new episode also starts a fresh failure burst. Known bad source
             // URLs stay blacklisted; successful playback never revives them.
             recoveryBudget.resetBurst()
 
             _state.update {
                 it.copy(
+                    phase = PlayerPhase.LOADING,
+                    checkingSources = true,
+                    switchingSource = false,
+                    currentStreamUrl = null,
+                    streams = emptyList(),
+                    episodeVerdicts = emptyMap(),
                     upNext = UpNextUi.Hidden,
                     episodeLabel = formatEpisodeLabel(ep.season, ep.number, ep.title),
                     hasNext = false,
@@ -2011,8 +2064,12 @@ class PlayerViewModel(
             prefetchedStreams = null
             if (pre != null && pre.all.isNotEmpty()) {
                 allResolvedStreams = pre.raw
-                candidates = pre.candidates.filterNot { it.url in blacklistedUrls || isBlocked(it) }
-                _state.update { it.copy(streams = pre.all.filterNot(::isBlocked), episodeVerdicts = pre.verdicts) }
+                _state.update { it.copy(checkingSources = true) }
+                // Prefetch may be an entire episode old. Read current cached
+                // health again; an evicted warm or cooled-down failure is stale.
+                val refreshed = prepareStreams(pre.raw, ep.season, ep.number, refreshReadiness = true)
+                candidates = refreshed.candidates.filterNot { it.url in blacklistedUrls || isBlocked(it) }
+                _state.update { it.copy(streams = refreshed.all.filterNot(::isBlocked), episodeVerdicts = refreshed.verdicts) }
                 val pick = candidates.firstOrNull()
                 if (pick != null) play(pick)
                 else startStreamsAndPlay()

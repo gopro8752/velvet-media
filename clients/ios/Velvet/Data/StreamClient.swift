@@ -1,5 +1,11 @@
 import Foundation
 
+enum StreamStartupSelection {
+    static func canAdvance(established: Bool, attempts: Int, remaining: Int, maximum: Int = 4) -> Bool {
+        remaining > 0 && (!established || attempts < maximum)
+    }
+}
+
 /// Stremio-protocol-compatible stream resolution — 1:1 port of the Android
 /// StreamRepositoryImpl.kt (+ StremioDtos.kt, inlined below).
 ///
@@ -16,13 +22,15 @@ final class StreamClient: StreamRepository {
 
     private let settings: SettingsStore
     private let session: URLSession
+    private let startupSession: URLSession?
     /// Separate session for health probes: shorter timeouts, no caching (a cached
     /// 206 would make a dead NZB look alive) and ephemeral so 128 KB of video never
     /// lands in the shared URL cache.
     private let probeSession: URLSession
 
-    init(settings: SettingsStore) {
+    init(settings: SettingsStore, startupSession: URLSession? = nil) {
         self.settings = settings
+        self.startupSession = startupSession
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 12
         config.timeoutIntervalForResource = 12
@@ -82,6 +90,7 @@ final class StreamClient: StreamRepository {
         // helper lower-cases and regex-scans the title, and paying that inside
         // the comparator would repeat it for each of the O(n log n) comparisons.
         struct RankKey {
+            let readiness: Int
             let is3D: Bool
             let prefMatch: Bool
             let qualityRank: Int
@@ -92,6 +101,7 @@ final class StreamClient: StreamRepository {
         }
         let keys: [RankKey] = streams.map { stream in
             RankKey(
+                readiness: stream.startupReadiness?.rank ?? 1,
                 is3D: StreamTags.is3D(stream.title),
                 prefMatch: stream.quality?.caseInsensitiveCompare(preferredQuality) == .orderedSame,
                 qualityRank: Self.qualityRank(stream.quality),
@@ -105,6 +115,7 @@ final class StreamClient: StreamRepository {
             .sorted { li, ri in
                 let l = keys[li]
                 let r = keys[ri]
+                if l.readiness != r.readiness { return l.readiness < r.readiness }
                 // 3D (side-by-side / over-under) sinks below every 2D release:
                 // it's almost never wanted on a normal screen, so a 3D release
                 // only surfaces if nothing else exists.
@@ -123,12 +134,65 @@ final class StreamClient: StreamRepository {
     func autoPick(_ streams: [StreamOption], preferredQuality: String, previousBingeGroup: String?) -> StreamOption? {
         if streams.isEmpty { return nil }
         let sorted = sortStreams(streams, preferredQuality: preferredQuality)
+            .filter { $0.startupReadiness?.status != "unavailable" }
+        guard let best = sorted.first else { return nil }
         if let previousBingeGroup,
            !previousBingeGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let match = sorted.first(where: { $0.bingeGroup == previousBingeGroup }) {
+           let match = sorted.first(where: { $0.bingeGroup == previousBingeGroup
+               && $0.quality == best.quality
+               && ($0.startupReadiness?.rank ?? 1) == (best.startupReadiness?.rank ?? 1) }) {
             return match
         }
         return sorted.first
+    }
+
+    /// Read one cached snapshot for the whole list; the backend discovers media
+    /// concurrently without tying up the client or its playback connections.
+    func refreshStartupReadiness(_ streams: [StreamOption], waitForReady: Bool) async -> [StreamOption] {
+        let (backend, token) = await MainActor.run { (settings.syncUrl, settings.syncToken) }
+        let indices = streams.indices.filter { StreamLookahead.belongsToBackend(streams[$0].url, base: backend) }
+        guard !indices.isEmpty else { return streams }
+        var updated = streams
+        for index in indices { updated[index].startupReadiness = nil }
+        let deadline = Date().addingTimeInterval(waitForReady ? 3.5 : 2)
+        repeat {
+            for offset in stride(from: 0, to: indices.count, by: 256) {
+                let remaining = deadline.timeIntervalSinceNow
+                guard remaining > 0, !Task.isCancelled else { return updated }
+                let batch = Array(indices[offset..<min(offset + 256, indices.count)])
+                let snapshot = updated
+                let result = await StreamLookahead.startupReadiness(batch.map { snapshot[$0] }, backend: backend,
+                                                                  token: token, timeout: min(1, remaining), session: startupSession)
+                if let values = result.values {
+                    for index in batch {
+                        if let sid = StreamLookahead.streamId(updated[index].url), let readiness = values[sid] {
+                            updated[index].startupReadiness = readiness
+                        }
+                    }
+                } else if result.legacy {
+                    // Older backends: small cached-health requests only, with
+                    // the same overall deadline and four requests in flight.
+                    for part in stride(from: 0, to: batch.count, by: 4) {
+                        let remaining = deadline.timeIntervalSinceNow
+                        guard remaining > 0, !Task.isCancelled else { return updated }
+                        await withTaskGroup(of: (Int, SourceStartupReadiness?).self) { group in
+                            for index in batch[part..<min(part + 4, batch.count)] {
+                                group.addTask {
+                                    (index, await StreamLookahead.health(snapshot[index], timeout: min(1, remaining))?.startup)
+                                }
+                            }
+                            for await (index, readiness) in group {
+                                if let readiness { updated[index].startupReadiness = readiness }
+                            }
+                        }
+                    }
+                    return updated
+                } else { return updated }
+            }
+            if updated.contains(where: { $0.startupReadiness?.status == "ready" }) { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        } while !Task.isCancelled && deadline.timeIntervalSinceNow > 0
+        return updated
     }
 
     // MARK: - health probes (spec §3a)
@@ -281,7 +345,8 @@ final class StreamClient: StreamRepository {
             sizeBytes: sizeBytes,
             sourceName: sourceName,
             bingeGroup: nonBlank(dto.behaviorHints?.bingeGroup),
-            headers: dto.behaviorHints?.proxyHeaders?.request ?? [:]
+            headers: dto.behaviorHints?.proxyHeaders?.request ?? [:],
+            startupReadiness: dto.behaviorHints?.velvetSourceReadiness
         )
     }
 
@@ -382,6 +447,7 @@ struct StremioBehaviorHintsDto: Decodable {
     let filename: String?
     let videoSize: Double?
     let proxyHeaders: StremioProxyHeadersDto?
+    let velvetSourceReadiness: SourceStartupReadiness?
 }
 
 struct StremioProxyHeadersDto: Decodable {

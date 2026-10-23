@@ -426,7 +426,7 @@ async fn streams(
     // release title still rides through so the app's own tag parse + 3D badge apply.
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    let mut top_sids: Vec<String> = Vec::new();
+    let mut warm_candidates = Vec::new();
     let mut all_sids: Vec<String> = Vec::new();
     for r in results {
         if !seen.insert(r.title.clone()) {
@@ -440,9 +440,8 @@ async fn streams(
         }
         let stream_id = st.stream.register(&r.nzb_url).await;
         all_sids.push(stream_id.clone());
-        if top_sids.len() < 3 {
-            top_sids.push(stream_id.clone());
-        }
+        warm_candidates.push(crate::warm::WarmCandidate { sid: stream_id.clone(), title: r.title.clone(), size: r.size });
+        let readiness = st.stream.source_readiness(&stream_id);
         let url = format!("{}/stream/{}", st.public_base.trim_end_matches('/'), stream_id);
         let quality = crate::release::quality(&r.title).unwrap_or("");
         out.push(json!({
@@ -453,18 +452,23 @@ async fn streams(
                 "filename": r.title,
                 "videoSize": r.size,
                 "bingeGroup": format!("velvet-{}", release_group(&r.title)),
+                "velvetSourceReadiness": readiness,
             },
         }));
     }
 
-    // Instant play: pre-warm the best loadable candidate in the background — by
-    // the time the user presses Play, the NZB is parsed, extents are built, and
-    // the head segments are already in the cache. Tries the top 3 in order, so a
-    // broken #1 doesn't leave Play cold (the app's autopick skips it too).
+    // Keep quality order within each readiness tier. Cached failures remain
+    // available for an explicit retry, but never outrank a validated startup.
+    out.sort_by_key(|value| readiness_rank(value["behaviorHints"]["velvetSourceReadiness"]["status"].as_str().unwrap_or("unverified")));
+    all_sids.sort_by_key(|sid| readiness_rank(st.stream.source_readiness(sid).status));
     st.stream.set_recovery_candidates(&all_sids);
-    crate::warm::spawn_warm_streams(st.stream.clone(), top_sids);
+    crate::warm::spawn_warm_streams(st.stream.clone(), warm_candidates);
 
     Json(json!({ "streams": out }))
+}
+
+fn readiness_rank(status: &str) -> u8 {
+    match status { "ready" => 0, "unavailable" => 2, _ => 1 }
 }
 
 /// The release group ("-TSRG") drives bingeGroup so autoplay-next stays on the

@@ -376,7 +376,7 @@ fun PlayerScreen(
                 .align(Alignment.TopStart)
                 .padding(start = 48.dp, top = 24.dp),
         ) {
-            SwitchingSourceNotice()
+            SwitchingSourceNotice(state.checkingSources)
         }
 
         // Skip Intro pill — shown only while the controls are down (the controls have
@@ -483,7 +483,7 @@ private fun LoadingOverlay(state: PlayerUiState) {
             VelvetSpinner(modifier = Modifier.size(46.dp))
             Spacer(Modifier.height(18.dp))
             Text(
-                text = "Finding the best stream…",
+                text = if (state.checkingSources) "Checking sources…" else "Finding the best stream…",
                 style = MaterialTheme.typography.titleMedium,
                 color = VelvetColors.TextSecondary,
             )
@@ -583,7 +583,7 @@ private fun SkipIntroPill() {
 
 /** Small dark pill: spinner + "Trying another source…". Overscan-safe, non-focusable. */
 @Composable
-private fun SwitchingSourceNotice() {
+private fun SwitchingSourceNotice(checkingSources: Boolean) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -594,7 +594,7 @@ private fun SwitchingSourceNotice() {
         VelvetSpinner(modifier = Modifier.size(18.dp), color = VelvetColors.TextSecondary)
         Spacer(Modifier.width(10.dp))
         Text(
-            text = "Trying another source…",
+            text = if (checkingSources) "Checking sources…" else "Trying another source…",
             style = MaterialTheme.typography.labelLarge,
             color = VelvetColors.TextSecondary,
         )

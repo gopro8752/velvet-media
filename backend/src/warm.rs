@@ -15,12 +15,14 @@
 //! segments into the byte-capped SegCache. A candidate that fails to load falls
 //! through to the next — so the cache ends up holding a PROVEN-playable head.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use crate::config::Indexer;
 use crate::db::Db;
 use crate::resolver::{search_movie, search_series, NzbResult};
-use crate::stream::{warm_head, StreamState};
+use crate::stream::{warm_head, warm_startup, StreamState};
 
 /// A request to warm one title (movie: season/episode 0).
 #[derive(Debug)]
@@ -42,18 +44,142 @@ pub enum WarmKind {
 
 pub type WarmTx = tokio::sync::mpsc::UnboundedSender<WarmReq>;
 
-/// Fire-and-forget warm of already-registered stream ids, best-first: the first
-/// one that loads gets warmed; the rest are skipped. Failures are loud (warn) —
-/// a silent warm failure looks identical to "warm engine not running".
-pub fn spawn_warm_streams(st: StreamState, sids: Vec<String>) {
-    tokio::spawn(async move {
-        for sid in sids {
-            match warm_head(st.clone(), sid.clone(), None).await {
-                Ok(()) => return,
-                Err(e) => tracing::warn!("warm {sid} failed: {e} — trying next candidate"),
+#[derive(Clone)]
+pub(crate) struct WarmCandidate {
+    pub sid: String,
+    pub title: String,
+    pub size: u64,
+}
+
+const STARTUP_PROBE_TIMEOUT: Duration = Duration::from_secs(11);
+const READY_BACKUPS: usize = 3;
+
+struct WarmCoordinator {
+    slots: Arc<tokio::sync::Semaphore>,
+    batches: Arc<tokio::sync::Semaphore>,
+    active: Mutex<HashSet<(usize, String)>>,
+    concurrency: usize,
+}
+impl WarmCoordinator {
+    fn new(concurrency: usize) -> Arc<Self> {
+        let concurrency = concurrency.clamp(1, 8);
+        Arc::new(Self {
+            slots: Arc::new(tokio::sync::Semaphore::new(concurrency)),
+            batches: Arc::new(tokio::sync::Semaphore::new(4)),
+            active: Mutex::new(HashSet::new()),
+            concurrency,
+        })
+    }
+}
+fn coordinator(capacity: usize) -> Arc<WarmCoordinator> {
+    static COORDINATOR: OnceLock<Arc<WarmCoordinator>> = OnceLock::new();
+    COORDINATOR.get_or_init(|| WarmCoordinator::new(capacity / 8)).clone()
+}
+struct ActiveWarm {
+    coordinator: Arc<WarmCoordinator>,
+    key: (usize, String),
+}
+impl Drop for ActiveWarm {
+    fn drop(&mut self) { self.coordinator.active.lock().unwrap().remove(&self.key); }
+}
+
+/// Discovery preserves a quality-first lane, but also tries compact, broadly
+/// decodable releases. A long run of unavailable UHD remuxes must not hide an
+/// ordinary 1080p encode dozens of positions below them. This changes probe
+/// order only; the resolver still ranks playable sources by quality.
+fn discovery_order(candidates: Vec<WarmCandidate>) -> Vec<WarmCandidate> {
+    let mut seen = HashSet::new();
+    let candidates: Vec<_> = candidates.into_iter().filter(|c| seen.insert(c.sid.clone())).collect();
+    let mut compatible: Vec<_> = candidates.iter().filter(|c| {
+        !crate::release::is_3d(&c.title) && !crate::release::is_remux(&c.title)
+            && crate::release::hdr_rank(&c.title) == 0
+            && (2..=3).contains(&crate::release::quality_rank(&c.title))
+            && crate::release::parse(&c.title).iter().any(|tag| tag.label == "H.264")
+    }).cloned().collect();
+    compatible.sort_by(|a, b| {
+        crate::release::quality_rank(&b.title).cmp(&crate::release::quality_rank(&a.title))
+            .then(a.size.max(1).cmp(&b.size.max(1)))
+    });
+    let mut quality = candidates.into_iter();
+    let mut fallback = compatible.into_iter();
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    loop {
+        let next = [quality.next(), fallback.next()];
+        if next.iter().all(Option::is_none) { break; }
+        for candidate in next.into_iter().flatten() {
+            if seen.insert(candidate.sid.clone()) { out.push(candidate); }
+        }
+    }
+    out
+}
+
+async fn run_discovery<F, Fut>(
+    coordinator: Arc<WarmCoordinator>,
+    scope: usize,
+    candidates: Vec<WarmCandidate>,
+    probe_timeout: Duration,
+    probe: F,
+) -> Option<String>
+where
+    F: Fn(WarmCandidate) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    use futures::StreamExt;
+    // Repeated details/resolver requests cannot queue unbounded background work.
+    let _batch = coordinator.batches.clone().try_acquire_owned().ok()?;
+    let ranks: std::collections::HashMap<_, _> = candidates.iter().enumerate().map(|(rank, c)| (c.sid.clone(), rank)).collect();
+    let mut pending: HashSet<_> = ranks.values().copied().collect();
+    let mut ready = Vec::new();
+    let work = futures::stream::iter(discovery_order(candidates)).map(|candidate| {
+        let coordinator = coordinator.clone();
+        let probe = &probe;
+        async move {
+            let key = (scope, candidate.sid.clone());
+            let sid = candidate.sid.clone();
+            if !coordinator.active.lock().unwrap().insert(key.clone()) { return (sid, false); }
+            let _active = ActiveWarm { coordinator: coordinator.clone(), key };
+            let Ok(_slot) = coordinator.slots.clone().acquire_owned().await else { return (sid, false); };
+            let usable = tokio::time::timeout(probe_timeout, probe(candidate)).await.unwrap_or(false);
+            (sid, usable)
+        }
+    }).buffer_unordered(coordinator.concurrency);
+    tokio::pin!(work);
+    while let Some((sid, usable)) = work.next().await {
+        let rank = ranks[&sid];
+        pending.remove(&rank);
+        if usable { ready.push((rank, sid)); }
+        if ready.len() >= READY_BACKUPS {
+            let best = ready.iter().map(|(rank, _)| *rank).min().unwrap();
+            // A quick compatible fallback is usable immediately, but never
+            // stop discovery while a higher-quality option is still unknown.
+            if pending.iter().all(|rank| *rank > best) { break; }
+        }
+    }
+    ready.into_iter().min_by_key(|(rank, _)| *rank).map(|(_, sid)| sid)
+}
+
+async fn discover_startup(st: StreamState, candidates: Vec<WarmCandidate>) -> Option<String> {
+    let scope = Arc::as_ptr(&st.cache) as usize;
+    run_discovery(coordinator(st.pool.total_capacity()), scope, candidates, STARTUP_PROBE_TIMEOUT, |candidate| {
+        let st = st.clone();
+        async move {
+            match st.source_readiness(&candidate.sid).status {
+                "ready" => true,
+                "unavailable" => false,
+                _ => warm_startup(st.clone(), candidate.sid.clone()).await.is_ok()
+                    && st.source_readiness(&candidate.sid).status == "ready",
             }
         }
-    });
+    }).await
+}
+
+/// Fire-and-forget bounded startup discovery across the whole candidate set.
+/// Duplicate sources share capacity-aware global slots, while NNTP background
+/// permits reserve provider room for playback. Every probe has a deadline; the
+/// finite candidate list continues until best-ready plus backups are found.
+pub(crate) fn spawn_warm_streams(st: StreamState, candidates: Vec<WarmCandidate>) {
+    tokio::spawn(async move { discover_startup(st, candidates).await; });
 }
 
 /// Rank results with the same hierarchy the resolver endpoint serves.
@@ -61,7 +187,8 @@ fn sort_results(results: &mut Vec<NzbResult>) {
     results.sort_by(|a, b| crate::release::cmp_streams(&a.title, a.size, &b.title, b.size));
 }
 
-/// Resolve a title and warm the best loadable candidate (tries the top 3).
+/// Resolve a title and prepare an actually readable startup, including a lower
+/// quality fallback when the highest quality releases are unavailable.
 async fn warm_title(
     http: &reqwest::Client,
     indexers: &[Indexer],
@@ -115,23 +242,17 @@ async fn warm_title(
     }
     sort_results(&mut results);
 
-    for r in results.iter().filter(|r| !st.is_condemned(&r.nzb_url)).take(3) {
-        let sid = st.register(&r.nzb_url).await;
-        match warm_head(st.clone(), sid.clone(), req.fraction).await {
-            Ok(()) => {
-                tracing::info!(
-                    "prewarmed {} tt{imdb} s{}e{}: {}",
-                    if req.kind == WarmKind::Series { "series" } else { "movie" },
-                    req.season,
-                    req.episode,
-                    r.title
-                );
-                return true;
-            }
-            Err(e) => tracing::debug!("warm candidate failed ({}): {e}", r.title),
-        }
+    let mut candidates = Vec::new();
+    for r in results.iter().filter(|r| !st.is_condemned(&r.nzb_url)) {
+        candidates.push(WarmCandidate { sid: st.register(&r.nzb_url).await, title: r.title.clone(), size: r.size });
     }
-    false
+    let Some(sid) = discover_startup(st.clone(), candidates).await else { return false; };
+    // A resume region is optional extra preparation, never a gate on startup.
+    if req.fraction.is_some() {
+        let _ = tokio::time::timeout(Duration::from_secs(15), warm_head(st.clone(), sid.clone(), req.fraction)).await;
+    }
+    tracing::info!("prewarmed {} tt{imdb} s{}e{}: {sid}", if series { "series" } else { "movie" }, req.season, req.episode);
+    true
 }
 
 /// The warm worker: consumes trigger requests and runs the periodic sweep.
@@ -216,5 +337,107 @@ async fn sweep_progress(
     }
     if warmed > 0 {
         tracing::info!("[warm] sweep warmed {warmed} title(s)");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn candidate(index: usize, title: &str, size: u64) -> WarmCandidate {
+        WarmCandidate { sid: index.to_string(), title: title.into(), size }
+    }
+    fn remuxes(count: usize) -> Vec<WarmCandidate> {
+        (0..count).map(|i| candidate(i, "Show.S01E03.2160p.UHD.REMUX.HEVC", 10_000 - i as u64)).collect()
+    }
+
+    #[test]
+    fn discovery_reaches_compatible_rank_29_early_without_truncating_candidates() {
+        let mut candidates = remuxes(28);
+        candidates.push(candidate(28, "Show.S01E03.1080p.BRRip.x264", 1_018_303_956));
+        candidates.push(candidate(29, "Show.S01E03.1080p.WEB.H264", 699_979_199));
+        candidates.extend((30..80).map(|i| candidate(i, "Show.S01E03.720p.HEVC", i as u64)));
+        candidates.push(candidates[0].clone());
+        let ordered = discovery_order(candidates);
+        assert_eq!(ordered.len(), 80, "do not discard the rest of the source list");
+        assert_eq!(ordered.iter().take(4).map(|c| c.sid.as_str()).collect::<Vec<_>>(), ["0", "29", "1", "28"]);
+    }
+
+    #[tokio::test]
+    async fn discovery_keeps_searching_after_three_dead_sources_and_retains_backups() {
+        let coordinator = WarmCoordinator::new(2);
+        let calls = AtomicUsize::new(0);
+        let result = run_discovery(coordinator.clone(), 1, remuxes(12), Duration::from_secs(1), |candidate| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async move { candidate.sid.parse::<usize>().unwrap() >= 7 }
+        }).await;
+        assert_eq!(result.as_deref(), Some("7"));
+        assert!(calls.load(Ordering::SeqCst) >= 10, "best source plus two ready backups");
+        assert!(coordinator.active.lock().unwrap().is_empty());
+        assert_eq!(coordinator.slots.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn discovery_can_reach_the_last_source_beyond_old_caps() {
+        let calls = AtomicUsize::new(0);
+        let result = run_discovery(WarmCoordinator::new(4), 1, remuxes(80), Duration::from_secs(1), |candidate| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async move { candidate.sid == "79" }
+        }).await;
+        assert_eq!(result.as_deref(), Some("79"));
+        assert_eq!(calls.load(Ordering::SeqCst), 80);
+    }
+
+    #[tokio::test]
+    async fn discovery_keeps_best_quality_even_when_compatible_backups_finish_first() {
+        let candidates = vec![
+            candidate(0, "Show.2160p.REMUX.HEVC", 10_000),
+            candidate(1, "Show.1080p.WEB.H264", 100),
+            candidate(2, "Show.1080p.WEB.H264", 200),
+        ];
+        let result = run_discovery(WarmCoordinator::new(3), 1, candidates, Duration::from_secs(1), |candidate| async move {
+            if candidate.sid == "0" { tokio::time::sleep(Duration::from_millis(20)).await; }
+            true
+        }).await;
+        assert_eq!(result.as_deref(), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_batches_share_source_claims_and_global_capacity() {
+        let coordinator = WarmCoordinator::new(2);
+        let calls = AtomicUsize::new(0);
+        let active = AtomicUsize::new(0);
+        let maximum = AtomicUsize::new(0);
+        let probe = |_| async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(count, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+            true
+        };
+        let (a, b) = tokio::join!(
+            run_discovery(coordinator.clone(), 1, remuxes(4), Duration::from_secs(1), &probe),
+            run_discovery(coordinator.clone(), 1, remuxes(4), Duration::from_secs(1), &probe),
+        );
+        assert!(a.is_some() || b.is_some());
+        assert_eq!(calls.load(Ordering::SeqCst), 4, "concurrent viewers must not fetch each source twice");
+        assert!(maximum.load(Ordering::SeqCst) <= 2);
+        assert!(coordinator.active.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_batch_releases_claims_and_slots() {
+        let coordinator = WarmCoordinator::new(2);
+        let result = tokio::time::timeout(Duration::from_millis(10), run_discovery(
+            coordinator.clone(), 1, remuxes(8), Duration::from_secs(1), |_| async {
+                std::future::pending::<bool>().await
+            },
+        )).await;
+        assert!(result.is_err());
+        assert!(coordinator.active.lock().unwrap().is_empty());
+        assert_eq!(coordinator.slots.available_permits(), 2);
+        assert_eq!(coordinator.batches.available_permits(), 4);
     }
 }

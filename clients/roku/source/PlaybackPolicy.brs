@@ -1,4 +1,73 @@
 ' Compatibility filtering is Roku-only; the server's quality ranking stays intact.
+function VStartupStatus(stream as dynamic) as string
+    status = VStr(VGet(VGet(VGet(stream, "behaviorHints", {}), "velvetSourceReadiness", {}), "status"))
+    if status = "ready" or status = "unavailable" then return status
+    return "unverified"
+end function
+
+function VStartupOrderedStreams(streams as dynamic) as object
+    ordered = []
+    for each status in ["ready", "unverified", "unavailable"]
+        for each stream in VArray(streams)
+            if VStartupStatus(stream) = status then ordered.Push(stream)
+        end for
+    end for
+    return ordered
+end function
+
+function VStartupQualityStreams(streams as dynamic, preferred as string) as object
+    buckets = {"2160p": [], "1080p": [], "720p": [], "480p": [], "unknown": []}
+    for each stream in VArray(streams)
+        description = LCase(VStr(VGet(VGet(stream, "behaviorHints", {}), "filename")) + " " + VStr(VGet(stream, "title")) + " " + VStr(VGet(stream, "name")))
+        quality = "unknown"
+        if Instr(1, description, "2160") > 0 or Instr(1, description, "4k") > 0
+            quality = "2160p"
+        else if Instr(1, description, "1080") > 0
+            quality = "1080p"
+        else if Instr(1, description, "720") > 0
+            quality = "720p"
+        else if Instr(1, description, "480") > 0
+            quality = "480p"
+        end if
+        buckets[quality].Push(stream)
+    end for
+    ordered = []
+    qualities = ["2160p", "1080p", "720p", "480p", "unknown"]
+    if buckets.DoesExist(preferred)
+        for each stream in buckets[preferred]
+            ordered.Push(stream)
+        end for
+    end if
+    for each quality in qualities
+        if quality <> preferred
+            for each stream in buckets[quality]
+                ordered.Push(stream)
+            end for
+        end if
+    end for
+    return VStartupOrderedStreams(ordered)
+end function
+
+function VAutomaticSourceIndex(streams as object, attempted as object) as integer
+    for each status in ["ready", "unverified"]
+        for index = 0 to streams.Count() - 1
+            stream = streams[index]
+            if VStartupStatus(stream) = status and not attempted.DoesExist(VStr(VGet(stream, "url"))) then return index
+        end for
+    end for
+    return -1
+end function
+
+sub VApplyStartupReadiness(streams as object, readiness as object)
+    for each stream in streams
+        status = readiness.Lookup(VStreamId(VStr(VGet(stream, "url"))))
+        if status <> invalid
+            if VGet(stream, "behaviorHints") = invalid then stream.behaviorHints = {}
+            stream.behaviorHints.velvetSourceReadiness = status
+        end if
+    end for
+end sub
+
 function VUhdEligible(videoMode as string, modelType as string, decodesUhd as boolean, hdcp22 as boolean) as boolean
     ' The decoder alone can report UHD support while its active output is 1080p.
     ' Roku TVs have no external HDMI output to validate; STBs require HDCP 2.2.

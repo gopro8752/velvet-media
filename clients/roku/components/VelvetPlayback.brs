@@ -11,6 +11,9 @@ sub initPlayback()
     m.playItem = {}
     m.streams = []
     m.sourceIndex = 0
+    m.startupSelection = invalid
+    m.startupSelectionSequence = 0
+    m.attemptedSources = {}
     m.queue = []
     m.queueIndex = 0
     m.inQueue = false
@@ -50,6 +53,8 @@ sub initPlayback()
 end sub
 
 sub startPlayback(item as object, queuePlayback as boolean)
+    m.startupSelection = invalid
+    m.attemptedSources = {}
     prepareTelemetry()
     onHandoffClose()
     if m.playing then savePlaybackProgress()
@@ -144,7 +149,7 @@ sub handlePlaybackResponse(kind as string, data as object, context as dynamic)
         m.streams = VFilterBlockedStreams(m.allStreams, currentBlockedGroups())
         m.sourceIndex = 0
         m.formatRetry = false
-        playCurrentStream()
+        beginStartupSelection(true)
     else if kind = "liveTune"
         live = VLivePlaybackDescriptor(m.baseUrl, data, VStr(VGet(m.playChannel, "id")))
         if live = invalid
@@ -214,6 +219,8 @@ sub resolvePlayback()
 end sub
 
 sub playCurrentStream()
+    m.startupSelection = invalid
+    m.playbackTimer.duration = 1
     if m.sourceIndex >= m.streams.Count()
         playbackFailure("These streams could not play on your Roku. Try again or choose another title.")
         return
@@ -374,6 +381,10 @@ sub onVideoState()
 end sub
 
 sub onPlaybackTick()
+    if m.startupSelection <> invalid
+        pollStartupSelection()
+        return
+    end if
     keepRokuAudioAlive()
     if not m.playing then return
     recoveryHeartbeat()
@@ -413,6 +424,7 @@ sub onPlaybackTick()
 end sub
 
 sub failoverStream()
+    if m.startupSelection <> invalid then return
     converted = m.rokuAudioSession <> "" or m.rokuAudioFailed
     stopRokuAudio()
     if m.isLive
@@ -432,7 +444,133 @@ sub failoverStream()
         return
     end if
     m.formatRetry = false
-    m.sourceIndex += 1
+    if m.sourceIndex < m.streams.Count() then m.attemptedSources[VStr(VGet(m.streams[m.sourceIndex], "url"))] = true
+    beginStartupSelection(false)
+end sub
+
+' The server checks media in parallel. Roku only reads small cached snapshots,
+' bounded to 3.5s at initial selection and 2s after a failed candidate.
+sub beginStartupSelection(initial as boolean)
+    m.startupSelectionSequence += 1
+    budget = 2000
+    if initial then budget = 3500
+    ids = []
+    seen = {}
+    for each stream in m.streams
+        ' Old ready/unavailable hints cannot survive a new snapshot failure.
+        hints = VGet(stream, "behaviorHints", {})
+        hints.Delete("velvetSourceReadiness")
+        sid = VStreamId(VStr(VGet(stream, "url")))
+        if sid <> "" and not seen.DoesExist(sid) and not m.attemptedSources.DoesExist(VStr(VGet(stream, "url")))
+            seen[sid] = true
+            ids.Push(sid)
+        end if
+    end for
+    m.startupSelection = {id: m.startupSelectionSequence, deadline: VNowMs() + budget, ids: ids, offset: 0, pending: 0, nextAt: 0, legacy: false}
+    m.playing = false
+    m.playResolving = true
+    m.video.control = "stop"
+    m.playbackTimer.duration = 0.2
+    m.playbackTimer.control = "start"
+    pollStartupSelection()
+end sub
+
+sub pollStartupSelection()
+    selection = m.startupSelection
+    if selection = invalid then return
+    if VNowMs() >= selection.deadline or selection.ids.Count() = 0
+        finishStartupSelection()
+        return
+    end if
+    if selection.pending > 0 or VNowMs() < selection.nextAt then return
+    if selection.legacy
+        requestLegacyStartupHealth()
+        return
+    end if
+    ids = []
+    while selection.offset < selection.ids.Count() and ids.Count() < 256
+        ids.Push(selection.ids[selection.offset])
+        selection.offset += 1
+    end while
+    selection.pending = 1
+    timeout = Int(selection.deadline - VNowMs())
+    if timeout > 1000 then timeout = 1000
+    if timeout < 1 then timeout = 1
+    requestApi("startupReadiness", "/streams/readiness", "POST", {streamIds: ids}, {playId: m.playGeneration, selectionId: selection.id}, timeout)
+end sub
+
+sub requestLegacyStartupHealth()
+    selection = m.startupSelection
+    if selection = invalid then return
+    while selection.pending < 3 and selection.offset < selection.ids.Count() and VNowMs() < selection.deadline
+        sid = selection.ids[selection.offset]
+        selection.offset += 1
+        selection.pending += 1
+        timeout = Int(selection.deadline - VNowMs())
+        if timeout > 1000 then timeout = 1000
+        if timeout < 1 then timeout = 1
+        requestApi("startupHealth", "/stream/" + VEncode(sid) + "/health", "GET", invalid, {playId: m.playGeneration, selectionId: selection.id, sid: sid}, timeout)
+    end while
+    if selection.pending = 0 then finishStartupSelection()
+end sub
+
+sub handleStartupReadiness(kind as string, result as object, context as dynamic)
+    selection = m.startupSelection
+    if selection = invalid then return
+    if VNum(VGet(context, "playId"), -1) <> m.playGeneration or VNum(VGet(context, "selectionId"), -1) <> selection.id then return
+    selection.pending -= 1
+    if VNowMs() >= selection.deadline
+        finishStartupSelection()
+        return
+    end if
+    data = VGet(result, "data", {})
+    if kind = "startupHealth"
+        startup = VGet(data, "startup")
+        if startup <> invalid
+            readiness = {}
+            readiness[VStr(VGet(context, "sid"))] = startup
+            VApplyStartupReadiness(m.streams, readiness)
+        end if
+        requestLegacyStartupHealth()
+        return
+    end if
+    status = VNum(VGet(result, "status"))
+    if status = 404 or status = 405
+        selection.legacy = true
+        selection.offset = 0
+        requestLegacyStartupHealth()
+        return
+    end if
+    if not VBool(VGet(result, "ok"))
+        finishStartupSelection()
+        return
+    end if
+    VApplyStartupReadiness(m.streams, VGet(data, "streams", {}))
+    if selection.offset < selection.ids.Count()
+        pollStartupSelection()
+        return
+    end if
+    index = VAutomaticSourceIndex(m.streams, m.attemptedSources)
+    if index >= 0
+        if VStartupStatus(m.streams[index]) = "ready"
+            finishStartupSelection()
+            return
+        end if
+    end if
+    selection.offset = 0
+    selection.nextAt = VNowMs() + 200
+end sub
+
+sub finishStartupSelection()
+    m.startupSelection = invalid
+    m.playbackTimer.duration = 1
+    m.streams = preferencesStreams(m.streams)
+    m.sourceIndex = VAutomaticSourceIndex(m.streams, m.attemptedSources)
+    if m.sourceIndex < 0
+        m.sourceIndex = m.streams.Count()
+        playbackFailure("No working stream is available right now. Try again or choose another stream.")
+        return
+    end if
     playCurrentStream()
 end sub
 
@@ -458,6 +596,7 @@ sub savePlaybackProgress()
 end sub
 
 sub closePlayback()
+    m.startupSelection = invalid
     endTelemetry("ended")
     onHandoffClose()
     savePlaybackProgress()
@@ -486,6 +625,7 @@ sub closePlayback()
 end sub
 
 sub playbackFailure(message as string)
+    m.startupSelection = invalid
     endTelemetry("error")
     onHandoffFailure(message)
     savePlaybackProgress()

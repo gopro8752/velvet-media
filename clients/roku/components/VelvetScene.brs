@@ -103,6 +103,10 @@ sub onApiResult(event as object)
     if context = invalid then return
     if context.epoch <> m.backendEpoch then return
     kind = context.kind
+    if kind = "startupReadiness" or kind = "startupHealth"
+        handleStartupReadiness(kind, result, context.context)
+        return
+    end if
     ' A late legacy collection or queue response must not follow a profile switch.
     if kind = "halloween" or (kind = "queue" and VStr(VGet(context.context, "categoryId")) = "halloween-nostalgia")
         if not VLegacyHalloweenResponseCurrent(context.context, m.profileId) then return

@@ -213,6 +213,7 @@ final class PlayerViewModel: ObservableObject {
     /// Automatic failovers used this session (capped at maxAutoRetries).
     private var autoRetryCount = 0
     private var sourceEstablished = false
+    private var preparedFallbackURL: URL?
     private var sameSourceRetryCount = 0
     private var sameSourceRetryUntilMs: Int64 = 0
     private var sameSourceRetryTask: Task<Void, Never>?
@@ -484,8 +485,8 @@ final class PlayerViewModel: ObservableObject {
         }
         let ranked = streams.enumerated()
             .sorted { lhs, rhs in
-                let l = verdicts[lhs.element.url]?.sortRank ?? 1
-                let r = verdicts[rhs.element.url]?.sortRank ?? 1
+                let l = verdicts[lhs.element.url]?.sortRank == 2 ? 1 : 0
+                let r = verdicts[rhs.element.url]?.sortRank == 2 ? 1 : 0
                 if l != r { return l < r }
                 return lhs.offset < rhs.offset // stable, like StreamClient.sortStreams
             }
@@ -521,8 +522,8 @@ final class PlayerViewModel: ObservableObject {
                       canChoose: false)
             return
         }
-        // Start actual playback immediately; the watchdog bounds a dead source.
-        let sorted = streamRepo.sortStreams(found, preferredQuality: settings.preferredQuality)
+        let prepared = await streamRepo.refreshStartupReadiness(found, waitForReady: true)
+        let sorted = streamRepo.sortStreams(prepared, preferredQuality: settings.preferredQuality)
         let (ranked, verdicts) = await applyEpisodeVerdicts(sorted, season: season, episode: episode)
         guard !tornDown, !Task.isCancelled, curSeason == season, curEpisode == episode else { return }
         episodeVerdicts = verdicts
@@ -531,9 +532,10 @@ final class PlayerViewModel: ObservableObject {
         playBest(from: streams)
     }
 
-    /// Quality/title order with explicit release-group continuity, without probes.
+    /// Readiness/quality order with explicit release-group continuity.
     private func playBest(from candidates: [StreamOption], remainder: [StreamOption] = []) {
-        let usable = candidates.filter { !failedStreamUrls.contains($0.url) && !isBlocked($0) }
+        let usable = candidates.filter { !failedStreamUrls.contains($0.url) && !isBlocked($0)
+            && $0.startupReadiness?.status != "unavailable" }
         // Never auto-pick a release whose filename carries the WRONG episode's
         // title while any confirmed/unknown candidate exists. autoPick re-sorts
         // by quality (ordering alone can't demote a mismatch), so the MISMATCH
@@ -542,12 +544,11 @@ final class PlayerViewModel: ObservableObject {
         // error screen — and this keeps bingeGroup continuity off the off-by-one
         // release chain (autoPick only ever sees the safe pool).
         let safe = usable.filter { !isMismatch($0) }
-        let pool = safe.isEmpty ? usable : safe
+        let pool = streamRepo.sortStreams(safe.isEmpty ? usable : safe, preferredQuality: settings.preferredQuality)
         // Sticky release group (owner rule): a MANUAL pick in the stream picker
-        // pinned this show to that release group, and the pin outranks both the
-        // session bingeGroup and quality — the user already judged the
-        // alternatives and chose. `pool` is best-first, so the first match is
-        // the top-sorted stream in the pinned group. No match (episode missing
+        // pinned this show to that release group. Honor the pin within the best
+        // verified resolution so continuity never chooses a dead or lower-quality
+        // release over a working one. `pool` is best-first. No match (episode missing
         // from the group, or its releases all failed) → fall through
         // SILENTLY to the session-continuity autoPick and best-quality: quality
         // beats loyalty for an episode the group can't serve, and the failover
@@ -555,7 +556,9 @@ final class PlayerViewModel: ObservableObject {
         let stickyPick: StreamOption? = {
             guard isShow, let id = imdbId,
                   let group = settings.stickyReleaseGroup(imdbId: id) else { return nil }
-            return pool.first { $0.bingeGroup == group }
+            let bestRank = pool.first?.startupReadiness?.rank ?? 1
+            return pool.first { $0.bingeGroup == group && $0.quality == pool.first?.quality
+                && ($0.startupReadiness?.rank ?? 1) == bestRank }
         }()
         guard let pick = stickyPick
             ?? streamRepo.autoPick(pool, preferredQuality: settings.preferredQuality,
@@ -569,7 +572,8 @@ final class PlayerViewModel: ObservableObject {
         var queued = Set(queue.map(\.url))
         queued.insert(pick.url)
         for candidate in remainder where !queued.contains(candidate.url)
-            && !failedStreamUrls.contains(candidate.url) && !isBlocked(candidate) {
+            && !failedStreamUrls.contains(candidate.url) && !isBlocked(candidate)
+            && candidate.startupReadiness?.status != "unavailable" {
             queued.insert(candidate.url)
             queue.append(candidate)
         }
@@ -633,6 +637,7 @@ final class PlayerViewModel: ObservableObject {
     /// reaches a missing article. Generation + exact URL/episode checks prevent
     /// a delayed health response from changing a manually selected/new episode.
     private func startStreamLookahead(_ stream: StreamOption) {
+        preparedFallbackURL = nil
         sameSourceRetryTask?.cancel()
         sameSourceRetryTask = nil
         sameSourceRetryID = nil
@@ -685,6 +690,7 @@ final class PlayerViewModel: ObservableObject {
                               self.lookaheadGeneration == generation,
                               self.currentStream?.url == stream.url,
                               self.curSeason == season, self.curEpisode == episode else { return }
+                        self.preparedFallbackURL = nil
                         if let recovery = health?.recovery, recovery.status == "ready",
                            let streamId = recovery.streamId,
                            let prepared = recovery.preparedFraction, prepared.isFinite,
@@ -695,6 +701,7 @@ final class PlayerViewModel: ObservableObject {
                                    && $0.url != stream.url && !self.failedStreamUrls.contains($0.url)
                                    && !self.isBlocked($0) && !self.isMismatch($0)
                            }) {
+                            self.preparedFallbackURL = candidate.url
                             self.fallbackStreams.removeAll { $0.url == candidate.url }
                             self.fallbackStreams.insert(candidate, at: 0)
                             if health?.status == "incomplete", health?.exactRecovery?.holdsProactiveFallback != true, !self.queueAutoAdvanceSuspended,
@@ -801,7 +808,8 @@ final class PlayerViewModel: ObservableObject {
     /// player session on the next healthy candidate, resuming at the last known
     /// position (same identity, same profile, no navigation, no re-resolution).
     /// The error screen appears only once the fallback list is exhausted or the
-    /// per-session auto-retry cap is hit.
+    /// established-playback recovery burst is exhausted. Unstarted candidates
+    /// do not consume that budget; each distinct URL is tried at most once.
     private func handlePlayerError(allowInPlaceRetry: Bool = true) {
         guard !tornDown, !queueTransitionStarted, !hostStopped,
               !handoffHoldsPlayback, !handoffProgressSuspended else { return }
@@ -842,24 +850,64 @@ final class PlayerViewModel: ObservableObject {
             return
         }
         telemetry.error()
+        let preparedURL = sourceEstablished ? preparedFallbackURL : nil
         let pos = pendingSeek?.positionMs ?? seekGrace?.targetMs ?? engine.positionMs
         if pos > 0 { lastKnownPositionMs = pos }
         if let failed = currentStream {
             failedStreamUrls.insert(failed.url)
             fallbackStreams.removeAll { $0.url == failed.url }
         }
-        fallbackStreams.removeAll { failedStreamUrls.contains($0.url) || isBlocked($0) }
-        if !tornDown, autoRetryCount < Self.maxAutoRetries, !fallbackStreams.isEmpty {
-            let next = fallbackStreams.removeFirst()
-            autoRetryCount += 1
+        // Revisit the full manual list: a source that was temporarily unavailable
+        // at startup may now be ready. Actual failed URLs remain blacklisted.
+        var seen = Set<URL>()
+        fallbackStreams = (allResolvedStreams + fallbackStreams).filter {
+            !failedStreamUrls.contains($0.url) && !isBlocked($0) && seen.insert($0.url).inserted
+        }
+        if StreamStartupSelection.canAdvance(established: sourceEstablished, attempts: autoRetryCount,
+                                             remaining: fallbackStreams.count, maximum: Self.maxAutoRetries) {
+            if sourceEstablished { autoRetryCount += 1 }
             failoverNotice = true
-            if lastKnownPositionMs > 1_000 {
-                pendingSeek = PendingSeek(positionMs: lastKnownPositionMs, guardNearEnd: false)
+            let generation = mediaGeneration
+            let retryID = UUID()
+            sameSourceRetryID = retryID
+            let candidates = fallbackStreams
+            sameSourceRetryTask = Task { [weak self] in
+                guard let self else { return }
+                let refreshed = await self.streamRepo.refreshStartupReadiness(candidates, waitForReady: false)
+                guard self.sameSourceRetryID == retryID else { return }
+                self.sameSourceRetryTask = nil
+                self.sameSourceRetryID = nil
+                guard !Task.isCancelled, !self.tornDown, self.mediaGeneration == generation,
+                      !self.hostStopped, !self.queueTransitionStarted, !self.handoffHoldsPlayback,
+                      !self.handoffProgressSuspended else { return }
+                let sorted = self.streamRepo.sortStreams(refreshed, preferredQuality: self.settings.preferredQuality)
+                let safe = sorted.filter { !self.isMismatch($0) }
+                self.fallbackStreams = (safe + sorted.filter { self.isMismatch($0) }).filter {
+                    !self.failedStreamUrls.contains($0.url) && !self.isBlocked($0)
+                        && $0.startupReadiness?.status != "unavailable"
+                }
+                // A current-position lookahead preparation is stronger than a
+                // generic head/tail startup hint during an established stream.
+                if let preparedURL, let index = self.fallbackStreams.firstIndex(where: {
+                    $0.url == preparedURL && !self.isMismatch($0)
+                }) {
+                    let prepared = self.fallbackStreams.remove(at: index)
+                    self.fallbackStreams.insert(prepared, at: 0)
+                }
+                guard !self.fallbackStreams.isEmpty else { self.showExhaustedStreamsError(); return }
+                let next = self.fallbackStreams.removeFirst()
+                if self.lastKnownPositionMs > 1_000 {
+                    self.pendingSeek = PendingSeek(positionMs: self.lastKnownPositionMs, guardNearEnd: false)
+                }
+                self.endedHandled = false
+                self.play(stream: next, startPlaying: !self.queueAutoAdvanceSuspended)
             }
-            endedHandled = false
-            play(stream: next, startPlaying: !queueAutoAdvanceSuspended)
             return
         }
+        showExhaustedStreamsError()
+    }
+
+    private func showExhaustedStreamsError() {
         failoverNotice = false
         showError("This stream wouldn't play. Try again or choose a different stream.",
                   canChoose: true)
@@ -2051,11 +2099,13 @@ final class PlayerViewModel: ObservableObject {
             // Adopt the prefetch's episode-title verdicts alongside its streams so
             // isMismatch keeps demoting off-by-one releases for the new episode.
             episodeVerdicts = pre.verdicts
-            allResolvedStreams = pre.all
-            streams = pre.all.filter { !isBlocked($0) }
+            let refreshed = await streamRepo.refreshStartupReadiness(pre.all, waitForReady: true)
+            guard !tornDown, !Task.isCancelled, curSeason == ep.season, curEpisode == ep.number else { return }
+            allResolvedStreams = streamRepo.sortStreams(refreshed, preferredQuality: settings.preferredQuality)
+            streams = allResolvedStreams.filter { !isBlocked($0) }
             playBest(from: streams)
         } else {
-            // Resolve/rank the new episode without delaying playback on probes.
+            // Resolve/rank the new episode using cached backend startup checks.
             phase = .loading
             errorMessage = nil
             await startStreamsAndPlay()

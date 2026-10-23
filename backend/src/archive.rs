@@ -180,21 +180,49 @@ pub async fn build_extents(
     pool: &Arc<Pool>,
     volumes: &[NzbFile],
 ) -> Result<(Vec<Extent>, u64), RarError> {
+    build_extents_with_admission(pool, volumes, false).await
+}
+
+pub async fn build_extents_background(
+    pool: &Arc<Pool>,
+    volumes: &[NzbFile],
+) -> Result<(Vec<Extent>, u64), RarError> {
+    build_extents_with_admission(pool, volumes, true).await
+}
+
+async fn build_extents_with_admission(
+    pool: &Arc<Pool>, volumes: &[NzbFile], background: bool,
+) -> Result<(Vec<Extent>, u64), RarError> {
     if volumes.is_empty() {
         return Err(RarError::NoVolumes);
     }
     // Fetch every volume's header segment CONCURRENTLY — sequential fetches on a
     // 20-volume release blew past the player's read timeout.
-    let heads = futures::future::join_all(volumes.iter().map(|vol| {
+    let fetches: Vec<_> = volumes.iter().map(|vol| {
         let pool = Arc::clone(pool);
         let group = vol.groups.first().cloned().unwrap_or_default();
         let seg0 = vol.segments.first().cloned();
         async move {
             let seg0 = seg0?;
+            let _background = if background { Some(pool.background_permit().await) } else { None };
             fetch_seg0(&pool, &group, &seg0).await
         }
-    }))
-    .await;
+    }).collect();
+    let heads = if background {
+        use futures::StreamExt;
+        // A large archive must not queue hundreds of requests ahead of other
+        // candidate sources on the shared background semaphore.
+        let pending = futures::stream::iter(fetches).buffered(2);
+        tokio::pin!(pending);
+        let mut heads = Vec::new();
+        while let Some(head) = pending.next().await {
+            if head.is_none() { return Err(RarError::Volume(heads.len())); }
+            heads.push(head);
+        }
+        heads
+    } else {
+        futures::future::join_all(fetches).await
+    };
 
     let mut extents = Vec::with_capacity(volumes.len());
     let mut total = 0u64;
@@ -345,5 +373,45 @@ mod tests {
         assert_eq!(volume_order_key("x.rar"), 0);
         assert_eq!(volume_order_key("x.r00"), 1);
         assert_eq!(volume_order_key("x.r09"), 10);
+    }
+
+    #[tokio::test]
+    async fn background_archive_failure_does_not_flood_all_volume_headers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let seen = reads.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((socket,_)) = listener.accept().await else { return };
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    let mut socket = BufReader::new(socket);
+                    let _ = socket.get_mut().write_all(b"200 fixture\r\n").await;
+                    loop {
+                        let mut line = String::new();
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
+                        let response: &[u8] = if line.starts_with("AUTHINFO") { b"281 accepted\r\n" }
+                            else if line.starts_with("GROUP") { b"211 fixture\r\n" }
+                            else {
+                                seen.fetch_add(1, Ordering::SeqCst);
+                                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                                b"430 missing\r\n"
+                            };
+                        if socket.get_mut().write_all(response).await.is_err() { return; }
+                    }
+                });
+            }
+        });
+        let pool = Pool::new(&[crate::config::Provider { name:"fixture".into(),host:"127.0.0.1".into(),port,tls:false,username:"fixture".into(),password:"fixture".into(),max_connections:100 }]);
+        let volumes: Vec<_> = (0..50).map(|index| NzbFile {
+            subject:format!("file.part{index:03}.rar"), groups:vec!["fixture".into()], total_bytes:100,
+            segments:vec![Segment { number:1,bytes:100,message_id:format!("volume-{index}") }],
+        }).collect();
+        assert!(matches!(build_extents_background(&pool,&volumes).await,Err(RarError::Volume(0))));
+        assert!(reads.load(Ordering::SeqCst) <= 2, "one failed archive must not queue every volume ahead of other sources");
+        server.abort();
     }
 }

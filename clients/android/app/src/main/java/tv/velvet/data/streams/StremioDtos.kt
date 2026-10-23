@@ -1,6 +1,7 @@
 package tv.velvet.data.streams
 
 import kotlinx.serialization.Serializable
+import tv.velvet.data.model.SourceReadiness
 
 /**
  * Stremio stream-addon protocol wire shapes, verified against a live addon (curl, 2026-06-09):
@@ -30,6 +31,7 @@ internal data class StremioBehaviorHintsDto(
     val filename: String? = null,
     val videoSize: Double? = null,
     val proxyHeaders: StremioProxyHeadersDto? = null,
+    val velvetSourceReadiness: SourceReadiness? = null,
 )
 
 @Serializable

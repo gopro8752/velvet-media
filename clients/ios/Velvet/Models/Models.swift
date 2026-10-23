@@ -70,6 +70,14 @@ struct StreamOption: Hashable, Identifiable {
     let sourceName: String
     let bingeGroup: String?        // same group => same release chain for autoplay
     let headers: [String: String]
+    var startupReadiness: SourceStartupReadiness? = nil
+}
+
+/// A verified media head/tail is a startup hint, not a promise about the full file.
+struct SourceStartupReadiness: Decodable, Hashable {
+    let status: String
+    let retryAfterSeconds: Int?
+    var rank: Int { status == "ready" ? 0 : status == "unavailable" ? 2 : 1 }
 }
 
 enum RowStyle: String, Codable {

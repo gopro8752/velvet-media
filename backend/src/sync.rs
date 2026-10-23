@@ -204,6 +204,7 @@ pub fn router(db: Db, token: String, warm_tx: Option<crate::warm::WarmTx>, strea
         .route("/handoff/claim", post(post_handoff_claim))
         .fallback(not_found)
         .with_state(state.clone())
+        .merge(crate::stream::readiness_router(streams.clone()))
         .merge(crate::handoff::router(streams, stream_base_url))
         .layer(middleware::from_fn_with_state(state, auth_mw))
 }

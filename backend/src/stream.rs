@@ -273,6 +273,12 @@ impl StreamState {
             }
         };
         if cancel {
+            {
+                let mut recovery = entry.recovery.lock().unwrap();
+                if let Some(task) = recovery.task.take() { task.abort(); }
+                recovery.preparing = false;
+                recovery.last_attempt = None;
+            }
             self.repair.cancel(sid).await;
         }
         if let Some(revision) = spawn {
@@ -625,6 +631,9 @@ struct StreamEntry {
     nzb_url: String,
     loaded: Mutex<Option<Loaded>>,
     unsupported_at: Mutex<Option<std::time::Instant>>,
+    preparation_failure: Mutex<Option<(std::time::Instant, StreamError)>>,
+    startup: Mutex<Option<PreparedStartup>>,
+    warm_lock: tokio::sync::Mutex<()>,
     manifest: Mutex<Option<Arc<crate::nzb::Nzb>>>,
     /// Single-flight for the heavy load (NZB download + volume-header fetches):
     /// a serve arriving while a warm is mid-load WAITS for it instead of doing
@@ -644,16 +653,51 @@ impl StreamEntry {
         *at = None;
         false
     }
+
+    fn preparation_failure(&self) -> Option<(StreamError, u64)> {
+        let mut failure = self.preparation_failure.lock().unwrap();
+        if let Some((at, error)) = *failure {
+            if let Some(remaining) = std::time::Duration::from_secs(30).checked_sub(at.elapsed()) {
+                return Some((error, remaining.as_secs() + 1));
+            }
+        }
+        *failure = None;
+        None
+    }
+
+    fn failed_preparation(&self, error: StreamError) {
+        *self.preparation_failure.lock().unwrap() = Some((std::time::Instant::now(), error));
+        *self.startup.lock().unwrap() = None;
+    }
+}
+
+struct PreparedStartup {
+    segments: Vec<String>,
+    at: std::time::Instant,
+    fraction: Option<f64>,
+    full_warm: bool,
+    crc_verified: bool,
+}
+
+/// A cached startup window, not a promise that the whole release is complete.
+/// Temporary failures expire and never enter the permanent bad-release ledger.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceReadiness {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u64>,
 }
 
 #[derive(Default)]
 struct Recovery {
-    candidates: Vec<String>,
+    candidates: Arc<Vec<String>>,
     preparing: bool,
     attempted: bool,
     desired_fraction: f64,
     prepared: Option<PreparedRecovery>,
     last_attempt: Option<std::time::Instant>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 struct PreparedRecovery {
@@ -680,6 +724,7 @@ struct StreamHealth {
     status: &'static str,
     #[serde(rename = "errorCode", skip_serializing_if = "Option::is_none")]
     error_code: Option<&'static str>,
+    startup: SourceReadiness,
     recovery: RecoveryHealth,
     #[serde(rename = "exactRecovery")]
     exact_recovery: ExactRecoveryHealth,
@@ -779,8 +824,6 @@ pub struct StreamState {
     /// resolver never offers them again).
     pub db: crate::db::Db,
     streams: Arc<Mutex<HashMap<String, Arc<StreamEntry>>>>,
-    /// sid → when it was last warmed, so repeat resolves don't re-warm.
-    warmed: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     /// Bound candidate preparation across all viewers. Playback never acquires
     /// this semaphore and continues while alternate releases are prepared.
     recovery_slots: Arc<tokio::sync::Semaphore>,
@@ -829,7 +872,6 @@ impl StreamState {
             ),
             db,
             streams: Arc::new(Mutex::new(HashMap::new())),
-            warmed: Arc::new(Mutex::new(HashMap::new())),
             recovery_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         }
     }
@@ -942,6 +984,9 @@ impl StreamState {
             nzb_url,
             loaded: Mutex::new(None),
             unsupported_at: Mutex::new(None),
+            preparation_failure: Mutex::new(None),
+            startup: Mutex::new(None),
+            warm_lock: tokio::sync::Mutex::new(()),
             manifest: Mutex::new(None),
             load_lock: tokio::sync::Mutex::new(()),
             verify_lock: tokio::sync::Mutex::new(()),
@@ -993,31 +1038,55 @@ impl StreamState {
         self.lookup(sid).is_some()
     }
 
-    /// True if this sid was warmed recently (and mark it warmed now if not).
-    fn claim_warm(&self, sid: &str, ttl: std::time::Duration) -> bool {
-        let mut g = self.warmed.lock().unwrap();
-        let now = std::time::Instant::now();
-        if let Some(t) = g.get(sid) {
-            if now.duration_since(*t) < ttl {
-                return false;
-            }
+    fn startup_cached(&self, entry: &StreamEntry) -> bool {
+        self.warm_bytes_cached(entry, true)
+    }
+
+    fn warm_bytes_cached(&self, entry: &StreamEntry, require_crc: bool) -> bool {
+        let startup = entry.startup.lock().unwrap();
+        let Some(startup) = startup.as_ref() else { return false };
+        if (require_crc && !startup.crc_verified) || startup.at.elapsed().as_secs() >= 1800 || startup.segments.is_empty()
+            || !startup.segments.iter().all(|id| self.cache.get(id).is_some()) {
+            return false;
         }
-        g.insert(sid.to_string(), now);
-        true
+        let loaded = entry.loaded.lock().unwrap();
+        let Some(loaded) = loaded.as_ref() else { return false };
+        if loaded.complete == Some(false) { return false; }
+        // A cached archive header is not media readiness. Prove that cached
+        // bytes cover the start and end of the actual extracted media file.
+        [0, loaded.total_size.saturating_sub(1)].into_iter().all(|position| {
+            let Some(ei) = loaded.ext_media_start.iter().rposition(|&start| start <= position) else { return false };
+            let extent = &loaded.extents[ei];
+            let offset = extent.data_start + position - loaded.ext_media_start[ei];
+            startup.segments.iter().any(|id| self.cache.get(id).is_some_and(|(data, start)| {
+                start <= offset && offset < start.saturating_add(data.len() as u64)
+                    && extent.segments.iter().any(|segment| segment.message_id == *id)
+            }))
+        })
+    }
+
+    pub fn source_readiness(&self, sid: &str) -> SourceReadiness {
+        let Some(entry) = self.lookup(sid) else {
+            return SourceReadiness { status: "unverified", retry_after_seconds: None };
+        };
+        if let Some((_, retry)) = entry.preparation_failure() {
+            return SourceReadiness { status: "unavailable", retry_after_seconds: Some(retry) };
+        }
+        SourceReadiness {
+            status: if entry.unsupported() || entry.loaded.lock().unwrap().as_ref().is_some_and(|loaded| loaded.complete == Some(false)) { "unavailable" } else if self.startup_cached(&entry) { "ready" } else { "unverified" },
+            retry_after_seconds: None,
+        }
     }
 
     /// Associate only candidates from the same resolver response (same title
     /// and episode). Never discover arbitrary sources from a client URL.
     pub fn set_recovery_candidates(&self, sids: &[String]) {
         let entries = self.streams.lock().unwrap();
+        let mut seen = std::collections::HashSet::new();
+        let candidates = Arc::new(sids.iter().filter(|sid| entries.contains_key(*sid) && seen.insert((*sid).clone())).cloned().collect());
         for sid in sids {
             if let Some(entry) = entries.get(sid) {
-                entry.recovery.lock().unwrap().candidates = sids
-                    .iter()
-                    .filter(|candidate| *candidate != sid)
-                    .take(5)
-                    .cloned()
-                    .collect();
+                entry.recovery.lock().unwrap().candidates = Arc::clone(&candidates);
             }
         }
     }
@@ -1025,13 +1094,12 @@ impl StreamState {
     fn health(&self, sid: &str) -> Option<StreamHealth> {
         let entry = self.lookup(sid)?;
         let entries = self.streams.lock().unwrap();
-        let complete = entry
-            .loaded
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|l| l.complete);
-        let status = if entry.unsupported() { "unsupported" } else { match complete {
+        let (complete, has_layout) = {
+            let loaded = entry.loaded.lock().unwrap();
+            (loaded.as_ref().and_then(|l| l.complete), loaded.is_some())
+        };
+        let failure = entry.preparation_failure();
+        let status = if entry.unsupported() { "unsupported" } else if failure.is_some() && !has_layout { "unavailable" } else { match complete {
             Some(true) => "complete",
             Some(false) => "incomplete",
             None if entry.verify_lock.try_lock().is_err() => "checking",
@@ -1056,8 +1124,12 @@ impl StreamState {
                     .all(|id| self.cache.get(id).is_some())
         });
         Some(StreamHealth {
-            error_code: match status { "unsupported" => Some("unsupported_archive"), "incomplete" => Some("missing_articles"), _ => None },
+            error_code: match status { "unsupported" => Some("unsupported_archive"), "incomplete" => Some("missing_articles"), "unavailable" => failure.map(|(error, _)| error.code()), _ => None },
             status,
+            startup: SourceReadiness {
+                status: if failure.is_some() || entry.unsupported() || complete == Some(false) { "unavailable" } else if self.startup_cached(&entry) { "ready" } else { "unverified" },
+                retry_after_seconds: failure.map(|(_, seconds)| seconds),
+            },
             exact_recovery: self.buffer_health(&entry),
             recovery: RecoveryHealth {
                 status: if ready.is_some() {
@@ -1079,8 +1151,7 @@ impl StreamState {
     fn prepare_recovery(&self, sid: &str, fraction: f64) -> bool {
         let entry = self.lookup(sid);
         let Some(entry) = entry else { return false };
-        {
-            let mut recovery = entry.recovery.lock().unwrap();
+        let mut recovery = entry.recovery.lock().unwrap();
             recovery.desired_fraction = fraction.clamp(0.0, 0.999);
             if recovery.preparing {
                 return true;
@@ -1098,14 +1169,15 @@ impl StreamState {
             recovery.preparing = true;
             recovery.attempted = true;
             recovery.last_attempt = Some(std::time::Instant::now());
-        }
         let st = self.clone();
         let sid = sid.to_string();
-        tokio::spawn(async move {
+        let task_entry = entry.clone();
+        let task = tokio::spawn(async move {
             let _slot = st.recovery_slots.acquire().await.expect("semaphore closed");
-            prepare_recovery_inner(&st, &sid, &entry).await;
-            entry.recovery.lock().unwrap().preparing = false;
+            prepare_recovery_inner(&st, &sid, &task_entry).await;
+            task_entry.recovery.lock().unwrap().preparing = false;
         });
+        recovery.task = Some(task);
         true
     }
 }
@@ -1187,24 +1259,91 @@ async fn verify_stream_inner(
 /// Pre-warm a registered stream: parse its NZB, build extents, and pull the
 /// first WARM_SEGS segments into the cache — plus, if `fraction` is given, the
 /// segments around that point of the file (so resuming mid-episode is instant
-/// too). Quietly does nothing if warmed recently.
+/// too). A previous warm is reused only while its actual bytes remain cached.
 pub async fn warm_head(st: StreamState, sid: String, fraction: Option<f64>) -> anyhow::Result<()> {
-    if !st.claim_warm(&sid, std::time::Duration::from_secs(30 * 60)) {
-        return Ok(());
-    }
-    match warm_head_inner(&st, &sid, fraction).await {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Un-claim so the next trigger can retry — a claim must never outlive
-            // a FAILED warm, or one bad moment blocks warming for the whole TTL.
-            st.warmed.lock().unwrap().remove(&sid);
-            Err(e)
+    let entry = st.lookup(&sid).ok_or(StreamError::UnknownStream)?;
+    let _flight = entry.warm_lock.lock().await;
+    if st.warm_bytes_cached(&entry, false) && entry.startup.lock().unwrap().as_ref().is_some_and(|p| {
+        p.full_warm && match (p.fraction, fraction) {
+            (_, None) => true,
+            (Some(previous), Some(requested)) => (previous - requested).abs() < 0.002,
+            _ => false,
         }
-    }
+    }) { return Ok(()); }
+    let segments = warm_region(&st, &sid, fraction).await?;
+    *entry.startup.lock().unwrap() = Some(PreparedStartup {
+        segments, at: std::time::Instant::now(), fraction, full_warm: true, crc_verified: st.repair_enabled,
+    });
+    Ok(())
 }
 
-async fn warm_head_inner(st: &StreamState, sid: &str, fraction: Option<f64>) -> anyhow::Result<()> {
-    warm_region(st, sid, fraction).await.map(|_| ())
+/// Read exact checksummed media windows without a whole-release STAT or waiting
+/// for PAR2. This establishes startup readiness, never whole-file completeness.
+pub async fn warm_startup(st: StreamState, sid: String) -> anyhow::Result<()> {
+    let entry = st.lookup(&sid).ok_or(StreamError::UnknownStream)?;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let _flight = entry.warm_lock.lock().await;
+        if entry.preparation_failure().is_some() { return Err(StreamError::UpstreamUnavailable.into()); }
+        if st.startup_cached(&entry) { return Ok(()); }
+        ensure_loaded_context(st.clone(), entry.clone(), "startup", None).await?;
+        let (extents, starts, total) = {
+            let loaded = entry.loaded.lock().unwrap();
+            let loaded = loaded.as_ref().unwrap();
+            (loaded.extents.clone(), loaded.ext_media_start.clone(), loaded.total_size)
+        };
+        let mut ids = Vec::new();
+        let mut decoded_bytes = 0usize;
+        for (mut position, end) in [(0, total.min(2 * 1024 * 1024)), (total.saturating_sub(2 * 1024 * 1024), total)] {
+            while position < end {
+                let ei = starts.iter().rposition(|&start| start <= position).ok_or(StreamError::UpstreamUnavailable)?;
+                let extent = &extents[ei];
+                let offset = extent.data_start + position - starts[ei];
+                let mut low = 0;
+                let mut high = extent.segments.len();
+                let mut idx = (offset / extent.part_size.max(1)).min(high.saturating_sub(1) as u64) as usize;
+                loop {
+                    if low >= high || decoded_bytes >= 16 * 1024 * 1024 || ids.len() >= 64 {
+                        return Err(StreamError::UpstreamUnavailable.into());
+                    }
+                    let segment = &extent.segments[idx];
+                    // Legacy cache writers may predate strict CRC validation;
+                    // establish this readiness from actual verified bodies.
+                    let fetched = {
+                        let _background = st.pool.background_permit().await;
+                        st.pool.fetch_decoded(&extent.group, &segment.message_id).await
+                    };
+                    let decoded = match fetched {
+                        crate::pool::DecodedFetch::Found(decoded) => decoded,
+                        failure => {
+                            let error = if matches!(failure, crate::pool::DecodedFetch::Missing) { StreamError::MissingArticles } else { StreamError::UpstreamUnavailable };
+                            entry.failed_preparation(error);
+                            return Err(error.into());
+                        }
+                    };
+                    decoded_bytes += decoded.data.len();
+                    let start = decoded.part_begin.unwrap_or(1) - 1;
+                    let last = start + decoded.data.len() as u64;
+                    if offset < start { high = idx; }
+                    else if offset >= last { low = idx + 1; }
+                    else {
+                        let take = (last - offset).min(end - position).min(extent.data_len - (position - starts[ei]));
+                        if take == 0 { return Err(StreamError::UpstreamUnavailable.into()); }
+                        st.cache.refresh(&segment.message_id, decoded.data, start);
+                        ids.push(segment.message_id.clone());
+                        position += take;
+                        break;
+                    }
+                    idx = low + (high - low) / 2;
+                }
+            }
+        }
+        *entry.preparation_failure.lock().unwrap() = None;
+        *entry.startup.lock().unwrap() = Some(PreparedStartup {
+            segments: ids, at: std::time::Instant::now(), fraction: None, full_warm: false, crc_verified: true,
+        });
+        if !st.startup_cached(&entry) { anyhow::bail!("startup window evicted"); }
+        Ok(())
+    }).await.map_err(|_| anyhow::anyhow!("startup preparation deadline"))?
 }
 
 async fn warm_region(
@@ -1312,18 +1451,25 @@ fn warm_targets(
 async fn prepare_recovery_inner(st: &StreamState, sid: &str, entry: &Arc<StreamEntry>) {
     let mut candidates = {
         let recovery = entry.recovery.lock().unwrap();
-        let mut candidates = recovery.candidates.clone();
+        let mut candidates: Vec<_> = recovery.candidates.iter().filter(|candidate| *candidate != sid).cloned().collect();
         if let Some(prepared) = &recovery.prepared {
             candidates.retain(|candidate| candidate != &prepared.sid);
             candidates.insert(0, prepared.sid.clone());
         }
         candidates
     };
-    candidates.truncate(5);
-    for candidate in candidates {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !candidates.is_empty() && tokio::time::Instant::now() < deadline {
+        // Discovery runs after the resolver response. Consult live readiness
+        // every time, so a now-ready source at rank29 can be prepared first.
+        candidates.sort_by_key(|candidate| match st.source_readiness(candidate).status {
+            "ready" => 0, "unavailable" => 2, _ => 1,
+        });
+        let candidate = candidates.remove(0);
+        if st.source_readiness(&candidate).status == "unavailable" { continue; }
         let fraction = entry.recovery.lock().unwrap().desired_fraction;
         let result = tokio::time::timeout(
-            std::time::Duration::from_secs(180),
+            std::time::Duration::from_secs(20).min(deadline.saturating_duration_since(tokio::time::Instant::now())),
             warm_region(st, &candidate, Some(fraction)),
         )
         .await;
@@ -1336,7 +1482,7 @@ async fn prepare_recovery_inner(st: &StreamState, sid: &str, entry: &Arc<StreamE
                 let mut fraction = fraction;
                 if (latest - fraction).abs() >= 0.002 {
                     match tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
+                        std::time::Duration::from_secs(20).min(deadline.saturating_duration_since(tokio::time::Instant::now())),
                         warm_region(st, &candidate, Some(latest)),
                     )
                     .await
@@ -1433,6 +1579,28 @@ pub fn router(state: StreamState) -> axum::Router {
         .with_state(state)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadinessRequest {
+    stream_ids: Vec<String>,
+}
+
+async fn readiness(State(st): State<StreamState>, Json(request): Json<ReadinessRequest>) -> Response {
+    let mut seen = std::collections::HashSet::new();
+    if request.stream_ids.len() > 256 || request.stream_ids.iter().any(|sid| !valid_stream_id(sid) || !seen.insert(sid)) {
+        return (StatusCode::BAD_REQUEST, "expected at most 256 unique stream IDs").into_response();
+    }
+    let streams: HashMap<_, _> = request.stream_ids.iter().map(|sid| (sid, st.source_readiness(sid))).collect();
+    ([(header::CACHE_CONTROL, "no-store")], Json(serde_json::json!({ "streams": streams }))).into_response()
+}
+
+/// Mounted only inside the sync router's existing bearer-token gate.
+pub fn readiness_router(state: StreamState) -> axum::Router {
+    axum::Router::new().route("/streams/readiness", axum::routing::post(readiness))
+        .layer(axum::extract::DefaultBodyLimit::max(16 * 1024))
+        .with_state(state)
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlaybackSessionQuery {
@@ -1520,7 +1688,11 @@ async fn serve(
                 .filter(|v| valid_session(v));
             st.record_read_failure(&id, session, StreamError::from_preparation(&e).code());
         }
-        return StreamError::from_preparation(&e).response();
+        let mut response = StreamError::from_preparation(&e).response();
+        if let Some((_, seconds)) = entry.preparation_failure() {
+            response.headers_mut().insert(header::RETRY_AFTER, seconds.to_string().parse().unwrap());
+        }
+        return response;
     }
 
     // Read the cached load info into locals (brief lock, nothing held across await).
@@ -1639,6 +1811,7 @@ async fn ensure_loaded_context(
         }
         return Ok(());
     }
+    if let Some((error, _)) = entry.preparation_failure() { return Err(error.into()); }
     if entry.unsupported() { return Err(StreamError::UnsupportedArchive.into()); }
     // Single-flight: whoever holds the lock does the load; everyone else waits
     // and finds `loaded` populated on re-check.
@@ -1647,6 +1820,7 @@ async fn ensure_loaded_context(
     if entry.loaded.lock().unwrap().is_some() {
         return Ok(());
     }
+    if let Some((error, _)) = entry.preparation_failure() { return Err(error.into()); }
     // Download + parse the NZB. Per-request timeout override: a 100GB remux's
     // NZB is tens of MB and indexers serve it slowly — the client's default 60s
     // total-request timeout aborted exactly those, so the biggest releases were
@@ -1681,12 +1855,12 @@ async fn ensure_loaded_context(
         let first = segments
             .first()
             .ok_or_else(|| anyhow::anyhow!("no segments"))?;
-        let (part_size, total) = if st.repair_enabled {
+        let (part_size, total) = if st.repair_enabled || trigger == "startup" {
             let started = std::time::Instant::now();
-            let (attempt, rescued) = st
-                .pool
-                .fetch_decoded_observed(&group, &first.message_id)
-                .await;
+            let (attempt, rescued) = {
+                let _background = if trigger == "startup" { Some(st.pool.background_permit().await) } else { None };
+                st.pool.fetch_decoded_observed(&group, &first.message_id).await
+            };
             let decoded = match attempt {
                 crate::pool::DecodedFetch::Found(decoded) => {
                     if rescued {
@@ -1702,11 +1876,27 @@ async fn ensure_loaded_context(
                     }
                     decoded
                 }
-                failure => st
-                    .repair
-                    .recover_context(&sid, &first.message_id, trigger, session.as_deref())
-                    .await
-                    .map_err(|_| anyhow::Error::from(if matches!(failure, crate::pool::DecodedFetch::Missing) { StreamError::MissingArticles } else { StreamError::UpstreamUnavailable }))?,
+                failure => {
+                    let error = if matches!(failure, crate::pool::DecodedFetch::Missing) { StreamError::MissingArticles } else { StreamError::UpstreamUnavailable };
+                    if trigger == "startup" {
+                        entry.failed_preparation(error);
+                        return Err(error.into());
+                    }
+                    match st.repair.recover_context(&sid, &first.message_id, trigger, session.as_deref()).await {
+                        Ok(decoded) => decoded,
+                        Err(repair_error) => {
+                            // A real read plus exhausted repair must not launch
+                            // the same expensive job on every resolve. Provider
+                            // uncertainty remains temporary, never condemned.
+                            if !matches!(repair_error,
+                                crate::repair::RepairError::Cancelled | crate::repair::RepairError::UnknownSource
+                                | crate::repair::RepairError::Timeout | crate::repair::RepairError::Io) {
+                                entry.failed_preparation(error);
+                            }
+                            return Err(error.into());
+                        }
+                    }
+                },
             };
             let _ = st.repair.remember(&sid, &first.message_id, &decoded).await;
             let part = decoded.data.len() as u64;
@@ -1730,8 +1920,14 @@ async fn ensure_loaded_context(
                             .unwrap_or_else(|| part * segments.len() as u64),
                     )
                 }
-                crate::pool::CheckedFetch::Missing => return Err(StreamError::MissingArticles.into()),
-                crate::pool::CheckedFetch::Unavailable => return Err(StreamError::UpstreamUnavailable.into()),
+                crate::pool::CheckedFetch::Missing => {
+                    entry.failed_preparation(StreamError::MissingArticles);
+                    return Err(StreamError::MissingArticles.into());
+                },
+                crate::pool::CheckedFetch::Unavailable => {
+                    entry.failed_preparation(StreamError::UpstreamUnavailable);
+                    return Err(StreamError::UpstreamUnavailable.into());
+                },
             }
         };
         let extent = Extent {
@@ -1747,14 +1943,21 @@ async fn ensure_loaded_context(
         // when they don't apply (empty volume list / no .7z), so this adds no
         // cost to the common raw/rar path.
         let vols = archive::rar_volumes(&parsed.files);
-        match archive::build_extents(&st.pool, &vols).await {
+        let rar_layout = if trigger == "startup" {
+            archive::build_extents_background(&st.pool, &vols).await
+        } else { archive::build_extents(&st.pool, &vols).await };
+        match rar_layout {
             Ok(res) => res,
-            Err(rar_err) => match crate::sevenzip::build_extents(&st.pool, &parsed.files).await {
+            Err(rar_err) => match {
+                let _background = if trigger == "startup" { Some(st.pool.background_permit().await) } else { None };
+                crate::sevenzip::build_extents(&st.pool, &parsed.files).await
+            } {
                 Ok(res) => res,
                 Err(sz_err) => {
                     tracing::warn!("stream {}: archive layout unavailable (rar: {rar_err}; 7z: {sz_err})", fnv_hex(entry.nzb_url.as_bytes()));
                     let error = crate::stream_errors::archive_failure(&rar_err, &sz_err, vols.is_empty());
                     if error == StreamError::UnsupportedArchive { *entry.unsupported_at.lock().unwrap() = Some(std::time::Instant::now()); }
+                    else { entry.failed_preparation(error); }
                     return Err(error.into());
                 }
             },
@@ -1784,6 +1987,7 @@ async fn ensure_loaded_context(
             complete: None,
         });
     }
+    *entry.preparation_failure.lock().unwrap() = None;
     Ok(())
 }
 
@@ -2541,6 +2745,35 @@ mod tests {
         assert_eq!(health.recovery.prepared_fraction, Some(0.5));
         st.cache.put("evict", vec![2; 600], 0);
         assert_ne!(st.health(&current).unwrap().recovery.status, "ready");
+    }
+
+    #[tokio::test]
+    async fn recovery_uses_newly_ready_alternative_beyond_five_failed_candidates() {
+        let st = test_state();
+        let current = loaded_stream(&st, "current-long-list", Some(false)).await;
+        let mut sids = vec![current.clone()];
+        for index in 0..8 {
+            let sid = st.register(&format!("http://fixture.invalid/failed-{index}.nzb")).await;
+            st.lookup(&sid).unwrap().failed_preparation(StreamError::UpstreamUnavailable);
+            sids.push(sid);
+        }
+        let backup = loaded_stream(&st, "late-backup", Some(true)).await;
+        sids.push(backup.clone());
+        st.set_recovery_candidates(&sids);
+        // Availability becomes known after the resolver initially associates
+        // candidates; preparation must consult current evidence, not old rank.
+        let ids: Vec<_> = (0..5).map(|index| format!("late-backup-{index}")).collect();
+        for (index, id) in ids.iter().enumerate() { st.cache.put(id, vec![1;100], index as u64 * 100); }
+        *st.lookup(&backup).unwrap().startup.lock().unwrap() = Some(PreparedStartup {
+            segments: ids, at: std::time::Instant::now(), fraction: None, full_warm: false, crc_verified: true,
+        });
+        let entry = st.lookup(&current).unwrap();
+        entry.recovery.lock().unwrap().desired_fraction = 0.6;
+        tokio::time::timeout(std::time::Duration::from_secs(1), prepare_recovery_inner(&st,&current,&entry)).await.unwrap();
+        let health = st.health(&current).unwrap();
+        assert_eq!(health.recovery.status, "ready");
+        assert_eq!(health.recovery.stream_id.as_deref(), Some(backup.as_str()));
+        assert_eq!(health.recovery.prepared_fraction, Some(0.6));
     }
 
     #[tokio::test]

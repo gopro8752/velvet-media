@@ -15,8 +15,8 @@ android {
         applicationId = "tv.velvet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 34
-        versionName = "1.13.1"
+        versionCode = 35
+        versionName = "1.13.2"
         // Recovery is production functionality; the flavor only isolates install identity.
         buildConfigField("boolean", "EXACT_RECOVERY", "true")
     }

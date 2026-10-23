@@ -59,7 +59,7 @@ function preferencesHomeRows(rows as object) as object
 end function
 
 function preferencesStreams(streams as object) as object
-    return VPreferredQualityStreams(streams, VStr(VGet(m.preferences, "quality"), "2160p"))
+    return VStartupQualityStreams(streams, VStr(VGet(m.preferences, "quality"), "2160p"))
 end function
 
 function handlePreferencesAction(action as object) as boolean

@@ -4,6 +4,28 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StreamRecoveryBudgetTest {
+    @Test fun failedStartsCanTraverseEveryCandidateWithoutSpendingTheMidPlayBudget() {
+        val budget = StreamRecoveryBudget()
+        repeat(80) {
+            budget.sourceChanged()
+            assertTrue(budget.tryCandidateSwitch())
+        }
+        assertEquals(0, budget.automaticAttempts)
+        repeat(4) {
+            budget.sourceChanged()
+            budget.observe(0, 0, true)
+            budget.observe(1_000, 1_000, true)
+            assertTrue(budget.tryCandidateSwitch())
+        }
+        budget.sourceChanged()
+        budget.observe(0, 0, true)
+        budget.observe(1_000, 1_000, true)
+        assertFalse(budget.tryCandidateSwitch())
+        budget.sourceChanged()
+        assertTrue(budget.tryCandidateSwitch()) // A new source that never started is still skippable.
+        assertEquals(4, budget.automaticAttempts)
+    }
+
     @Test fun fourConsecutiveFailuresRemainBoundedButHealthyPlaybackRenewsThem() {
         val budget = StreamRecoveryBudget()
         budget.sourceChanged()

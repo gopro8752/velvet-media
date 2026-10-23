@@ -71,7 +71,12 @@ data class StreamOption(
     val sourceName: String,            // which configured source produced it
     val bingeGroup: String? = null,    // same group => same release chain for autoplay
     val headers: Map<String, String> = emptyMap(),
+    val sourceReadiness: SourceReadiness? = null,
+    val readinessObservedAtMs: Long = 0,
 )
+
+@Serializable
+data class SourceReadiness(val status: String = "unverified", val retryAfterSeconds: Long? = null)
 
 enum class RowStyle { POSTER, LANDSCAPE, TOP10 }
 

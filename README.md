@@ -80,6 +80,7 @@ AI categories are optional. The backend can invoke the official Codex CLI after 
 ### Stay in control of playback
 
 - Choose a source, audio track, or subtitle; seek, move to the previous/next episode, and keep autoplay going.
+- Check candidate sources concurrently, prefer the best-quality prepared option, and retain prepared alternatives. Failed starts continue through untried sources instead of stopping after four attempts.
 - Recover original stream bytes using another provider or PAR2, look ahead from playback position, and prepare alternative playback paths. Recovery is bounded and cannot guarantee uninterrupted playback for every release. [Recovery setup →](RECOVERY.md)
 - Retry temporary connection failures without immediately abandoning a working stream, and block a troublesome release group for an individual show.
 - Use backend compatibility processing for formats a client cannot play directly, including mobile audio conversion when needed. Capable TV clients can retain the original audio path; actual passthrough depends on the device, player, and sound system.

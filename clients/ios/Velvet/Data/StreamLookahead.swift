@@ -7,6 +7,7 @@ enum StreamLookahead {
         let status: String
         let recovery: Recovery?
         let exactRecovery: ExactRecovery?
+        var startup: SourceStartupReadiness? = nil
     }
     struct ExactRecovery: Decodable {
         let enabled: Bool
@@ -102,7 +103,7 @@ enum StreamLookahead {
         _ = try? await session.data(for: request)
     }
 
-    static func health(_ stream: StreamOption, sessionId: String? = nil) async -> Health? {
+    static func health(_ stream: StreamOption, sessionId: String? = nil, timeout: TimeInterval = 5) async -> Health? {
         guard let endpoint = endpoint(stream, suffix: "health"),
               var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else { return nil }
         if let sessionId {
@@ -112,10 +113,41 @@ enum StreamLookahead {
         }
         guard let url = components.url else { return nil }
         do {
-            let (data, response) = try await session.data(for: request(url, stream: stream))
+            var healthRequest = request(url, stream: stream)
+            healthRequest.timeoutInterval = timeout
+            let (data, response) = try await session.data(for: healthRequest)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
             return try JSONDecoder().decode(Health.self, from: data)
         } catch { return nil }
+    }
+
+    static func startupReadiness(_ streams: [StreamOption], backend: String, token: String, timeout: TimeInterval,
+                                 session requestSession: URLSession? = nil) async
+        -> (values: [String: SourceStartupReadiness]?, legacy: Bool) {
+        guard let first = streams.first,
+              streams.allSatisfy({ belongsToBackend($0.url, base: backend) }),
+              var components = URLComponents(string: backend) else { return (nil, false) }
+        let ids = streams.compactMap { streamId($0.url) }.filter {
+            $0.range(of: #"^[0-9a-f]{16}$"#, options: .regularExpression) != nil
+        }
+        guard !ids.isEmpty else { return (nil, false) }
+        while components.path.hasSuffix("/") { components.path.removeLast() }
+        components.path += "/streams/readiness"
+        guard let url = components.url else { return (nil, false) }
+        var bulkRequest = request(url, stream: first)
+        bulkRequest.httpMethod = "POST"
+        if !token.isEmpty { bulkRequest.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
+        bulkRequest.timeoutInterval = timeout
+        bulkRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        bulkRequest.httpBody = try? JSONEncoder().encode(["streamIds": Array(Set(ids)).sorted()])
+        do {
+            let (data, response) = try await (requestSession ?? session).data(for: bulkRequest)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 404 || status == 405 { return (nil, true) }
+            guard (200..<300).contains(status) else { return (nil, false) }
+            struct Response: Decodable { let streams: [String: SourceStartupReadiness] }
+            return (try JSONDecoder().decode(Response.self, from: data).streams, false)
+        } catch { return (nil, false) }
     }
 
     private static func request(_ url: URL, stream: StreamOption) -> URLRequest {

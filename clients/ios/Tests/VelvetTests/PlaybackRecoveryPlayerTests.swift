@@ -157,6 +157,14 @@ final class PlaybackRecoveryPlayerTests: XCTestCase {
         XCTAssertLessThan(playedAt - first.at, 10.0, "Startup recovery must be bounded from the actual first media request.")
     }
 
+    func testStartupTraversesSixUnavailableSourcesBeforeHealthySeventh() async throws {
+        let model = start(sources: (1...6).map { "missing\($0)" } + ["b"])
+        await waitUntil(timeout: 30) { self.isPlaying(model, source: "b") }
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.currentStreamUrl, RecoveryFixture.stream("b", token: token, episode: 1).url,
+                       "Startup must reach an untried working source beyond the old four-switch limit.")
+    }
+
     func testEpisodeEndChoiceDoesNotTriggerWatchdogFailoverAfterWatchingCredits() async throws {
         settings.autoplayNext = false
         let model = start()

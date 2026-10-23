@@ -310,6 +310,8 @@ class StreamRepositoryImpl(
             sourceName = sourceName,
             bingeGroup = behaviorHints?.bingeGroup?.takeIf(String::isNotBlank),
             headers = behaviorHints?.proxyHeaders?.request ?: emptyMap(),
+            sourceReadiness = behaviorHints?.velvetSourceReadiness,
+            readinessObservedAtMs = System.nanoTime() / 1_000_000,
         )
     }
 
