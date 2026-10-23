@@ -6,6 +6,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import okhttp3.internal.http2.ConnectionShutdownException
+import okhttp3.internal.http2.StreamResetException
 import java.io.EOFException
 import java.net.ProtocolException
 import java.net.SocketException
@@ -43,6 +45,9 @@ internal fun streamFailure(error: Throwable): StreamFailure {
         }
         transport = transport || cause is SocketTimeoutException || cause is SocketException ||
             cause is EOFException || cause is UnknownHostException ||
+            // HTTP/2 disconnects wrap neither SocketException nor EOFException.
+            // Retry the same range within the existing established-playback budget.
+            cause is StreamResetException || cause is ConnectionShutdownException ||
             (cause is ProtocolException && cause.message.equals("unexpected end of stream", true))
         current = cause.cause?.takeIf { it !== cause }
     }

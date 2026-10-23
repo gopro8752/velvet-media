@@ -68,6 +68,29 @@ class StreamLoadErrorPolicyTest {
         assertEquals(0L, budget.retryUntilMs)
     }
 
+    @Test fun actualHttp2DisconnectsRetryTheSameEstablishedStreamWithinExistingBounds() {
+        for (error in listOf(StreamPolicyFixtures.http2Reset(), StreamPolicyFixtures.http2Shutdown())) {
+            val budget = StreamRecoveryBudget(); val generation = budget.sourceChanged()
+            var now = 2000L
+            val policy = StreamLoadErrorPolicy(budget, generation) { now }
+            assertEquals(StreamFailure(null, StreamFailureReason.TRANSPORT, true), streamFailure(error))
+            // An unproven source still fails fast; this must not slow startup selection.
+            assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(StreamPolicyFixtures.info(error, 1)))
+            assertEquals(0L, budget.retryUntilMs)
+            establish(budget)
+            assertEquals(250L, policy.getRetryDelayMsFor(StreamPolicyFixtures.info(error, 1)))
+            assertEquals(750L, policy.getRetryDelayMsFor(StreamPolicyFixtures.info(error, 2)))
+            assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(StreamPolicyFixtures.info(error, 3)))
+            assertEquals(17_000L, budget.retryUntilMs)
+            now = 17_000L
+            assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(StreamPolicyFixtures.info(error, 1)))
+            budget.sourceChanged(); establish(budget)
+            assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(StreamPolicyFixtures.info(error, 1)))
+            assertEquals(0L, budget.retryUntilMs)
+            assertEquals(0, budget.automaticAttempts)
+        }
+    }
+
     private fun establish(budget: StreamRecoveryBudget) {
         budget.observe(0, 100_000, true); budget.observe(1000, 101_000, true)
     }

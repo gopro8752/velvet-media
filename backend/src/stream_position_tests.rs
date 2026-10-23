@@ -157,6 +157,42 @@ async fn range_crosses_unequal_archive_extents_with_nonzero_media_offsets() {
 }
 
 #[tokio::test]
+async fn stale_cached_offset_refreshes_the_same_verified_article_once() {
+    let (data, mut pieces) = articles(&[128, 128]);
+    pieces[0].0 = 10; // A resident cache entry incorrectly says byte zero is absent.
+    let (mut st, sid, total) = fixture(vec![(128, 0, 256, pieces)]).await;
+    let body = crate::pool::verified_fixtures::article(&data[..128], 1, 256, 1);
+    let (provider, server) = crate::pool::verified_fixtures::provider(
+        [("volume-0-article-0@fixture.invalid".into(), body)].into(),
+    ).await;
+    st.pool = Pool::new_verified(&[provider], true);
+    assert_eq!(range(&st, &sid, 0, 31, total).await.unwrap().as_ref(), &data[..32]);
+    assert_eq!(st.cache.get("volume-0-article-0@fixture.invalid").unwrap().1, 0);
+    // The corrected article remains useful, including a subsequent seek. No
+    // whole-source reload or repeated network retry is needed.
+    assert_eq!(range(&st, &sid, 64, 95, total).await.unwrap().as_ref(), &data[64..96]);
+    assert_eq!(st.pool.metrics_snapshot().await.total.articles_found, 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_fresh_article_that_still_cannot_cover_the_range_fails_without_looping() {
+    let (data, mut pieces) = articles(&[128, 128]);
+    pieces[0].0 = 10;
+    let (mut st, sid, total) = fixture(vec![(128, 0, 256, pieces)]).await;
+    let body = crate::pool::verified_fixtures::article(&data[..128], 21, 256, 1);
+    let (provider, server) = crate::pool::verified_fixtures::provider(
+        [("volume-0-article-0@fixture.invalid".into(), body)].into(),
+    ).await;
+    st.pool = Pool::new_verified(&[provider], true);
+    assert!(range(&st, &sid, 0, 31, total).await.is_err());
+    assert_eq!(st.pool.metrics_snapshot().await.total.articles_found, 1);
+    // Do not replace the cache with bytes that could not satisfy this request.
+    assert_eq!(st.cache.get("volume-0-article-0@fixture.invalid").unwrap().1, 10);
+    server.abort();
+}
+
+#[tokio::test]
 async fn missing_offsets_empty_articles_and_truncated_tail_fail_without_wrong_bytes() {
     for (pieces, start, end) in [
         (vec![(10, vec![1; 10])], 0, 5), // first article starts after requested data

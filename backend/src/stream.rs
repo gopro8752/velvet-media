@@ -750,6 +750,24 @@ impl SegCache {
             }
         }
     }
+
+    /// Replace a cached article only with a fresh, independently checksummed
+    /// BODY for the exact same message ID. Normal speculative writes remain
+    /// first-writer-wins; a proven stale positioning entry must be replaceable.
+    fn refresh(&self, message_id: &str, data: Vec<u8>, start: u64) {
+        let mut g = self.inner.lock().unwrap();
+        if let Some((old, _)) = g.map.remove(message_id) {
+            g.bytes -= old.len();
+        }
+        g.order.retain(|id| id != message_id);
+        g.bytes += data.len();
+        g.map.insert(message_id.to_owned(), (Arc::new(data), start));
+        g.order.push_back(message_id.to_owned());
+        while g.bytes > self.max_bytes {
+            let Some(old) = g.order.pop_front() else { break; };
+            if let Some((data, _)) = g.map.remove(&old) { g.bytes -= data.len(); }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2024,9 +2042,13 @@ impl StreamGen {
     }
 
     fn invalid_position(mut self) -> Option<(Result<Bytes, std::io::Error>, StreamGen)> {
+        let extent = self.extents.get(self.ext_idx);
         tracing::warn!(
-            "stream {}: article offsets do not cover media {}, aborting transfer",
-            self.sid, self.media_pos,
+            "stream {}: article offsets do not cover media {}, aborting transfer (extent={}, segment={}, positioned={}, extent_start={:?}, data_start={:?}, data_len={:?}, part_size={:?}, segment_count={:?})",
+            self.sid, self.media_pos, self.ext_idx, self.seg_idx, self.positioned,
+            self.ext_media_start.get(self.ext_idx), extent.map(|e| e.data_start),
+            extent.map(|e| e.data_len), extent.map(|e| e.part_size),
+            extent.map(|e| e.segments.len()),
         );
         self.state.record_read_failure(
             &self.sid, self.playback_session.as_deref(), "article_corrupt",
@@ -2044,6 +2066,7 @@ impl StreamGen {
         // search interval across retries; resetting the guess here used to loop
         // forever whenever real yEnc article lengths differed from that estimate.
         let mut search: Option<(usize, usize)> = None;
+        let mut refreshed_position = false;
         loop {
             if self.media_pos >= self.end {
                 self.abort_inflight();
@@ -2134,6 +2157,7 @@ impl StreamGen {
                 return self.invalid_position();
             }
 
+            let was_cached = self.state.cache.get(&ext.segments[self.seg_idx].message_id).is_some();
             let fetched = if self.positioned {
                 // Pipelined path: front of the queue IS segment seg_idx.
                 self.top_up(&ext, ext_start, ext_end);
@@ -2269,6 +2293,41 @@ impl StreamGen {
                 }
                 if !self.positioned {
                     if *lo >= *hi {
+                        // An old cache entry can outlive the request that put it
+                        // there. Before failing a range that has no covering
+                        // article, check that exact article once on the wire.
+                        // Never relax CRC/range checks or substitute another
+                        // release; a fresh mismatch still fails below.
+                        if was_cached && !refreshed_position {
+                            refreshed_position = true;
+                            let segment = &ext.segments[self.seg_idx];
+                            let refresh = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                                let _background = if self.probe_budget.is_some() {
+                                    Some(self.state.pool.background_permit().await)
+                                } else {
+                                    None
+                                };
+                                self.state.pool.fetch_decoded(&ext.group, &segment.message_id).await
+                            }).await;
+                            if let Ok(crate::pool::DecodedFetch::Found(fresh)) = refresh {
+                                let fresh_start = fresh.part_begin.unwrap_or(1) - 1;
+                                let fresh_end = fresh_start + fresh.data.len() as u64;
+                                tracing::warn!(
+                                    "stream {}: positioning cache check at {} (segment={}, cached={}..{}, fresh={}..{})",
+                                    self.sid, vol_off, self.seg_idx, seg_start, seg_end,
+                                    fresh_start, fresh_end,
+                                );
+                                if fresh_start <= vol_off && vol_off < fresh_end {
+                                    self.state.cache.refresh(&segment.message_id, fresh.data, fresh_start);
+                                    search = Some((0, ext.segments.len()));
+                                    continue;
+                                }
+                            }
+                        }
+                        tracing::warn!(
+                            "stream {}: positioning search exhausted at {} (segment={}, observed={}..{}, cached={})",
+                            self.sid, vol_off, self.seg_idx, seg_start, seg_end, was_cached,
+                        );
                         // No article covers the requested offset: fail rather
                         // than oscillate across a hole or emit neighboring data.
                         return self.invalid_position();
