@@ -1,6 +1,7 @@
 package tv.velvet.data.live
 
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -57,6 +58,14 @@ class LiveReconnectBudget {
     private var attempts = 0
     fun take(): Boolean = if (attempts < 2) { attempts++; true } else false
     fun reset() { attempts = 0 }
+}
+
+/** Rejoin a moving window without abandoning valid tuner and DRM sessions. */
+internal class LiveWindowRecovery {
+    private val budget = LiveReconnectBudget()
+    fun take(errorCode: Int): Boolean =
+        errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && budget.take()
+    fun reset() = budget.reset()
 }
 
 /** Media3 treats an explicit Apple HLS MIME alias as progressive; normalize the validated wire format. */

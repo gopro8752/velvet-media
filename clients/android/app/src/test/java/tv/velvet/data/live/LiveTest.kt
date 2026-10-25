@@ -3,6 +3,7 @@ package tv.velvet.data.live
 import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.Util
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -131,6 +132,26 @@ class LiveTest {
         repeat(10) { assertFalse(budget.take()) }
         budget.reset()
         assertTrue(budget.take()); assertTrue(budget.take()); assertFalse(budget.take())
+    }
+
+    @Test fun onlyExpiredLiveWindowsUseTheBoundedSessionPreservingRecovery() {
+        val recovery = LiveWindowRecovery()
+        repeat(3) { assertFalse(recovery.take(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)) }
+        assertTrue(recovery.take(PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW))
+        assertFalse(recovery.take(PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED))
+        assertTrue(recovery.take(PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW))
+        repeat(3) { assertFalse(recovery.take(PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW)) }
+        recovery.reset()
+        assertTrue(recovery.take(PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW))
+    }
+
+    @Test fun nativeDashStaysAwayFromTheExpiringEdgeWithoutOverridingManifestBounds() {
+        val config = nativeDashLiveConfiguration()
+        assertEquals(10_000L, config.targetOffsetMs)
+        assertEquals(C.TIME_UNSET, config.minOffsetMs)
+        assertEquals(C.TIME_UNSET, config.maxOffsetMs)
+        assertEquals(C.RATE_UNSET, config.minPlaybackSpeed, 0f)
+        assertEquals(C.RATE_UNSET, config.maxPlaybackSpeed, 0f)
     }
 
     @Test fun lateTuneCannotReplaceCurrentChannelAndEveryKnownSessionIsReleased() = runBlocking {

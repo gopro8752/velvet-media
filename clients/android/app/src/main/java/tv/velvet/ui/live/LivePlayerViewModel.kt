@@ -7,14 +7,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import kotlinx.coroutines.CancellationException
@@ -31,6 +34,7 @@ import tv.velvet.data.live.LiveChannel
 import tv.velvet.data.live.LiveReconnectBudget
 import tv.velvet.data.live.LiveRepository
 import tv.velvet.data.live.LiveSessionController
+import tv.velvet.data.live.LiveWindowRecovery
 import tv.velvet.data.live.adjacentLiveChannel
 import tv.velvet.data.live.mediaItem
 import tv.velvet.data.settings.SettingsRepository
@@ -51,6 +55,8 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
     val state = _state.asStateFlow()
     private val sessions = LiveSessionController(repository, Dispatchers.Main.immediate)
     private val retryBudget = LiveReconnectBudget()
+    private val liveWindowRecovery = LiveWindowRecovery()
+    private var lastBandwidthLogMs = 0L
     private var channels = emptyList<LiveChannel>()
     private var channelId = initialChannelId
     private var closed = false
@@ -93,7 +99,8 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
                 // Error codes help diagnose device DRM without logging a
                 // capability URL, provider response, or license payload.
                 Log.w("VelvetLive", "Playback failed: ${error.errorCodeName}")
-                recover()
+                logLiveTiming("Playback error")
+                if (liveWindowRecovery.take(error.errorCode)) rejoinLiveWindow() else recover()
             }
         }
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -102,7 +109,10 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
             if (isPlaying && ownsPlayback()) healthy = viewModelScope.launch {
                 val id = sessions.active?.id
                 delay(60_000)
-                if (ownsPlayback() && sessions.active?.id == id && player.isPlaying) retryBudget.reset()
+                if (ownsPlayback() && sessions.active?.id == id && player.isPlaying) {
+                    retryBudget.reset()
+                    liveWindowRecovery.reset()
+                }
             }
         }
         override fun onTracksChanged(tracks: Tracks) {
@@ -122,7 +132,23 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
                 if (ownsPlayback()) Log.i("VelvetLive", "Device DRM keys loaded")
             }
             override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
-                if (ownsPlayback()) Log.i("VelvetLive", "Live video first frame rendered")
+                if (ownsPlayback()) {
+                    Log.i("VelvetLive", "Live video first frame rendered")
+                    logLiveTiming("First frame")
+                }
+            }
+            override fun onVideoInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format,
+                decoderReuseEvaluation: DecoderReuseEvaluation?) {
+                if (ownsPlayback()) Log.i("VelvetLive", "Video format: ${format.width}x${format.height}" +
+                    " fps=${format.frameRate} bitrate=${format.bitrate}")
+            }
+            override fun onBandwidthEstimate(eventTime: AnalyticsListener.EventTime, totalLoadTimeMs: Int,
+                totalBytesLoaded: Long, bitrateEstimate: Long) {
+                if (ownsPlayback() && eventTime.realtimeMs - lastBandwidthLogMs >= 30_000) {
+                    lastBandwidthLogMs = eventTime.realtimeMs
+                    Log.i("VelvetLive", "Bandwidth: estimate=$bitrateEstimate bytes=$totalBytesLoaded loadMs=$totalLoadTimeMs")
+                    logLiveTiming("Bandwidth sample")
+                }
             }
         })
         load()
@@ -159,6 +185,8 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
         channelSwitch?.cancel(); channelSwitch = null
         retry?.cancel(); watchdog?.cancel(); healthy?.cancel()
         if (resetRetries) retryBudget.reset()
+        liveWindowRecovery.reset()
+        lastBandwidthLogMs = 0L
         channelId = channel.id
         player.stop(); player.clearMediaItems()
         _state.value = LivePlayerState(channel = channel, canChangeChannel = channels.size > 1,
@@ -193,6 +221,31 @@ class LivePlayerViewModel(app: Application, private val repository: LiveReposito
     private fun startWatchdog() {
         watchdog?.cancel()
         watchdog = viewModelScope.launch { delay(90_000); if (ownsPlayback()) recover() }
+    }
+
+    private fun rejoinLiveWindow() {
+        // The channel and its license are still valid. Seeking to the default
+        // live position lets the refreshed timeline discard expired segments.
+        telemetry.error()
+        watchdog?.cancel(); healthy?.cancel()
+        _state.update { it.copy(phase = LivePhase.LOADING, buffering = true, reconnecting = true, error = null) }
+        Log.i("VelvetLive", "Rejoining live window in the existing session")
+        player.seekToDefaultPosition()
+        player.prepare()
+        player.playWhenReady = true
+        startWatchdog()
+    }
+
+    private fun logLiveTiming(reason: String) {
+        if (!ownsPlayback()) return
+        val timeline = player.currentTimeline
+        if (timeline.isEmpty) return
+        val window = timeline.getWindow(player.currentMediaItemIndex, Timeline.Window())
+        // Numeric playback diagnostics only: never log media IDs, capability
+        // URLs, provider responses, or DRM payloads.
+        Log.i("VelvetLive", "$reason: liveOffsetMs=${player.currentLiveOffset}" +
+            " bufferedMs=${player.totalBufferedDuration} windowMs=${window.durationMs}" +
+            " defaultMs=${window.defaultPositionMs} targetMs=${window.liveConfiguration?.targetOffsetMs}")
     }
 
     private fun recover() {
