@@ -8,6 +8,9 @@ const LOCATION = 'https://apis.spectrum.net/pinxt/customer/location/v1';
 const LOCATION_TTL = 15 * 60 * 1000;
 const LOCATION_FIELDS = ['behindOwnModem','inMarket','stateAbbr','behindTheRouter'];
 const AUTH_FIELDS = ['accessToken','refreshToken','deviceId'];
+const AUTH_RENEW_EARLY = 10 * 60 * 1000;
+const AUTH_RETRY_MIN = 60 * 1000;
+const AUTH_RETRY_MAX = 15 * 60 * 1000;
 const tokenText = authText;
 function locationValue(value) {
   if (!value || typeof value!=='object' || Array.isArray(value) || typeof value.behindOwnModem!=='boolean' || typeof value.inMarket!=='boolean') throw new BridgeError();
@@ -27,6 +30,50 @@ export class SpectrumProvider {
     this.config = config; this.request = request; this.now = now;
     this.auth = null; this.pendingAuth = null; this.refreshing = null; this.cached = null; this.loading = null;
     this.locationCache = null; this.locationLoading = null;
+    this.authMaintenance = null;
+  }
+  startAuthMaintenance({onError=()=>{},setTimer=setTimeout,clearTimer=clearTimeout}={}) {
+    if (this.authMaintenance) return this.authMaintenance.stop;
+    const state={stopped:false,timer:null,work:Promise.resolve(),retry:AUTH_RETRY_MIN};
+    const schedule=delay=>{
+      if(state.stopped)return;
+      state.timer=setTimer(()=>{state.timer=null;state.work=run();return state.work;},delay);
+      state.timer.unref?.();
+    };
+    const run=async()=>{
+      if(state.stopped)return;
+      try {
+        const auth=await this.loadAuth();
+        if(state.stopped)return;
+        const expiry=Number(auth.expiresAt);
+        // Renew while idle, before the saved refresh token expires. Reuse the
+        // same singleflight and atomic persistence as foreground requests.
+        if(this.pendingAuth||!Number.isFinite(expiry)||expiry<=this.now()+AUTH_RENEW_EARLY)await this.refresh();
+        state.retry=AUTH_RETRY_MIN;
+        const next=Number(this.auth?.expiresAt)-this.now()-AUTH_RENEW_EARLY;
+        // Short/invalid provider lifetimes cannot create a tight refresh loop.
+        schedule(Math.max(AUTH_RETRY_MIN,Math.min(Number.isFinite(next)?next:AUTH_RETRY_MIN,3600000)));
+      } catch(error) {
+        try{onError(error);}catch{}
+        if(error instanceof BridgeError&&error.code==='sign_in_required') {
+          // Respect explicit login/countermeasure decisions. A newly provisioned
+          // session is loaded on service restart; never keep retrying a denial.
+          state.stopped=true;
+        } else {
+          schedule(state.retry);
+          state.retry=Math.min(state.retry*2,AUTH_RETRY_MAX);
+        }
+      }
+    };
+    const stop=async()=>{
+      state.stopped=true;
+      if(state.timer!==null){clearTimer(state.timer);state.timer=null;}
+      // Let a token rotation finish and persist; cancelling between the provider
+      // response and rename could otherwise discard its only valid refresh token.
+      await state.work.catch(()=>{});
+      await this.refreshing?.catch(()=>{});
+    };
+    this.authMaintenance={stop};schedule(0);return stop;
   }
   async loadAuth() {
     if (this.auth) return this.auth;

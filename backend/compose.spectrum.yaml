@@ -7,6 +7,8 @@ services:
       context: ../tve/spectrum
     image: velvet-spectrum:local
     restart: unless-stopped
+    # Allow an in-flight token rotation to be saved before Node exits.
+    stop_grace_period: 90s
     volumes:
       - ./spectrum-config:/config
     mem_limit: 2g

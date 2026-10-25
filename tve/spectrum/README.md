@@ -14,7 +14,7 @@ Older Velvet builds cannot use this source. Update every client before enabling 
 
 ## Private deployment
 
-The service currently requires a provisioned runtime session from your own signed-in Spectrum account. An account sign-in UI is not included in this source package. Do not copy another installation's session, place credentials in an image, or publish the private configuration directory. Normal refreshes use the stored refresh token. Expired sessions with a saved device verifier are checked with Spectrum first; device renewal occurs only when Spectrum explicitly directs it. Tokens and rotated device context are saved atomically. A provider instruction to sign in again is respected, and temporary provider failures do not become misleading sign-in prompts.
+The service currently requires a provisioned runtime session from your own signed-in Spectrum account. An account sign-in UI is not included in this source package. Do not copy another installation's session, place credentials in an image, or publish the private configuration directory. Normal refreshes use the stored refresh token. The service renews ten minutes before expiry even when nobody is watching, with one shared refresh operation for background and player requests. Temporary failures retry with delays of one to fifteen minutes. Expired sessions with a saved device verifier are checked with Spectrum first; device renewal occurs only when Spectrum explicitly directs it. Tokens and rotated device context are saved atomically. A provider instruction to sign in again stops automatic renewal attempts; provision the fresh session and restart the service. Temporary provider failures do not become misleading sign-in prompts.
 
 Create `backend/spectrum-config/` outside version control, protect it with mode `0700`, and protect its JSON files with mode `0600`:
 
@@ -40,6 +40,8 @@ guide_enabled = true
 ```
 
 The native service becomes the authoritative Live TV lineup and playback source. It does not silently fall back to PrismCast. The existing `upstream_url` remains available for the separate Roku sports browser path. An included channel does not guarantee availability outside the account's home.
+
+Keep the Compose service's 90-second shutdown grace period in other deployment tools. Shutdown cancels future renewal timers and waits for an in-flight token rotation to be saved, so a restart does not discard a newly issued refresh token.
 
 ## Program guide
 

@@ -318,3 +318,115 @@ test('license errors are allowlisted and an empty license never reaches the devi
   f.provider.request=async()=>reply(Buffer.alloc(0));
   await assert.rejects(()=>f.provider.license('widevine',{playerId:'own',ast:'fixture'},Buffer.from('challenge')),code('drm_unavailable'));
 });
+
+function authClock(start=NOW) {
+  let now=start,sequence=0;
+  const timers=new Map();
+  return {
+    now:()=>now,
+    setTimer:(run,delay)=>{const handle={id:++sequence,unref(){}};timers.set(handle,{run,at:now+delay});return handle;},
+    clearTimer:handle=>timers.delete(handle),
+    delays:()=>[...timers.values()].map(item=>item.at-now),
+    async advance(ms){now+=ms;for(const [handle,item]of [...timers])if(item.at<=now){timers.delete(handle);await item.run();}},
+  };
+}
+function maintain(t,provider,clock,onError=()=>{}) {
+  const stop=provider.startAuthMaintenance({setTimer:clock.setTimer,clearTimer:clock.clearTimer,onError});
+  t.after(stop);return stop;
+}
+
+test('idle authentication renews ten minutes before expiry and persists without opening streams',async t=>{
+  const clock=authClock();
+  const f=await fixture(t,options=>{
+    assert.equal(new URL(options.url).pathname,'/auth/oauth/v2/token');
+    return reply({access_token:'idle-access',refresh_token:'idle-refresh',expires_in:3600});
+  },{now:clock.now});
+  maintain(t,f.provider,clock);
+  await clock.advance(0);assert.equal(f.calls.length,0);assert.deepEqual(clock.delays(),[50*60*1000]);
+  await clock.advance(50*60*1000-1);assert.equal(f.calls.length,0);
+  await clock.advance(1);assert.equal(f.calls.length,1);
+  const stored=JSON.parse(await readFile(f.authFile,'utf8'));
+  assert.equal(stored.refreshToken,'idle-refresh');assert.equal(stored.expiresAt,clock.now()+3600000);
+  assert.equal(stored.deviceId,'fixture-device');assert.equal((await stat(f.authFile)).mode&0o777,0o600);
+  assert.deepEqual(clock.delays(),[50*60*1000]);
+});
+
+test('idle maintenance joins foreground refresh and shutdown waits for its rotated credentials',async t=>{
+  const clock=authClock(),entered=deferred(),release=deferred();
+  const f=await fixture(t,async()=>{entered.resolve();await release.promise;return reply({access_token:'next-access',refresh_token:'next-refresh',expires_in:3600});},
+    {saved:auth({expiresAt:NOW+1000}),now:clock.now});
+  const stop=maintain(t,f.provider,clock),tick=clock.advance(0);
+  await entered.promise;
+  const foreground=f.provider.token();let stopped=false;const closing=stop().then(()=>{stopped=true;});
+  await new Promise(r=>setImmediate(r));assert.equal(stopped,false);assert.equal(f.calls.length,1);
+  release.resolve();await Promise.all([tick,foreground,closing]);
+  assert.equal(JSON.parse(await readFile(f.authFile,'utf8')).refreshToken,'next-refresh');
+  assert.equal(stopped,true);assert.deepEqual(clock.delays(),[]);
+  await clock.advance(24*3600000);assert.equal(f.calls.length,1);
+});
+
+test('maintenance rechecks a foreground-rotated expiry instead of refreshing an old timer twice',async t=>{
+  const clock=authClock();
+  const f=await fixture(t,()=>reply({access_token:'next-access',refresh_token:'next-refresh',expires_in:7200}),{now:clock.now});
+  maintain(t,f.provider,clock);await clock.advance(0);
+  await clock.advance(20*60*1000);await f.provider.refresh();assert.equal(f.calls.length,1);
+  await clock.advance(30*60*1000);assert.equal(f.calls.length,1);
+  assert.deepEqual(clock.delays(),[3600000],'far-future deadlines are checked at most hourly');
+});
+
+test('idle outages back off to fifteen minutes, preserve valid foreground auth, and recover',async t=>{
+  const clock=authClock(),errors=[];
+  const f=await fixture(t,(_options,attempt)=>attempt<=6?reply({},503):reply({access_token:'recovered-access',refresh_token:'recovered-refresh',expires_in:3600}),
+    {saved:auth({expiresAt:NOW+10*60*1000}),now:clock.now});
+  maintain(t,f.provider,clock,error=>errors.push(error.code));await clock.advance(0);
+  assert.equal((await f.provider.token()).accessToken,'fixture-access');assert.equal(f.calls.length,1,'still-valid foreground auth does not join a background outage retry');
+  for(const minutes of [1,2,4,8,15,15]) {
+    assert.deepEqual(clock.delays(),[minutes*60000]);await clock.advance(minutes*60000);
+  }
+  assert.equal(f.calls.length,7);assert.deepEqual(errors,Array(6).fill('source_unavailable'));
+  assert.equal(JSON.parse(await readFile(f.authFile,'utf8')).refreshToken,'recovered-refresh');
+  assert.deepEqual(clock.delays(),[50*60*1000]);
+});
+
+test('a provider login decision stops idle renewal without discarding the saved session',async t=>{
+  const clock=authClock(),errors=[];
+  const saved=auth({expiresAt:NOW-1000,deviceVerifier:'fixture-verifier',contextToken:'fixture-context'});
+  const f=await fixture(t,options=>{
+    assert.equal(new URL(options.url).pathname,'/auth/oauth/v2/validateSession');
+    return reply({isValidSession:false,nextAction:'STANDARD_AUTH'});
+  },{saved,now:clock.now});
+  maintain(t,f.provider,clock,error=>errors.push(error.code));await clock.advance(0);
+  assert.equal(f.calls.length,1);assert.deepEqual(errors,['sign_in_required']);assert.deepEqual(clock.delays(),[]);
+  await clock.advance(7*24*3600000);assert.equal(f.calls.length,1);
+  assert.deepEqual(JSON.parse(await readFile(f.authFile,'utf8')),saved);
+});
+
+test('maintenance start is idempotent and stop before first tick makes no authentication request',async t=>{
+  const clock=authClock();
+  const f=await fixture(t,()=>{throw new Error('unexpected request');},{now:clock.now});
+  const stop=maintain(t,f.provider,clock);assert.equal(f.provider.startAuthMaintenance(),stop);
+  await stop();await clock.advance(24*3600000);assert.equal(f.calls.length,0);assert.deepEqual(clock.delays(),[]);
+});
+
+test('short auth lifetimes and a failing observer cannot create a tight refresh loop',async t=>{
+  const clock=authClock();
+  const f=await fixture(t,(_options,attempt)=>attempt===1?reply({},503):reply({access_token:'short-access',refresh_token:'short-refresh',expires_in:30}),
+    {saved:auth({expiresAt:NOW+1000}),now:clock.now});
+  maintain(t,f.provider,clock,()=>{throw new Error('observer failure');});await clock.advance(0);
+  assert.deepEqual(clock.delays(),[60000]);await clock.advance(60000);
+  assert.equal(f.calls.length,2);assert.deepEqual(clock.delays(),[60000]);
+});
+
+test('maintenance shutdown also waits for a foreground-only rotation while its own timer is idle',async t=>{
+  const clock=authClock(),entered=deferred(),release=deferred();
+  const f=await fixture(t,async()=>{entered.resolve();await release.promise;return reply({access_token:'foreground-access',refresh_token:'foreground-refresh',expires_in:3600});},
+    {now:clock.now});
+  const stop=maintain(t,f.provider,clock);await clock.advance(0);
+  assert.deepEqual(clock.delays(),[50*60*1000]);
+  const refresh=f.provider.refresh();await entered.promise;
+  let stopped=false;const closing=stop().then(()=>{stopped=true;});
+  await new Promise(r=>setImmediate(r));assert.equal(stopped,false);assert.deepEqual(clock.delays(),[]);
+  release.resolve();await Promise.all([refresh,closing]);
+  assert.equal(stopped,true);assert.equal(f.calls.length,1);
+  assert.equal(JSON.parse(await readFile(f.authFile,'utf8')).refreshToken,'foreground-refresh');
+});

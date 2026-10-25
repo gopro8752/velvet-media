@@ -42,6 +42,7 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
   const sessions=new Map(),pendingTunes=new Set(),cleanupJobs=new Set(),cleanupSessions=new Map();
   let opening=0,shuttingDown=false,certificate=null,certificateAt=0,certificateWork=null;
   const report=(event,error)=>log({event,code:error instanceof BridgeError?error.code:'source_unavailable'});
+  const stopAuthMaintenance=provider.startAuthMaintenance?.({onError:error=>report('auth_renewal_failed',error)});
   const owned=id=>{
     const session=CAP.test(id)&&sessions.get(id);
     if(!session||session.closed)throw new BridgeError('session_ended',404);
@@ -181,7 +182,7 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
       }return certificate;
     },
     async stop(id){const session=sessions.get(id)||cleanupSessions.get(id);if(session)await closeSession(session);},
-    async close(){shuttingDown=true;clearInterval(reaper);await Promise.allSettled([...pendingTunes]);await Promise.allSettled([...new Set([...sessions.values(),...cleanupSessions.values()])].map(closeSession));await Promise.allSettled([...cleanupJobs]);if(cleanupSessions.size)report('shutdown_leases_unconfirmed',new BridgeError());},
+    async close(){shuttingDown=true;clearInterval(reaper);const authClosing=stopAuthMaintenance?.();await Promise.allSettled([...pendingTunes]);await Promise.allSettled([...new Set([...sessions.values(),...cleanupSessions.values()])].map(closeSession));await Promise.allSettled([...cleanupJobs]);await authClosing;if(cleanupSessions.size)report('shutdown_leases_unconfirmed',new BridgeError());},
     report,
   };
 }

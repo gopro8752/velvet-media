@@ -230,3 +230,16 @@ test('HTTP routes sanitize errors and reject arbitrary proxy requests',async t=>
   const invalid=await fetch(base+'/live/tune',{method:'POST',body:JSON.stringify({channelId:'example',url:'https://untrusted.example'})});
   assert.equal(invalid.status,400);
 });
+
+test('bridge starts auth maintenance, sanitizes its errors, and waits for rotation during shutdown',async t=>{
+  const finished=deferred(),events=[];let started=0,stopped=0;
+  const bridge=createBridge(config,{provider:{startAuthMaintenance({onError}){
+    started++;onError(new Error('private-provider-response'));
+    return()=>{stopped++;return finished.promise;};
+  }},log:event=>events.push(event)});
+  t.after(()=>bridge.close());
+  assert.equal(started,1);assert.deepEqual(events,[{event:'auth_renewal_failed',code:'source_unavailable'}]);
+  let closed=false;const closing=bridge.close().then(()=>{closed=true;});
+  await new Promise(r=>setImmediate(r));assert.equal(stopped,1);assert.equal(closed,false);
+  finished.resolve();await closing;assert.equal(closed,true);
+});
