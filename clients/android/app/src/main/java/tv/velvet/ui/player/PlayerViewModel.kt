@@ -372,6 +372,8 @@ class PlayerViewModel(
         .setSeekForwardIncrementMs(10_000)
         .build()
 
+    private val playbackDiagnostics = PlaybackAudioDiagnostics(app, player)
+
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             telemetry.observe()
@@ -424,6 +426,7 @@ class PlayerViewModel(
         )
         player.playWhenReady = true
         player.addListener(playerListener)
+        player.addAnalyticsListener(playbackDiagnostics)
         // Subtitles start off; the picker enables a specific embedded text track.
         // Multi-language releases default to English audio; a manual pick from the
         // audio picker overrides this for the session.
@@ -2238,6 +2241,7 @@ class PlayerViewModel(
         val meta = currentEpisodeMeta
         if (!isQueue) persistScope.launch { persistProgress(pos, dur, season, episode, meta) }
         player.removeListener(playerListener)
+        playbackDiagnostics.close()
         player.release()
     }
 }
