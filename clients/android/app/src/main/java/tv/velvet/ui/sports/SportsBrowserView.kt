@@ -2,6 +2,7 @@ package tv.velvet.ui.sports
 
 import android.content.Context
 import android.os.Handler
+import android.os.SystemClock
 import android.os.Looper
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
@@ -14,7 +15,7 @@ import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 import org.mozilla.geckoview.WebExtension
 import org.json.JSONObject
-import tv.velvet.data.sports.SportsStartupFramePolicy
+import tv.velvet.data.sports.isSportsStartupFrameAllowed
 import tv.velvet.data.sports.isEmbedNavigationAllowed
 import tv.velvet.data.sports.isSafeEmbed
 
@@ -33,31 +34,31 @@ internal class SportsBrowserView(
     private val handler = Handler(Looper.getMainLooper())
     private var closed = false
     private var started = false
+    private var loadStartedAt = 0L
     private var playingPort: WebExtension.Port? = null
     private var failed = false
     private var startupExtension: WebExtension? = null
     private val startupPorts = mutableSetOf<WebExtension.Port>()
-    private val waitingStartupPorts = mutableSetOf<WebExtension.Port>()
-    private val startupFrames = SportsStartupFramePolicy(embed)
 
     private fun stopStartup() {
-        (startupPorts + waitingStartupPorts).forEach { runCatching { it.postMessage(JSONObject().put("type", "stop")) } }
+        startupPorts.forEach { runCatching { it.postMessage(JSONObject().put("type", "stop")) } }
     }
     private fun startPort(port: WebExtension.Port) {
-        waitingStartupPorts -= port
         startupPorts += port
-        port.postMessage(JSONObject().put("type", if (started || failed) "stop" else "start"))
+        // Share the same overall deadline with JS, leaving a one-second delivery
+        // margin before native timeout. Page-load time never extends this budget.
+        val observeMs = (44_000L - (SystemClock.elapsedRealtime() - loadStartedAt)).coerceIn(0L, 44_000L)
+        port.postMessage(JSONObject().put("type", if (started || failed) "stop" else "start").put("observeMs", observeMs))
     }
     private val startupMessages = object : WebExtension.MessageDelegate {
         override fun onConnect(port: WebExtension.Port) {
             val sender = port.sender
-            val accepted = startupFrames.accepts(sender.url, sender.isTopLevel)
-            android.util.Log.d("VelvetSports", "Startup frame: top=${sender.isTopLevel}, approved=$accepted, candidate=${startupFrames.mayWait(sender.url, sender.isTopLevel)}")
-            if (closed || failed || sender.session !== browserSession || startupPorts.size >= 8 ||
-                (!accepted && (waitingStartupPorts.size >= 4 || !startupFrames.mayWait(sender.url, sender.isTopLevel)))) {
+            val accepted = isSportsStartupFrameAllowed(embed, sender.url, sender.isTopLevel)
+            android.util.Log.d("VelvetSports", "Startup frame: top=${sender.isTopLevel}, approved=$accepted")
+            if (closed || failed || sender.session !== browserSession || startupPorts.size >= 4 || !accepted) {
                 port.disconnect(); return
             }
-            if (accepted) startupPorts += port else waitingStartupPorts += port
+            startupPorts += port
             port.setDelegate(object : WebExtension.PortDelegate {
                 override fun onPortMessage(message: Any, source: WebExtension.Port) {
                     val value = message as? JSONObject ?: return
@@ -68,13 +69,8 @@ internal class SportsBrowserView(
                         return
                     }
                     if (started) return
-                    if (value.optString("state") == "child") {
-                        val parent = source.sender
-                        val child = value.optString("frame")
-                        if (startupFrames.register(parent.url, parent.isTopLevel, child, value.optInt("width"), value.optInt("height"))) {
-                            android.util.Log.d("VelvetSports", "Approved visible player frame")
-                            waitingStartupPorts.filter { startupFrames.accepts(it.sender.url, it.sender.isTopLevel) }.forEach(::startPort)
-                        }
+                    if (value.optString("state") == "startup") {
+                        android.util.Log.d("VelvetSports", "Startup status: attempts=${value.optInt("attempts").coerceIn(0, 8)}, video=${value.optBoolean("video")}, visible=${value.optBoolean("visibleVideo")}, source=${value.optBoolean("source")}, idleControl=${value.optBoolean("idleControl")}, player=${value.optBoolean("player")}, ready=${value.optInt("readyState").coerceIn(0, 4)}, paused=${value.optBoolean("paused")}, network=${value.optInt("networkState").coerceIn(0, 3)}, error=${value.optInt("errorCode").coerceIn(0, 4)}")
                         return
                     }
                     if (value.optString("state") != "playing" || !value.optBoolean("advanced") || value.optInt("readyState") !in 2..4 ||
@@ -86,7 +82,7 @@ internal class SportsBrowserView(
                     stopStartup()
                     onLoading(false); onStarted()
                 }
-                override fun onDisconnect(port: WebExtension.Port) { startupPorts -= port; waitingStartupPorts -= port }
+                override fun onDisconnect(port: WebExtension.Port) { startupPorts -= port }
             })
             if (accepted) startPort(port)
         }
@@ -106,7 +102,7 @@ internal class SportsBrowserView(
                 return decision(allowed)
             }
             override fun onSubframeLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest) =
-                decision(!closed && startupFrames.allowsFrameNavigation(request.uri))
+                decision(false) // StreamFree plays in this document; its iframe is an advertisement.
             override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? = blankChild()
             override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
                 fail("This stream couldn't load. Try another stream or Reload.")
@@ -143,6 +139,7 @@ internal class SportsBrowserView(
                     if (!closed && allowed != null) {
                         startupExtension = allowed
                         browserSession.webExtensionController.setMessageDelegate(allowed, startupMessages, "velvetSportsStartup")
+                        loadStartedAt = SystemClock.elapsedRealtime()
                         browserSession.loadUri(embed)
                         handler.postDelayed({ if (!closed && !started) fail("Automatic startup timed out. Try Player controls, another stream or Reload.", manual = true) }, 45_000)
                     }
@@ -187,8 +184,8 @@ internal class SportsBrowserView(
         keepScreenOn = false
         handler.removeCallbacksAndMessages(null)
         children.toList().forEach(::closeChild)
-        (startupPorts + waitingStartupPorts).forEach { it.disconnect() }
-        startupPorts.clear(); waitingStartupPorts.clear(); startupFrames.clear()
+        startupPorts.forEach { it.disconnect() }
+        startupPorts.clear()
         startupExtension?.let { browserSession.webExtensionController.setMessageDelegate(it, null, "velvetSportsStartup") }
         browserSession.setActive(false)
         browserSession.setFocused(false)

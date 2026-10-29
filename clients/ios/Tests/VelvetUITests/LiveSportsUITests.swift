@@ -41,7 +41,7 @@ final class LiveSportsUITests: XCTestCase {
         }
         waitForOrientation(landscape: true)
         XCTAssertTrue(app.webViews.staticTexts["Fixture stream HD"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.webViews.staticTexts["Video playing"].waitForExistence(timeout: 30), "The isolated iframe must play inline HLS.")
+        XCTAssertTrue(app.webViews.staticTexts["Video playing"].waitForExistence(timeout: 30), "The selected embed must play inline HLS.")
         XCTAssertTrue(app.staticTexts["Starting stream…"].waitForNonExistence(timeout: 10))
         capture("Embedded sports player")
         app.webViews.buttons["Pause fixture"].tap()

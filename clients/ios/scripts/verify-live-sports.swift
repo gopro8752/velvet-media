@@ -22,10 +22,10 @@ final class SportsMockProtocol: URLProtocol {
         expect(!SportsScope.upcoming.includes(event, now: event.startTime.addingTimeInterval(-60)), "Live event cannot also be upcoming")
         let fractional = String(data: eventData, encoding: .utf8)!.replacingOccurrences(of: "19:30:00Z", with: "19:30:00.123Z")
         _ = try LiveDateDecoder.make().decode(SportsEvent.self, from: Data(fractional.utf8))
-        for path in ["https://embed.st/embed/golf/a/1", "https://embed.pk/embed/hotel/a/2"] {
+        for path in ["https://strmfree.st/embed/basketball/a1080p", "https://streamfree.top/embed/soccer/cf-montr%C3%A9al1080p"] {
             expect(SportsEmbedPolicy.accepts(URL(string: path)!), "Official embed rejected")
         }
-        for path in ["http://embed.st/embed/a", "https://embed.st.evil.example/embed/a", "https://name:pass@embed.st/embed/a", "https://embed.st:8443/embed/a", "https://embed.st/login", "file:///tmp/video", "javascript:alert(1)", "https://127.0.0.1/embed/a"] {
+        for path in ["http://strmfree.st/embed/basketball/a", "https://strmfree.st.evil.example/embed/basketball/a", "https://name:pass@strmfree.st/embed/basketball/a", "https://strmfree.st:8443/embed/basketball/a", "https://strmfree.st/login", "file:///tmp/video", "javascript:alert(1)", "https://127.0.0.1/embed/basketball/a", "https://strmfree.st/embed/basketball/a?redirect=ad", "https://strmfree.st/embed/basketball/a#player", "https://strmfree.st/embed/basketball/a%2fb", "https://strmfree.st/embed/basketball/a%252fb", "https://strmfree.st/embed/basketball/%2e%2e", "https://strmfree.st/embed/basketball/a/", "https://embed.st/embed/golf/a/1"] {
             expect(!SportsEmbedPolicy.accepts(URL(string: path)!), "Unsafe embed accepted: \(path)")
         }
         let guide = try LiveDateDecoder.make().decode(LiveGuide.self, from: Data(#"{"enabled":true,"sourceName":"Spectrum","updatedAt":null,"channels":[{"channelId":"tv","programs":[{"id":"next","title":"Next","startTime":"2026-10-12T20:00:00Z","endTime":"2026-10-12T21:00:00Z"},{"id":"now","title":"Current","startTime":"2026-10-12T19:00:00Z","endTime":"2026-10-12T20:00:00Z"}]}]}"#.utf8))
@@ -39,7 +39,7 @@ final class SportsMockProtocol: URLProtocol {
         var lastRequest: URLRequest?
         SportsMockProtocol.handler = { request in
             lastRequest = request
-            return (200, Data(#"{"eventId":"event","streams":[{"id":"same","source":"golf","streamNo":1,"language":"English","hd":true,"embedUrl":"https://embed.st/embed/golf/a/1"},{"id":"same","source":"golf","streamNo":2,"language":"Spanish","hd":false,"embedUrl":"https://embed.st/embed/golf/a/2"},{"id":"bad","source":"golf","streamNo":3,"language":"English","hd":true,"embedUrl":"https://evil.example/player"}]}"#.utf8))
+            return (200, Data(#"{"eventId":"event","streams":[{"id":"same","source":"golf","streamNo":1,"language":"English","hd":true,"embedUrl":"https://strmfree.st/embed/basketball/a1080p"},{"id":"same","source":"golf","streamNo":2,"language":"Spanish","hd":false,"embedUrl":"https://strmfree.st/embed/basketball/a1080p2"},{"id":"bad","source":"golf","streamNo":3,"language":"English","hd":true,"embedUrl":"https://evil.example/player"}]}"#.utf8))
         }
         let streams = try await client.streams(eventID: "event")
         expect(streams.streams.count == 2, "HD/language variants must survive dedupe; invalid hosts must be removed")
@@ -48,7 +48,7 @@ final class SportsMockProtocol: URLProtocol {
         do { _ = try await client.streams(eventID: "other"); preconditionFailure("Wrong event accepted") } catch is SportsError { }
         SportsMockProtocol.handler = { request in
             lastRequest = request
-            return (200, Data(#"{"enabled":true,"sourceName":"Streamed","sports":[],"events":[]}"#.utf8))
+            return (200, Data(#"{"enabled":true,"sourceName":"StreamFree","sports":[],"events":[]}"#.utf8))
         }
         _ = try await client.events(scope: .upcoming)
         expect(lastRequest?.url?.query == "scope=all", "Upcoming must request full catalog then filter future events")

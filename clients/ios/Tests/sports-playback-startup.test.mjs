@@ -8,7 +8,7 @@ const swift = readFileSync(new URL('../Velvet/UI/LiveSports/SportsPlaybackStartu
 const script = swift.match(/static let script = #"""\n([\s\S]*?)\n\s*"""#/u)?.[1];
 assert.ok(script, 'The test must extract the actual Swift startup script.');
 
-function fixture({ url = 'https://embed.st/embed/golf/2181/1', selectedEmbed = 'https://embed.st/embed/golf/2181/1', width = 1280, height = 720, hidden = false } = {}) {
+function fixture({ url = 'https://strmfree.st/embed/basketball/wizards-vs-cavaliers1080p', selectedEmbed = 'https://strmfree.st/embed/basketball/wizards-vs-cavaliers1080p', width = 1280, height = 720, hidden = false } = {}) {
   let now = 0;
   let nextTimer = 0;
   const timers = new Map();
@@ -16,24 +16,22 @@ function fixture({ url = 'https://embed.st/embed/golf/2181/1', selectedEmbed = '
   const videos = [];
   const controls = [];
   const location = new URL(url);
-  const parts = new URL(selectedEmbed).pathname.split('/').filter(Boolean);
   const config = { embedURL: selectedEmbed };
-  if (parts.length === 4 && parts[0] === 'embed' && parts[1] === 'golf') {
-    config.golfID = parts[2];
-  }
   const configuredScript = script.replace('__VELVET_STARTUP_CONFIG__', JSON.stringify(config));
   const document = {
     hidden,
     location,
     querySelectorAll(selector) {
       if (selector === 'video') return videos;
-      assert.match(selector, /jwplayer|player-poster/u, 'Only known player controls may be queried.');
+      assert.match(selector, /jwplayer/u, 'Only known player controls may be queried.');
       assert.doesNotMatch(selector, /\ba\[|button|innerText|textContent/u, 'Do not widen startup to links or generic buttons.');
       return controls;
     },
   };
   const context = vm.createContext({
     URL, document, location, innerWidth: width, innerHeight: height,
+    PointerEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
+    MouseEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
     performance: { now: () => now },
     addEventListener() {},
     getComputedStyle: element => element.style,
@@ -56,7 +54,7 @@ function fixture({ url = 'https://embed.st/embed/golf/2181/1', selectedEmbed = '
   return {
     document, videos, controls, messages,
     control(options = {}) {
-      const control = { ...element(options), clicks: 0, click() { this.clicks++; } };
+      const control = { ...element(options), clicks: 0, events: [], dispatchEvent(event) { this.events.push(event.type); if (event.type === "click") this.clicks++; } };
       controls.push(control);
       return control;
     },
@@ -100,6 +98,7 @@ test('retries only the intended initial Play control at a bounded cadence', () =
   const control = f.control();
   f.start();
   assert.equal(control.clicks, 1);
+  assert.deepEqual(control.events, ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]);
   f.advance(1200);
   assert.equal(control.clicks, 1);
   f.advance(300);
@@ -107,56 +106,8 @@ test('retries only the intended initial Play control at a bounded cadence', () =
   assert.equal(f.messages.some(message => message.state === 'playing'), false);
 });
 
-test('candidate frames cannot play or click before native approval', () => {
-  const f = fixture({ url: 'https://embed.st/embed/ingest/streamedportlandtrailblazers/1' });
-  const control = f.control();
-  f.start(false);
-  assert.deepEqual(f.messages, [{ state: 'ready' }]);
-  f.advance(5000);
-  assert.equal(control.clicks, 0);
-  assert.equal(f.timerCount, 0);
-  f.approve();
-  assert.equal(control.clicks, 1);
-  assert.equal(f.timerCount, 1);
-});
-
-test('Golf 2 declared alternate wrapper waits for approval despite its internal no=1', () => {
-  const f = fixture({
-    selectedEmbed: 'https://embed.st/embed/golf/2181/2',
-    url: 'https://rockylive.st/source/streamed.php?id=2181&no=1',
-  });
-  const control = f.control();
-  f.start(false);
-  assert.deepEqual(f.messages, [{ state: 'ready' }]);
-  f.advance(5000);
-  assert.equal(control.clicks, 0);
-  assert.equal(f.timerCount, 0);
-  f.approve();
-  assert.equal(control.clicks, 1);
-  assert.equal(f.timerCount, 1);
-});
-
-test('declared ingest trailing slash remains a candidate requiring native approval', () => {
-  const f = fixture({
-    selectedEmbed: 'https://embed.st/embed/golf/2181/2',
-    url: 'https://embed.st/embed/ingest/streamedportlandtrailblazers/1/',
-  });
-  const video = f.video();
-  f.start(false);
-  assert.deepEqual(f.messages, [{ state: 'ready' }]);
-  f.advance(5000);
-  assert.equal(video.plays, 0);
-  assert.equal(f.timerCount, 0);
-  f.approve();
-  assert.equal(video.plays, 1);
-  assert.equal(f.timerCount, 1);
-});
-
-test('declared Clappr autoplay fragment still needs explicit native approval', () => {
-  const f = fixture({
-    selectedEmbed: 'https://embed.st/embed/golf/2181/2',
-    url: 'https://embed.st/embed/ingest/streamedportlandtrailblazers/1/#player=clappr&autoplay=true',
-  });
+test('the selected embed cannot play or click before native approval', () => {
+  const f = fixture();
   const control = f.control();
   f.start(false);
   assert.deepEqual(f.messages, [{ state: 'ready' }]);
@@ -169,44 +120,11 @@ test('declared Clappr autoplay fragment still needs explicit native approval', (
 });
 
 test('late approval cannot restart a canceled candidate', () => {
-  const f = fixture({ url: 'https://embed.st/embed/ingest/streamedportlandtrailblazers/1' });
+  const f = fixture();
   const control = f.control();
-  f.start(false);
-  f.cancel();
-  f.approve();
-  f.advance(5000);
+  f.start(false); f.cancel(); f.approve(); f.advance(5000);
   assert.equal(control.clicks, 0);
   assert.equal(f.timerCount, 0);
-});
-
-test('malformed or unrelated ingest candidates cannot request or receive startup', () => {
-  const child = 'https://embed.st/embed/ingest/streamedportlandtrailblazers/1';
-  for (const options of [
-    { url: `${child}?event=other` },
-    { url: `${child}#player` },
-    { url: `${child}#player=jw&autoplay=true` },
-    { url: `${child}#player=clappr&autoplay=false` },
-    { url: `${child}#autoplay=true&player=clappr` },
-    { url: `${child}#player=clappr&autoplay=true&autoplay=true` },
-    { url: child.replace('embed.st', 'embed.st.evil.example') },
-    { url: child.replace('embed.st', 'embed.st:444') },
-    { url: child.replace('embed.st', 'user:pass@embed.st') },
-    { url: child.replace('https:', 'http:') },
-    { url: child.replace('/1', '/0') },
-    { url: child.replace('/1', '/1000') },
-    { url: child.replace('streamedportlandtrailblazers', '_unrelated') },
-    { url: child, selectedEmbed: 'https://embed.st/embed/admin/game/1' },
-  ]) {
-    const f = fixture(options);
-    const control = f.control();
-    const video = f.video();
-    f.start();
-    f.advance(5000);
-    assert.equal(f.messages.length, 0, options.url);
-    assert.equal(control.clicks, 0, options.url);
-    assert.equal(video.plays, 0, options.url);
-    assert.equal(f.timerCount, 0, options.url);
-  }
 });
 
 test('does not click anchors or invisible player controls', () => {
@@ -232,31 +150,21 @@ test('ignores hidden advertising frames and background documents', () => {
   }
 });
 
-test('unrelated/ad frames and wrong Golf identity cannot act or report progress', () => {
+test('ads, other events, other variants, and old providers cannot act or report progress', () => {
   for (const url of [
     'https://advertising.example/player',
-    'https://embed.st/ad.html',
-    'https://embed.st/embed/golf/2180/1',
-    'https://rockylive.st/source/streamed1.php?id=2180&no=1',
-    'https://rockylive.st/source/streamed1.php?id=2181&id=2181&no=1',
-    'https://rockylive.st/source/streamed1.php?id=2181&no=1&no=1',
-    'https://rockylive.st/source/streamed.php?id=2181&no=0',
-    'https://rockylive.st/source/streamed.php?id=2181&no=1000',
-    'https://rockylive.st/source/streamed.php?id=2181&no=1&hd=531&hd=531',
-    'https://rockylive.st/source/streamed.php?id=2181&no=1&hd=not-numeric',
-    'https://rockylive.st/source/streamed.php?id=2181&no=1&redirect=other',
-    'https://rockylive.st/source/streamed.php?id=2181&no=1#player',
-    'https://rockylive.st:444/source/streamed1.php?id=2181&no=1',
-    'https://user:pass@rockylive.st/source/streamed1.php?id=2181&no=1',
-    'http://rockylive.st/source/streamed1.php?id=2181&no=1',
-    'https://rockylive.st/unrelated?id=2181&no=1',
+    'https://strmfree.st/ad.html',
+    'https://strmfree.st/embed/basketball/other-game1080p',
+    'https://strmfree.st/embed/basketball/wizards-vs-cavaliers1080p2',
+    'https://streamfree.top/embed/basketball/wizards-vs-cavaliers1080p',
+    'https://strmfree.st/embed/basketball/wizards-vs-cavaliers1080p?redirect=ad',
+    'https://embed.st/embed/golf/2181/1',
+    'https://rockylive.st/source/streamed1.php?id=2181&no=1',
   ]) {
     const f = fixture({ url });
     const control = f.control();
     const video = f.video({ paused: false });
-    f.start();
-    video.currentTime = 4;
-    f.advance(3000);
+    f.start(); video.currentTime = 4; f.advance(3000);
     assert.equal(control.clicks, 0, url);
     assert.equal(video.plays, 0, url);
     assert.equal(f.messages.length, 0, url);
@@ -264,13 +172,11 @@ test('unrelated/ad frames and wrong Golf identity cannot act or report progress'
   }
 });
 
-test('a Golf nested frame cannot report progress for an Admin selection', () => {
-  const f = fixture({ url: 'https://rockylive.st/source/streamed1.php?id=2181&no=1', selectedEmbed: 'https://embed.st/embed/admin/game/1' });
-  const video = f.video({ paused: false });
-  f.start();
-  video.currentTime = 4;
-  f.advance(3000);
-  assert.equal(f.messages.length, 0);
+test('the exact selected Unicode embed receives approval', () => {
+  const selectedEmbed = 'https://strmfree.st/embed/soccer/cf-montr%C3%A9al1080p';
+  const f = fixture({ url: selectedEmbed, selectedEmbed });
+  const control = f.control(); f.start();
+  assert.equal(control.clicks, 1);
 });
 
 test('small video elements are not treated as the event player', () => {
@@ -284,7 +190,7 @@ test('small video elements are not treated as the event player', () => {
 });
 
 test('a decoded picture and advancing time are both required; later Pause remains paused', () => {
-  const f = fixture({ url: 'https://rockylive.st/source/streamed1.php?hd=531&id=2181&no=1' });
+  const f = fixture();
   const video = f.video({ videoWidth: 0, videoHeight: 0 });
   f.start();
   assert.equal(video.plays, 1);
@@ -305,14 +211,14 @@ test('a decoded picture and advancing time are both required; later Pause remain
   assert.equal(video.paused, true);
 });
 
-test('a source-bearing video uses play without also pressing player controls', () => {
+test('the JW initial poster owns startup when a prepared source already exists', () => {
   const f = fixture();
   const video = f.video();
   const control = f.control();
   f.start();
   f.advance(3000);
-  assert.equal(video.plays, 1);
-  assert.equal(control.clicks, 0);
+  assert.equal(video.plays, 0);
+  assert.equal(control.clicks, 3);
 });
 
 test('an empty video source still reaches the intended initial Play control', () => {

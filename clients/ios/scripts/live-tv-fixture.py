@@ -5,6 +5,7 @@ Run before LiveTVUITests. It serves a generated, silent HLS test pattern and
 tracks live viewer cleanup. API authentication deliberately uses a dummy token.
 """
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -38,30 +39,26 @@ def iso(seconds):
 def sports_events(scope):
     now = time.time()
     if REAL_SPORTS:
-        matches = json.load(urllib.request.urlopen("https://streamed.st/api/matches/live", timeout=20))
-        return {"enabled": True, "sourceName": "Streamed", "sports": [{"id": "basketball", "name": "Basketball"}, {"id": "american-football", "name": "American Football"}],
-                "events": [{"id": match["id"], "title": match["title"], "sportId": match.get("category", "sports"), "sportName": match.get("category", "Sports").title(),
-                            "startTime": iso(match["date"] / 1000), "isLive": True, "popular": bool(match.get("popular")), "posterUrl": None,
-                            "homeTeam": None, "awayTeam": None, "sourceCount": len(match.get("sources", []))} for match in matches], "message": None}
+        matches = json.load(urllib.request.urlopen("https://strmfree.st/api/v1/streams", timeout=20))["streams"]
+        return {"enabled": True, "sourceName": "StreamFree", "sports": [{"id": "basketball", "name": "Basketball"}, {"id": "soccer", "name": "Soccer"}],
+                "events": [{"id": match["stream_key"], "title": match["name"], "sportId": match.get("category", "sports"), "sportName": match.get("category", "Sports").title(),
+                            "startTime": iso(match["match_timestamp"]), "isLive": bool(match.get("live_sources")), "popular": False, "posterUrl": None,
+                            "homeTeam": None, "awayTeam": None, "sourceCount": len(match.get("live_sources", []))} for match in matches if match.get("live_sources")], "message": None}
     def event(id, title, sport, live, start):
         return {"id": id, "title": title, "sportId": sport, "sportName": sport.title(), "startTime": iso(start),
                 "isLive": live, "popular": live, "posterUrl": None, "homeTeam": None, "awayTeam": None, "sourceCount": 2}
     events = [event("test-event", "Fixture Tigers vs Bears", "basketball", True, now - 900),
               event("future-event", "Tomorrow United vs City", "football", False, now + 86400)]
-    return {"enabled": True, "sourceName": "Streamed", "sports": [{"id": "basketball", "name": "Basketball"}, {"id": "football", "name": "Football"}],
+    return {"enabled": True, "sourceName": "StreamFree", "sports": [{"id": "basketball", "name": "Basketball"}, {"id": "football", "name": "Football"}],
             "events": events if scope == "all" else events[:1], "message": None}
 
 
 def sports_streams(event_id):
     if REAL_SPORTS:
-        matches = json.load(urllib.request.urlopen("https://streamed.st/api/matches/live", timeout=20))
-        match = next(m for m in matches if m["id"] == event_id)
-        streams = []
-        for source in match.get("sources", []):
-            try:
-                streams.extend(json.load(urllib.request.urlopen("https://streamed.st/api/stream/" + source["source"] + "/" + source["id"], timeout=20)))
-            except Exception:
-                pass
+        matches = json.load(urllib.request.urlopen("https://strmfree.st/api/v1/streams", timeout=20))["streams"]
+        match = next(m for m in matches if m["stream_key"] == event_id)
+        streams = [{"id": event_id, "source": "streamfree", "streamNo": i + 1, "language": "", "hd": True, "embedUrl": url}
+                   for i, url in enumerate(match.get("live_sources", []))]
         return {"eventId": event_id, "streams": streams, "message": None}
     return {"eventId": event_id, "streams": [
         {"id": "same-id", "source": "fixture", "streamNo": 1, "language": "English", "hd": True, "embedUrl": "http://127.0.0.1:18881/embed/hd"},
@@ -198,8 +195,9 @@ if __name__ == "__main__":
             "-hls_flags", "delete_segments", str(ROOT / "index.m3u8")
         ])
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", 18881), Handler)
-            print("Local Live TV fixture listening on127.0.0.1:18881", flush=True)
+            host = os.environ.get("VELVET_FIXTURE_BIND", "127.0.0.1")
+            server = ThreadingHTTPServer((host, 18881), Handler)
+            print(f"Live TV fixture listening on {host}:18881", flush=True)
             server.serve_forever()
         finally:
             encoder.terminate()

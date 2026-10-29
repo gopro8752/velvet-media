@@ -49,11 +49,11 @@ mod tests {
     fn origin() -> Url { Url::parse("http://bridge:5589").unwrap() }
     #[test]
     fn capture_accepts_only_catalog_embed_hosts() {
-        let url = capture_url(&origin(), "https://embed.st/embed/admin/event/1").unwrap();
+        let url = capture_url(&origin(), "https://strmfree.st/embed/basketball/event1080p").unwrap();
         assert_eq!(url.origin(), origin().origin());
         assert_eq!(url.path(), "/play");
         assert!(url.query_pairs().any(|(k,v)| k == "profile" && v == "embeddedPlayer"));
-        for input in ["http://127.0.0.1/admin", "https://embed.st.evil/embed/a", "https://embed.st/embed/../admin", "https://embed.st/embed/a?url=http://localhost"] {
+        for input in ["http://127.0.0.1/admin", "https://strmfree.st.evil/embed/basketball/a", "https://strmfree.st/embed/../admin", "https://strmfree.st/embed/basketball/a?url=http://localhost"] {
             assert!(capture_url(&origin(), input).is_err(), "accepted {input}");
         }
     }
@@ -78,7 +78,7 @@ mod tests {
         let upstream_base = format!("http://{}",listener.local_addr().unwrap());
         let upstream_task = tokio::spawn(async move { axum::serve(listener,upstream).await.unwrap() });
         let no_redirect = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-        assert!(start(&no_redirect,&Url::parse(&upstream_base).unwrap(),"https://embed.st/embed/admin/event/1").await.is_err(),"unexpected redirect status must fail");
+        assert!(start(&no_redirect,&Url::parse(&upstream_base).unwrap(),"https://strmfree.st/embed/basketball/event1080p").await.is_err(),"unexpected redirect status must fail");
         upstream_task.abort();
 
         let upstream = Router::new()
@@ -90,7 +90,7 @@ mod tests {
         let upstream_task = tokio::spawn(async move { axum::serve(listener,upstream).await.unwrap() });
         let cfg = crate::config::LiveTv { enabled:true, upstream_url:upstream_base, guide_enabled:false, ..Default::default() };
         let (router,bridge) = crate::live::router_with_bridge(cfg,String::new()).unwrap();
-        let tuned = bridge.tune_sports("https://embed.st/embed/admin/event/1","event-1","Example game",None).await.unwrap();
+        let tuned = bridge.tune_sports("https://strmfree.st/embed/basketball/event1080p","event-1","Example game",None).await.unwrap();
         assert_eq!(tuned["channel"]["name"],"Example game");
         assert_eq!(tuned["canSeek"],false);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

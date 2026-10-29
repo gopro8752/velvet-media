@@ -1,4 +1,4 @@
-//! Streamed's public event catalog and intended embed URLs. Native clients use
+//! StreamFree's public event catalog and documented embed URLs. Native clients use
 //! the configured browser bridge; no player credentials, watch-history writes,
 //! extracted playback tokens, or client-supplied origins are accepted.
 use crate::config::LiveSports;
@@ -11,7 +11,6 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
-use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -21,7 +20,9 @@ use std::{
 };
 use tokio::sync::{Mutex, Semaphore};
 
-const ORIGIN: &str = "https://streamed.st";
+const ORIGIN: &str = "https://strmfree.st";
+const CATALOG: &str = "/api/v1/streams";
+const CATEGORIES: &str = "/api/v1/categories";
 const MAX_BODY: usize = 4 * 1024 * 1024;
 const MAX_EVENTS: usize = 2000;
 const CACHE_SIZE: usize = 128;
@@ -37,7 +38,7 @@ impl IntoResponse for SportsError {
 fn unavailable() -> SportsError {
     SportsError(
         StatusCode::BAD_GATEWAY,
-        "Streamed is unavailable; try again shortly",
+        "StreamFree is unavailable; try again shortly",
     )
 }
 fn response(mut response: Response) -> Response {
@@ -132,12 +133,20 @@ struct SportsState {
     clients: Semaphore,
     bridge: Option<crate::live::NativeBridge>,
 }
-pub(crate) fn router_with_bridge(cfg: LiveSports, token: String, bridge: crate::live::NativeBridge) -> anyhow::Result<Router> {
+pub(crate) fn router_with_bridge(
+    cfg: LiveSports,
+    token: String,
+    bridge: crate::live::NativeBridge,
+) -> anyhow::Result<Router> {
     build_router(cfg, token, Some(bridge))
 }
-fn build_router(cfg: LiveSports, token: String, bridge: Option<crate::live::NativeBridge>) -> anyhow::Result<Router> {
+fn build_router(
+    cfg: LiveSports,
+    token: String,
+    bridge: Option<crate::live::NativeBridge>,
+) -> anyhow::Result<Router> {
     let http = reqwest::Client::builder()
-        .user_agent("Velvet/1.0 (Streamed catalog)")
+        .user_agent("Velvet/1.0 (StreamFree catalog)")
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(4))
         .timeout(Duration::from_secs(12))
@@ -218,11 +227,7 @@ async fn fetch(state: &SportsState, path: &str) -> Result<Value> {
         .await
         .map_err(|_| unavailable())?
         .map_err(|_| unavailable())?;
-    let limit = if path.starts_with("/api/stream/") {
-        256 * 1024
-    } else {
-        MAX_BODY
-    };
+    let limit = MAX_BODY;
     let mut response = state
         .http
         .get(format!("{}{path}", state.origin))
@@ -242,7 +247,14 @@ async fn fetch(state: &SportsState, path: &str) -> Result<Value> {
         data.extend_from_slice(&chunk);
     }
     let value: Value = serde_json::from_slice(&data).map_err(|_| unavailable())?;
-    if !value.is_array() || value.as_array().unwrap().len() > MAX_EVENTS {
+    let entries = match path {
+        CATALOG => value.get("streams"),
+        CATEGORIES => value.get("categories"),
+        _ => None,
+    }
+    .and_then(Value::as_array)
+    .ok_or_else(unavailable)?;
+    if entries.len() > MAX_EVENTS {
         return Err(unavailable());
     }
     cache.fetched = Some(Instant::now());
@@ -256,57 +268,48 @@ async fn events(
     if !state.enabled {
         return Ok(Json(Events {
             enabled: false,
-            source_name: "Streamed",
+            source_name: "StreamFree",
             sports: vec![],
             events: vec![],
             message: Some("Live Sports is not configured yet".into()),
         }));
     }
-    let selected = match filter.scope {
-        Scope::Live => "/api/matches/live",
-        Scope::Today => "/api/matches/all-today",
-        Scope::All => "/api/matches/all",
-    };
-    let (matches, live, sports) = tokio::try_join!(
-        fetch(&state, selected),
-        fetch(&state, "/api/matches/live"),
-        fetch(&state, "/api/sports")
-    )?;
-    let sports: Vec<Sport> = sports
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|s| serde_json::from_value::<Sport>(s.clone()).ok())
-        .filter(|s| slug(&s.id) && label(&s.name, 100))
-        .take(100)
-        .collect();
+    // The documented catalog contains current streams and pre-announced streams.
+    // Never synthesize upcoming fixtures or infer liveness from the clock.
+    let (catalog, categories) =
+        tokio::try_join!(fetch(&state, CATALOG), fetch(&state, CATEGORIES))?;
+    let sports = category_list(&categories);
     let names: HashMap<_, _> = sports
         .iter()
         .map(|s| (s.id.as_str(), s.name.as_str()))
         .collect();
-    let live_ids: HashSet<_> = live
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|v| v["id"].as_str())
-        .collect();
+    let today = Utc::now().date_naive();
     let mut ids = HashSet::new();
-    let mut output: Vec<Event> = matches
+    let mut output: Vec<Event> = catalog["streams"]
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|v| event(v, &names, &live_ids))
+        .filter_map(|v| event(v, &names))
+        .filter(|v| match filter.scope {
+            Scope::Live => v.is_live,
+            // Include events still live across midnight; use the supplied UTC
+            // timestamp for scheduled events, rather than the server timezone.
+            Scope::Today => {
+                v.is_live
+                    || DateTime::parse_from_rfc3339(&v.start_time)
+                        .is_ok_and(|d| d.date_naive() == today)
+            }
+            Scope::All => true,
+        })
         .filter(|v| ids.insert(v.id.clone()))
         .collect();
     output.sort_by(|a, b| a.start_time.cmp(&b.start_time).then(a.id.cmp(&b.id)));
-    let message = if output.is_empty() {
-        Some("No events are listed for this view right now".into())
-    } else {
-        None
-    };
+    let message = output
+        .is_empty()
+        .then(|| "No events are listed for this view right now".into());
     Ok(Json(Events {
         enabled: true,
-        source_name: "Streamed",
+        source_name: "StreamFree",
         sports,
         events: output,
         message,
@@ -321,110 +324,223 @@ fn slug(s: &str) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
-fn sources(v: &Value) -> Vec<(String, String)> {
+fn category_name(id: &str) -> String {
+    match id {
+        "soccer" => "Soccer",
+        "basketball" => "Basketball",
+        "hockey" => "Hockey",
+        "combat" => "Combat sports",
+        "baseball" => "Baseball",
+        "football" => "American football",
+        "racing" => "Racing",
+        "tennis" => "Tennis",
+        "cricket" => "Cricket",
+        other => {
+            return other
+                .split('_')
+                .map(|s| {
+                    let mut c = s.chars();
+                    c.next()
+                        .map(|v| v.to_uppercase().to_string() + c.as_str())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    }
+    .into()
+}
+fn category_list(value: &Value) -> Vec<Sport> {
+    let mut seen = HashSet::new();
+    value["categories"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|s| slug(s) && seen.insert(*s))
+        .take(100)
+        .map(|s| Sport {
+            id: s.into(),
+            name: category_name(s),
+        })
+        .collect()
+}
+fn stream_key(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().count() <= 200
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+}
+fn event_id(v: &Value) -> Option<String> {
+    let category = v["category"].as_str()?;
+    let key = v["stream_key"].as_str()?;
+    if !slug(category) || !stream_key(key) {
+        return None;
+    }
+    // Provider keys can contain Unicode. Stable ASCII IDs keep existing route,
+    // launcher, Roku and handoff contracts without lossy name transliteration.
+    Some(format!(
+        "sf-{:x}",
+        md5::compute(format!("{category}\0{key}"))
+    ))
+}
+fn event(v: &Value, names: &HashMap<&str, &str>) -> Option<Event> {
+    let id = event_id(v)?;
+    let title = v["name"].as_str()?;
+    let sport_id = v["category"].as_str()?;
+    if !label(title, 400) {
+        return None;
+    }
+    let date = DateTime::<Utc>::from_timestamp(v["match_timestamp"].as_i64()?, 0)?;
+    if !(946684800..4102444800).contains(&date.timestamp()) {
+        return None;
+    }
+    let variants = variants(v);
+    if variants.is_empty() {
+        return None;
+    }
+    let is_live = variants.iter().any(|v| v.live);
+    Some(Event {
+        id,
+        title: title.into(),
+        sport_id: sport_id.into(),
+        sport_name: names
+            .get(sport_id)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| category_name(sport_id)),
+        start_time: date.to_rfc3339_opts(SecondsFormat::Secs, true),
+        is_live,
+        popular: false,
+        poster_url: v["thumbnail_url"].as_str().and_then(poster),
+        // StreamFree's team1/team2 fields do not designate home and away.
+        home_team: None,
+        away_team: None,
+        source_count: variants.iter().filter(|v| !is_live || v.live).count(),
+    })
+}
+// Decode exactly once. UTF-8 names such as Montréal are valid; encoded slashes,
+// punctuation, double encoding, traversal and malformed UTF-8 are not.
+fn path_segment(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let a = (*bytes.get(i + 1)? as char).to_digit(16)?;
+            let b = (*bytes.get(i + 2)? as char).to_digit(16)?;
+            out.push((a * 16 + b) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let text = String::from_utf8(out).ok()?;
+    stream_key(&text).then_some(text)
+}
+fn public_url(value: &str) -> Option<reqwest::Url> {
+    if value.len() > 2000
+        || value.contains('\\')
+        || value.to_ascii_lowercase().contains("%2e")
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let url = reqwest::Url::parse(value).ok()?;
+    (url.scheme() == "https"
+        && matches!(url.host_str(), Some("strmfree.st" | "streamfree.top"))
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none())
+    .then_some(url)
+}
+fn embed_url(value: &str) -> Option<reqwest::Url> {
+    // Reject dot segments before the URL parser normalizes them away.
+    if value.contains("..") {
+        return None;
+    }
+    let mut url = public_url(value)?;
+    let segments: Vec<_> = url.path().strip_prefix("/embed/")?.split('/').collect();
+    if segments.len() != 2 || !slug(segments[0]) || segments[0].len() > 80 {
+        return None;
+    }
+    let canonical_path = format!("/embed/{}/{}", segments[0], path_segment(segments[1])?);
+    url.set_path(&canonical_path);
+    url.set_host(Some("strmfree.st")).ok()?;
+    Some(url)
+}
+pub(crate) fn allowed_embed(value: &str) -> bool {
+    embed_url(value).is_some()
+}
+fn poster(value: &str) -> Option<String> {
+    if value.contains("..") {
+        return None;
+    }
+    let url = public_url(value)?;
+    let segment = url.path().strip_prefix("/thumbnails/")?;
+    path_segment(segment)?;
+    Some(url.to_string())
+}
+struct Variant {
+    url: String,
+    live: bool,
+}
+fn variants(v: &Value) -> Vec<Variant> {
+    let live: HashSet<_> = v["live_sources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(embed_url)
+        .map(|u| u.to_string())
+        .take(64)
+        .collect();
     let mut seen = HashSet::new();
     v["sources"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|s| {
-            let (source, id) = (s["source"].as_str()?, s["id"].as_str()?);
-            (slug(source) && slug(id)).then(|| (source.into(), id.into()))
+        .filter_map(Value::as_str)
+        .filter_map(embed_url)
+        .filter(|url| seen.insert(url.to_string()))
+        .take(32)
+        .map(|url| {
+            let url = url.to_string();
+            Variant {
+                live: live.contains(&url),
+                url,
+            }
         })
-        .filter(|s| seen.insert(s.clone()))
-        .take(12)
         .collect()
 }
-fn event(v: &Value, names: &HashMap<&str, &str>, live: &HashSet<&str>) -> Option<Event> {
-    let (id, title, sport_id) = (
-        v["id"].as_str()?,
-        v["title"].as_str()?,
-        v["category"].as_str()?,
-    );
-    if !slug(id) || !label(title, 400) || !slug(sport_id) {
-        return None;
-    }
-    let date = DateTime::<Utc>::from_timestamp_millis(v["date"].as_i64()?)?;
-    // Reject obviously corrupt epoch values without inventing an event duration.
-    if !(946684800..4102444800).contains(&date.timestamp()) {
-        return None;
-    }
-    Some(Event {
-        id: id.into(),
-        title: title.into(),
-        sport_id: sport_id.into(),
-        sport_name: names.get(sport_id).copied().unwrap_or(sport_id).into(),
-        start_time: date.to_rfc3339_opts(SecondsFormat::Secs, true),
-        is_live: live.contains(id),
-        popular: v["popular"].as_bool().unwrap_or(false),
-        poster_url: v["poster"].as_str().and_then(poster),
-        home_team: team(&v["teams"]["home"]),
-        away_team: team(&v["teams"]["away"]),
-        source_count: sources(v).len(),
-    })
-}
-fn image_token(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 1800
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_-+=".contains(&b))
-}
-fn poster(s: &str) -> Option<String> {
-    let path = s
-        .strip_prefix(ORIGIN)
-        .or_else(|| s.strip_prefix("https://streamed.pk"))
-        .unwrap_or(s);
-    let path = path.strip_prefix("/api/images/proxy/")?;
-    let token = path.strip_suffix(".webp").unwrap_or(path);
-    image_token(token).then(|| format!("{ORIGIN}/api/images/proxy/{token}.webp"))
-}
-fn team(v: &Value) -> Option<Team> {
-    let name = v["name"].as_str()?;
-    if !label(name, 200) {
-        return None;
-    }
-    Some(Team {
-        name: name.into(),
-        badge_url: v["badge"]
-            .as_str()
-            .filter(|s| image_token(s))
-            .map(|s| format!("{ORIGIN}/api/images/badge/{s}.webp")),
-    })
-}
-pub(crate) fn allowed_embed(value: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(value) else {
-        return false;
-    };
-    !value.contains(['%', '\\'])
-        && !value.contains("..")
-        && value.len() <= 2000
-        && url.scheme() == "https"
-        && matches!(url.host_str(), Some("embed.st" | "embed.pk"))
-        && url.port().is_none()
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.query().is_none()
-        && url.fragment().is_none()
-        && url
-            .path()
-            .strip_prefix("/embed/")
-            .is_some_and(|p| !p.is_empty() && p.split('/').all(slug))
-}
-fn valid_streams(value: Value, source: &str) -> Vec<SportsStream> {
-    value
-        .as_array()
+fn valid_streams(v: &Value) -> Vec<SportsStream> {
+    let mut variants = variants(v);
+    let has_live = variants.iter().any(|v| v.live);
+    variants.sort_by(|a, b| {
+        b.url
+            .contains("2160p")
+            .cmp(&a.url.contains("2160p"))
+            .then(a.url.cmp(&b.url))
+    });
+    variants
         .into_iter()
-        .flatten()
-        .filter_map(|v| serde_json::from_value::<SportsStream>(v.clone()).ok())
-        .filter(|s| {
-            s.source == source
-                && slug(&s.source)
-                && label(&s.id, 200)
-                && (1..=100).contains(&s.stream_no)
-                && label(&s.language, 100)
-                && allowed_embed(&s.embed_url)
+        .enumerate()
+        .filter(|(_, v)| !has_live || v.live)
+        .map(|(i, v)| {
+            let url = v.url;
+            let path = reqwest::Url::parse(&url).unwrap();
+            let key = path.path().rsplit('/').next().unwrap_or_default();
+            SportsStream {
+                id: format!("sf-{:x}", md5::compute(&url)),
+                source: "streamfree".into(),
+                stream_no: (i + 1) as u32,
+                language: "Original".into(),
+                hd: key.contains("1080p") || key.contains("720p") || key.contains("2160p"),
+                embed_url: url,
+            }
         })
-        .take(32)
         .collect()
 }
 async fn streams(
@@ -433,173 +549,117 @@ async fn streams(
 ) -> Result<Json<Streams>> {
     Ok(Json(load_streams(state, id).await?))
 }
-async fn load_streams(state: Arc<SportsState>, id: String) -> Result<Streams> {
+async fn catalog_item(state: &SportsState, id: &str) -> Result<Value> {
     if !state.enabled {
         return Err(SportsError(
             StatusCode::SERVICE_UNAVAILABLE,
             "Live Sports is not configured yet",
         ));
     }
-    if !slug(&id) {
+    if !slug(id) {
         return Err(SportsError(StatusCode::BAD_REQUEST, "Invalid event"));
     }
-    let (all, live) = tokio::try_join!(
-        fetch(&state, "/api/matches/all"),
-        fetch(&state, "/api/matches/live")
-    )?;
-    let item = live
+    fetch(state, CATALOG).await?["streams"]
         .as_array()
         .unwrap()
         .iter()
-        .chain(all.as_array().unwrap())
-        .find(|v| v["id"].as_str() == Some(&id))
+        .find(|v| event_id(v).as_deref() == Some(id))
+        .cloned()
         .ok_or(SportsError(
             StatusCode::NOT_FOUND,
             "Event is no longer listed; refresh Live Sports",
-        ))?;
-    let results: Vec<_> = stream::iter(sources(item))
-        .map(|(source, id)| {
-            let state = state.clone();
-            async move {
-                fetch(&state, &format!("/api/stream/{source}/{id}"))
-                    .await
-                    .map(|v| valid_streams(v, &source))
-            }
-        })
-        .buffered(6)
-        .collect()
-        .await;
-    let partial = results.iter().any(|r| r.is_err());
-    let mut seen = HashSet::new();
-    let streams: Vec<_> = results
-        .into_iter()
-        .filter_map(|r| r.ok())
-        .flatten()
-        .filter(|s| {
-            seen.insert((
-                s.source.clone(),
-                s.id.clone(),
-                s.stream_no,
-                s.embed_url.clone(),
-            ))
-        })
-        .take(128)
-        .collect();
+        ))
+}
+async fn load_streams(state: Arc<SportsState>, id: String) -> Result<Streams> {
+    let item = catalog_item(&state, &id).await?;
+    let streams = valid_streams(&item);
     let message = if streams.is_empty() {
         Some("No playable embeds are available yet; try another event or retry later".into())
-    } else if partial {
-        Some("Some stream sources are temporarily unavailable".into())
+    } else if !variants(&item).iter().any(|v| v.live) {
+        Some("This event's sources are not live yet".into())
     } else {
         None
     };
-    Ok(Streams { event_id: id, streams, message })
+    Ok(Streams {
+        event_id: id,
+        streams,
+        message,
+    })
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all="camelCase", deny_unknown_fields)]
-struct NativeTune { event_id: String, stream_id: String, source: String, stream_no: u32, client: Option<crate::live::NativeClient> }
-async fn tune_native(State(state): State<Arc<SportsState>>, Json(request): Json<NativeTune>) -> Result<Json<Value>> {
-    if !slug(&request.event_id) || !slug(&request.source) || !label(&request.stream_id,200) || !(1..=100).contains(&request.stream_no) {
-        return Err(SportsError(StatusCode::BAD_REQUEST,"Invalid sports source"));
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeTune {
+    event_id: String,
+    stream_id: String,
+    source: String,
+    stream_no: u32,
+    client: Option<crate::live::NativeClient>,
+}
+async fn tune_native(
+    State(state): State<Arc<SportsState>>,
+    Json(request): Json<NativeTune>,
+) -> Result<Json<Value>> {
+    if !slug(&request.event_id)
+        || !slug(&request.source)
+        || !label(&request.stream_id, 200)
+        || !(1..=100).contains(&request.stream_no)
+    {
+        return Err(SportsError(
+            StatusCode::BAD_REQUEST,
+            "Invalid sports source",
+        ));
     }
-    let bridge = state.bridge.as_ref().ok_or(SportsError(StatusCode::SERVICE_UNAVAILABLE,"Native sports browser is not configured"))?;
+    let bridge = state.bridge.as_ref().ok_or(SportsError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Native sports browser is not configured",
+    ))?;
     let catalog = load_streams(state.clone(), request.event_id.clone()).await?;
-    let selected = catalog.streams.iter().find(|s| s.id == request.stream_id && s.source == request.source && s.stream_no == request.stream_no)
-        .ok_or(SportsError(StatusCode::NOT_FOUND,"Source is no longer listed; refresh Live Sports"))?;
-    let live = fetch(&state,"/api/matches/live").await?;
-    let all = fetch(&state,"/api/matches/all").await?;
-    let title = live.as_array().into_iter().flatten().chain(all.as_array().into_iter().flatten())
-        .find(|e| e["id"].as_str() == Some(&request.event_id)).and_then(|e| e["title"].as_str()).filter(|s| label(s,300)).unwrap_or("Live Sports");
-    bridge.tune_sports(&selected.embed_url,&request.event_id,title,request.client).await
-        .map(Json).map_err(|(status,message)| SportsError(status,message))
+    let selected = catalog
+        .streams
+        .iter()
+        .find(|s| {
+            s.id == request.stream_id
+                && s.source == request.source
+                && s.stream_no == request.stream_no
+        })
+        .ok_or(SportsError(
+            StatusCode::NOT_FOUND,
+            "Source is no longer listed; refresh Live Sports",
+        ))?;
+    let item = catalog_item(&state, &request.event_id).await?;
+    let title = item["name"]
+        .as_str()
+        .filter(|s| label(s, 300))
+        .unwrap_or("Live Sports");
+    bridge
+        .tune_sports(
+            &selected.embed_url,
+            &request.event_id,
+            title,
+            request.client,
+        )
+        .await
+        .map(Json)
+        .map_err(|(status, message)| SportsError(status, message))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    #[test]
-    fn embeds_only_allow_documented_public_hosts_and_bounded_paths() {
-        assert!(allowed_embed("https://embed.st/embed/admin/game/1"));
-        assert!(allowed_embed("https://embed.pk/embed/hotel/game/2"));
-        for url in [
-            "http://embed.st/embed/a/b/1",
-            "https://127.0.0.1/embed/a",
-            "https://embed.st.attacker.test/embed/a",
-            "https://user@embed.st/embed/a",
-            "https://embed.st:444/embed/a",
-            "https://embed.st/embed/%2fadmin",
-            "https://embed.st/embed/a?url=http://localhost",
-            "https://embed.st/admin",
-        ] {
-            assert!(!allowed_embed(url), "{url}");
-        }
+
+    fn fixture(key: &str, timestamp: i64, live: bool) -> Value {
+        let one = format!("{ORIGIN}/embed/basketball/{key}1080p");
+        let two = format!("{ORIGIN}/embed/basketball/{key}1080p2");
+        json!({"name":"A vs B","stream_key":key,"category":"basketball","match_timestamp":timestamp,
+            "sources":[one,two],"live_sources":if live {vec![one,two]} else {vec![]},
+            "thumbnail_url":format!("https://streamfree.top/thumbnails/basketball_{key}")})
     }
-    #[test]
-    fn event_dates_and_live_status_are_not_guessed() {
-        let v = json!({"id":"game","title":"A vs B","category":"football","date":1791766800000i64,"sources":[{"source":"admin","id":"game"},{"source":"admin","id":"game"},{"source":"../bad","id":"game"}]});
-        let out = event(
-            &v,
-            &HashMap::from([("football", "Football")]),
-            &HashSet::new(),
-        )
-        .unwrap();
-        assert_eq!(out.start_time, "2026-10-12T01:00:00Z");
-        assert!(!out.is_live);
-        assert_eq!(out.source_count, 1);
-        assert!(
-            event(&v, &HashMap::new(), &HashSet::from(["game"]))
-                .unwrap()
-                .is_live
-        );
-    }
-    #[test]
-    fn images_cannot_target_private_or_arbitrary_hosts() {
-        assert_eq!(
-            poster("/api/images/proxy/a+_-.webp").unwrap(),
-            format!("{ORIGIN}/api/images/proxy/a+_-.webp")
-        );
-        assert!(poster("https://localhost/api/images/proxy/a").is_none());
-        assert!(poster("/api/images/proxy/../../secret").is_none());
-        assert!(team(&json!({"name":"Team","badge":"http://localhost"}))
-            .unwrap()
-            .badge_url
-            .is_none());
-    }
-    #[test]
-    fn duplicate_raw_stream_ids_keep_distinct_hd_sd_variants() {
-        let v = json!([{"id":"game","source":"admin","streamNo":1,"language":"English","hd":true,"embedUrl":"https://embed.st/embed/admin/game/1"},
-            {"id":"game","source":"admin","streamNo":2,"language":"English","hd":false,"embedUrl":"https://embed.st/embed/admin/game/2"},
-            {"id":"game","source":"evil","streamNo":1,"language":"English","hd":true,"embedUrl":"https://embed.st/embed/admin/game/1"}]);
-        assert_eq!(valid_streams(v, "admin").len(), 2);
-    }
-    #[tokio::test]
-    async fn concurrent_cache_calls_coalesce_and_redirects_are_not_followed() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let count = Arc::new(AtomicUsize::new(0));
-        let hits = count.clone();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
-        let app = Router::new()
-            .route(
-                "/ok",
-                get(move || {
-                    let hits = hits.clone();
-                    async move {
-                        hits.fetch_add(1, Ordering::SeqCst);
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                        Json(json!([]))
-                    }
-                }),
-            )
-            .route(
-                "/redirect",
-                get(|| async { (StatusCode::FOUND, [(header::LOCATION, "/ok")]) }),
-            );
-        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let state = Arc::new(SportsState {
+    fn state(origin: String, token: &str) -> Arc<SportsState> {
+        Arc::new(SportsState {
             enabled: true,
-            token: String::new(),
+            token: token.into(),
             origin,
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -609,52 +669,190 @@ mod tests {
             requests: Semaphore::new(6),
             clients: Semaphore::new(32),
             bridge: None,
-        });
-        let (a, b) = tokio::join!(fetch(&state, "/ok"), fetch(&state, "/ok"));
-        assert!(a.is_ok() && b.is_ok());
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-        assert!(fetch(&state, "/redirect").await.is_err());
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-        task.abort();
+        })
+    }
+    #[test]
+    fn embed_hosts_and_paths_allow_unicode_without_opening_redirects_or_traversal() {
+        for value in [
+            "https://strmfree.st/embed/basketball/game1080p",
+            "https://streamfree.top/embed/soccer/cf-montréal1080p",
+            "https://strmfree.st/embed/soccer/cf-montr%C3%A9al1080p",
+        ] {
+            assert!(allowed_embed(value), "rejected {value}");
+        }
+        for value in [
+            "https://embed.st/embed/admin/game/1",
+            "http://strmfree.st/embed/soccer/game",
+            "https://127.0.0.1/embed/soccer/game",
+            "https://strmfree.st.evil/embed/soccer/game",
+            "https://user@strmfree.st/embed/soccer/game",
+            "https://strmfree.st:444/embed/soccer/game",
+            "https://strmfree.st/embed/soccer/game?url=http://localhost",
+            "https://strmfree.st/embed/soccer/game#fragment",
+            "https://strmfree.st/embed/soccer/game/extra",
+            "https://strmfree.st/embed/soccer/game/../other",
+            "https://strmfree.st/embed/soccer/game/%2e%2E/other",
+            "https://strmfree.st/embed/soccer/a%2fb",
+            "https://strmfree.st/embed/soccer/a%5cb",
+            "https://strmfree.st/embed/soccer/a%252fb",
+            "https://strmfree.st/embed/soccer/%ff",
+            "https://strmfree.st/embed/soccer/game/",
+            "https://strmfree.st/admin",
+        ] {
+            assert!(!allowed_embed(value), "accepted {value}");
+        }
+        assert_eq!(
+            embed_url("https://streamfree.top/embed/soccer/cf-montr%c3%a9al")
+                .unwrap()
+                .as_str(),
+            "https://strmfree.st/embed/soccer/cf-montr%C3%A9al"
+        );
+    }
+    #[test]
+    fn event_seconds_live_sources_and_unicode_ids_preserve_metadata() {
+        let mut item = fixture("montréal-vs-b", 1791766800, true);
+        let e = event(&item, &HashMap::new()).unwrap();
+        assert!(slug(&e.id));
+        assert!(e.id.starts_with("sf-"));
+        assert_eq!(e.start_time, "2026-10-12T01:00:00Z");
+        assert!(e.is_live);
+        assert_eq!(e.source_count, 2);
+        assert_eq!(e.sport_name, "Basketball");
+        assert!(e.home_team.is_none());
+        assert!(e.away_team.is_none());
+        item["live_sources"] = json!([]);
+        let later = event(&item, &HashMap::new()).unwrap();
+        assert!(!later.is_live);
+        assert_eq!(e.id, later.id);
+        item["match_timestamp"] = json!(1791766800000i64);
+        assert!(event(&item, &HashMap::new()).is_none());
+        item["match_timestamp"] = Value::Null;
+        assert!(event(&item, &HashMap::new()).is_none());
+    }
+    #[test]
+    fn only_declared_live_variants_are_offered_and_identity_survives_liveness_changes() {
+        let mut item = fixture("game", 1791766800, true);
+        let both = valid_streams(&item);
+        assert_eq!(both.len(), 2);
+        assert!(both.iter().all(|s| s.hd));
+        item["sources"].as_array_mut().unwrap().reverse();
+        assert_eq!(valid_streams(&item)[0].id, both[0].id);
+        item["live_sources"] = json!([
+            format!("{ORIGIN}/embed/basketball/game1080p2"),
+            "https://evil.test/embed/basketball/game"
+        ]);
+        let only = valid_streams(&item);
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].id, both[1].id);
+        assert_eq!(only[0].stream_no, 2);
+        item["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("https://streamfree.top/embed/basketball/game1080p2"));
+        assert_eq!(valid_streams(&item).len(), 1);
+    }
+    #[test]
+    fn images_are_confined_to_provider_thumbnail_paths() {
+        assert!(poster("https://streamfree.top/thumbnails/soccer_cf-montréal_vs_B").is_some());
+        for value in [
+            "https://localhost/thumbnails/a",
+            "https://strmfree.st/admin",
+            "https://strmfree.st/thumbnails/a/b",
+            "https://strmfree.st/thumbnails/a/%2e%2e/b",
+            "https://strmfree.st/thumbnails/a?url=x",
+        ] {
+            assert!(poster(value).is_none(), "accepted {value}");
+        }
+    }
+    #[test]
+    fn categories_are_deduplicated_and_football_is_not_soccer() {
+        let categories =
+            category_list(&json!({"categories":["soccer","football","soccer","../bad",null]}));
+        assert_eq!(categories.len(), 2);
+        assert_eq!(categories[0].name, "Soccer");
+        assert_eq!(categories[1].name, "American football");
     }
     #[tokio::test]
-    async fn http_catalog_scopes_auth_and_embed_choices_keep_the_wire_contract() {
-        let game = json!({"id":"game","title":"A vs B","category":"football","date":1791766800000i64,"sources":[{"source":"admin","id":"game"}]});
-        let mut later = game.clone();
-        later["id"] = json!("later");
-        later["date"] = json!(1791853200000i64);
-        let live = game.clone();
-        let today = game.clone();
-        let upstream=Router::new().route("/api/sports",get(||async{Json(json!([{"id":"football","name":"Football"}]))}))
-            .route("/api/matches/live",get(move||{let game=live.clone();async move{Json(json!([game]))}}))
-            .route("/api/matches/all-today",get(move||{let game=today.clone();async move{Json(json!([game]))}}))
-            .route("/api/matches/all",get(move||{let game=game.clone();let later=later.clone();async move{Json(json!([game,later]))}}))
-            .route("/api/stream/admin/game",get(||async{Json(json!([
-                {"id":"game","source":"admin","streamNo":1,"language":"English","hd":true,"embedUrl":"https://embed.st/embed/admin/game/1"},
-                {"id":"game","source":"admin","streamNo":2,"language":"English","hd":false,"embedUrl":"https://embed.st/embed/admin/game/2"},
-                {"id":"game","source":"admin","streamNo":3,"language":"English","hd":false,"embedUrl":"https://localhost/embed/game"}
-            ]))}));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
-        let upstream_task =
-            tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
-        let state = Arc::new(SportsState {
-            enabled: true,
-            token: "test-token".into(),
-            origin,
-            http: reqwest::Client::new(),
-            cache: Mutex::new(HashMap::new()),
-            requests: Semaphore::new(6),
-            clients: Semaphore::new(32),
-            bridge: None,
-        });
+    async fn coalescing_rejects_redirects_and_malformed_envelopes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let count = Arc::new(AtomicUsize::new(0));
+        let hits = count.clone();
+        let app = Router::new()
+            .route(
+                CATALOG,
+                get(move || {
+                    let hits = hits.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        Json(json!({"streams":[]}))
+                    }
+                }),
+            )
+            .route(
+                CATEGORIES,
+                get(|| async { (StatusCode::FOUND, [(header::LOCATION, CATALOG)]) }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let app = router_with_state(state);
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let http = reqwest::Client::new();
+        let shared = state(base, "");
+        let (a, b) = tokio::join!(fetch(&shared, CATALOG), fetch(&shared, CATALOG));
+        assert!(a.is_ok() && b.is_ok());
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert!(fetch(&shared, CATEGORIES).await.is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        task.abort();
+        for body in [
+            json!([]),
+            json!({"streams":null}),
+            json!({"streams":{}}),
+            json!({"streams":vec![Value::Null;MAX_EVENTS+1]}),
+        ] {
+            let app = Router::new().route(
+                CATALOG,
+                get(move || {
+                    let body = body.clone();
+                    async move { Json(body) }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            assert!(fetch(&state(base, ""), CATALOG).await.is_err());
+            task.abort();
+        }
+    }
+    #[tokio::test]
+    async fn catalog_scopes_auth_unicode_choices_and_wire_contract() {
+        let now = Utc::now().timestamp();
+        let game = fixture("montréal-game", now - 3600, true);
+        let id = event_id(&game).unwrap();
+        let later = fixture("later", now + 86400, false);
+        let catalog = json!({"streams":[game,later]});
+        let app = Router::new()
+            .route(
+                CATALOG,
+                get(move || {
+                    let catalog = catalog.clone();
+                    async move { Json(catalog) }
+                }),
+            )
+            .route(
+                CATEGORIES,
+                get(|| async { Json(json!({"categories":["basketball"]})) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let app = router_with_state(state(origin, "test-token"));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
         assert_eq!(
-            http.get(format!("{base}/sports/events"))
+            client
+                .get(format!("{base}/sports/events"))
                 .send()
                 .await
                 .unwrap()
@@ -662,7 +860,7 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         for (scope, count) in [("live", 1), ("today", 1), ("all", 2)] {
-            let response = http
+            let response = client
                 .get(format!("{base}/sports/events?scope={scope}"))
                 .bearer_auth("test-token")
                 .send()
@@ -673,17 +871,15 @@ mod tests {
                 response.headers()[header::CACHE_CONTROL],
                 "no-store, private"
             );
-            let body: Value = response.json().await.unwrap();
-            assert_eq!(body["events"].as_array().unwrap().len(), count);
-            assert_eq!(body["events"][0]["isLive"], true);
-            assert_eq!(body["events"][0]["startTime"], "2026-10-12T01:00:00Z");
-            assert!(body["events"][0]["homeTeam"].is_null());
-            if scope == "all" {
-                assert_eq!(body["events"][1]["isLive"], false);
-            }
+            let value: Value = response.json().await.unwrap();
+            assert_eq!(value["sourceName"], "StreamFree");
+            assert_eq!(value["events"].as_array().unwrap().len(), count);
+            assert_eq!(value["events"][0]["id"], id);
+            assert_eq!(value["events"][0]["isLive"], true);
+            assert!(value["events"][0]["homeTeam"].is_null());
         }
-        let response: Value = http
-            .get(format!("{base}/sports/events/game/streams"))
+        let response: Value = client
+            .get(format!("{base}/sports/events/{id}/streams"))
             .bearer_auth("test-token")
             .send()
             .await
@@ -691,10 +887,16 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(response["eventId"], "game");
+        assert_eq!(response["eventId"], id);
         assert_eq!(response["streams"].as_array().unwrap().len(), 2);
+        assert_eq!(response["streams"][0]["source"], "streamfree");
+        assert!(response["streams"][0]["embedUrl"]
+            .as_str()
+            .unwrap()
+            .contains("%C3%A9"));
         assert_eq!(
-            http.get(format!("{base}/sports/events/unknown/streams"))
+            client
+                .get(format!("{base}/sports/events/missing/streams"))
                 .bearer_auth("test-token")
                 .send()
                 .await
@@ -703,6 +905,6 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         task.abort();
-        upstream_task.abort();
+        upstream.abort();
     }
 }

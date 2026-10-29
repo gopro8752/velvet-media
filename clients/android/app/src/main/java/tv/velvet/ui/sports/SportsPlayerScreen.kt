@@ -181,7 +181,7 @@ fun SportsPlayerScreen(eventId: String, title: String, onBack: () -> Unit) {
                 modifier = Modifier.focusRequester(controlsFocus), colors = velvetButtonColors()) { Text(if (pointerMode) "Pointer active" else "Player controls") }
             Button(onClick = { fullscreen = true; pointerMode = true }, enabled = selected != null && !suspended && !starting && (loadError == null || manualFallback), colors = velvetButtonColors()) { Text("Fullscreen") }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(selected?.label ?: "Streamed", maxLines = 1, overflow = TextOverflow.Ellipsis, color = VelvetColors.TextSecondary)
+                Text(selected?.label ?: "StreamFree", maxLines = 1, overflow = TextOverflow.Ellipsis, color = VelvetColors.TextSecondary)
                 Text("If a source stalls, try another stream or Reload.", color = VelvetColors.TextTertiary,
                     style = MaterialTheme.typography.labelSmall, maxLines = 2)
             }
@@ -192,7 +192,7 @@ fun SportsPlayerScreen(eventId: String, title: String, onBack: () -> Unit) {
         LaunchedEffect(Unit) { withFrameNanos { }; runCatching { first.requestFocus() } }
         Column(Modifier.width(680.dp).heightIn(max = 450.dp).background(VelvetColors.Background).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Choose a stream", style = MaterialTheme.typography.headlineSmall)
-            Text("Quality and language are supplied by Streamed.", color = VelvetColors.TextSecondary)
+            Text("Quality and language are supplied by StreamFree.", color = VelvetColors.TextSecondary)
             LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(4.dp)) {
                 items(state.streams, key = { it.key }) { stream ->
                     Button(onClick = { hideCustom(); selected = stream; reloadKey++; suspended = false; pointerMode = false; fullscreen = false; showSources = false },

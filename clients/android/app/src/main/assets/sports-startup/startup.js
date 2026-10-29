@@ -4,8 +4,7 @@
   const port = browser.runtime.connectNative('velvetSportsStartup');
   const samples = new WeakMap();
   const pending = new WeakSet();
-  const registeredFrames = new Set();
-  let stopped = false, started = false, attempts = 0, lastAttempt = -Infinity, deadline = 0;
+  let stopped = false, started = false, attempts = 0, lastAttempt = -Infinity, deadline = 0, actionDeadline = 0, lastDiagnostic = -Infinity;
   let timer, observation;
   function observePlayback(video) {
     if (observation) return;
@@ -24,7 +23,13 @@
   port.onMessage.addListener(message => {
     if (message?.type === 'stop') stop();
     if (message?.type === 'start' && !started && !stopped) {
-      started = true; deadline = Date.now() + 30000;
+      started = true;
+      // Native owns the overall load timeout. Keep observing actual playback
+      // after the bounded click window, so a slow provider cannot play beneath
+      // the startup overlay without ever notifying the app.
+      const observeMs = Number.isFinite(message.observeMs) ? Math.max(0, Math.min(45000, message.observeMs)) : 45000;
+      deadline = Date.now() + observeMs;
+      actionDeadline = Date.now() + Math.min(30000, observeMs);
       timer = setInterval(tick, 400); tick();
     }
   });
@@ -44,29 +49,19 @@
     if (stopped) return;
     if (Date.now() >= deadline || document.hidden) { stop(); return; }
     if (window.innerWidth < 320 || window.innerHeight < 180) return;
-    // The selected Golf document declares its visible direct wrapper; that accepted
-    // wrapper may then declare its visible ingest player. Native code validates each hop.
-    const golf = ['embed.st', 'embed.pk'].includes(location.hostname) && /^\/embed\/golf\/[^/]+\/[^/]+$/.test(location.pathname);
-    const wrapper = location.hostname === 'rockylive.st' && /^\/source\/streamed1?\.php$/.test(location.pathname);
-    if (golf || wrapper) {
-      for (const frame of document.querySelectorAll('iframe[src]')) {
-        if (registeredFrames.size >= 4 || !visible(frame)) continue;
-        try {
-          const url = new URL(frame.src);
-          if (url.protocol !== 'https:' || url.port || url.username || url.password || registeredFrames.has(url.href)) continue;
-          const candidate = golf
-            ? !url.hash && url.hostname === 'rockylive.st' && /^\/source\/streamed1?\.php$/.test(url.pathname) && url.searchParams.getAll('id').length === 1 && url.searchParams.get('id') === location.pathname.split('/')[3] && url.searchParams.getAll('no').length === 1 && /^[1-9][0-9]{0,3}$/.test(url.searchParams.get('no'))
-            : ['embed.st', 'embed.pk'].includes(url.hostname) && !url.search && (!url.hash || url.hash === '#player=clappr&autoplay=true') && /^\/embed\/ingest\/[A-Za-z0-9_-]{1,200}\/[1-9][0-9]{0,3}\/?$/.test(url.pathname);
-          if (!candidate) continue;
-          registeredFrames.add(url.href);
-          const rect = frame.getBoundingClientRect();
-          port.postMessage({ state: 'child', frame: url.href, width: Math.round(rect.width), height: Math.round(rect.height) });
-        } catch (_) {}
-      }
-    }
     const video = Array.from(document.querySelectorAll('video')).filter(visible)
       .sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height)[0];
     const hasSource = video && (video.srcObject || video.getAttribute('src')?.trim() || Array.from(video.querySelectorAll('source[src]')).some(source => source.getAttribute('src')?.trim()));
+    if (Date.now() - lastDiagnostic >= 2000) {
+      lastDiagnostic = Date.now();
+      const candidate = video || document.querySelector('video');
+      const control = document.querySelector('#jwplayer.jwplayer.jw-state-idle .jw-icon-display');
+      const player = document.querySelector('#jwplayer');
+      port.postMessage({ state: 'startup', attempts, video: !!candidate, visibleVideo: !!video,
+        source: !!hasSource, idleControl: !!control, player: !!player,
+        readyState: candidate?.readyState ?? 0, paused: candidate?.paused ?? true,
+        networkState: candidate?.networkState ?? 0, errorCode: candidate?.error?.code ?? 0 });
+    }
     if (video && hasSource) {
       const frames = video.getVideoPlaybackQuality?.().totalVideoFrames || 0;
       let before = samples.get(video);
@@ -79,20 +74,18 @@
           viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, readyState: video.readyState, advanced: true });
         return;
       }
-      if (video.error) return;
-      if (video.paused && !pending.has(video) && attempts < 8 && Date.now() - lastAttempt >= 2000) {
+    }
+    if (attempts < 8 && Date.now() < actionDeadline && Date.now() - lastAttempt >= 2000) {
+      // StreamFree uses this JWPlayer display control. Never click generic text,
+      // links, ad overlays or arbitrary page coordinates.
+      const poster = document.querySelector('#jwplayer.jwplayer.jw-state-idle .jw-icon-display');
+      const player = poster?.closest('#jwplayer.jwplayer');
+      if (poster && player && visible(player) && !poster.closest('a')) {
+        attempts++; lastAttempt = Date.now(); poster.click();
+      } else if (video && hasSource && video.paused && !video.error && !pending.has(video)) {
         attempts++; lastAttempt = Date.now(); pending.add(video);
         try { Promise.resolve(video.play()).catch(() => {}).finally(() => pending.delete(video)); }
         catch (_) { pending.delete(video); }
-      }
-    } else if (attempts < 8 && Date.now() - lastAttempt >= 2000) {
-      // This exact Clappr poster invokes container.play. Never click generic text,
-      // links, SVGs, ad overlays or arbitrary page coordinates.
-      const poster = document.querySelector('[data-player] .player-poster[data-poster].clickable .play-wrapper[data-poster]') ||
-        document.querySelector('.jwplayer.jw-state-idle .jw-icon-display');
-      const player = poster?.closest('.player-poster') || poster?.closest('.jwplayer');
-      if (poster && player && visible(player) && !poster.closest('a')) {
-        attempts++; lastAttempt = Date.now(); poster.click();
       }
     }
   }

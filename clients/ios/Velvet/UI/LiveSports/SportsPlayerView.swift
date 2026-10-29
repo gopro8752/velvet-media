@@ -21,7 +21,6 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
     private var hasLoaded = false
     private var startupTask: Task<Void, Never>?
     private var startupFrames: [WKFrameInfo] = []
-    private var approvedNestedURLs: Set<URL> = []
 #if DEBUG
     private var testInterruptionTask: Task<Void, Never>?
 #endif
@@ -91,19 +90,10 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
             self.telemetry?.error()
         }
 
-        // Match the provider's documented iframe integration. The opaque parent
-        // origin keeps remote DOM isolated; native delegates reject top-level
-        // navigation, windows, forms, downloads and permission requests.
-        let escaped = stream.embedUrl.absoluteString
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-        web.loadHTMLString("""
-        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-        <style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%;display:block}</style>
-        </head><body><iframe title="Sports player" src="\(escaped)"
-        allow="autoplay; fullscreen; encrypted-media" allowfullscreen referrerpolicy="no-referrer"></iframe></body></html>
-        """, baseURL: nil)
+        // Load only the selected public embed. Keeping its document first-party
+        // lets WebKit use the provider's own HLS/service-worker startup path.
+        // Native delegates still reject escapes, windows, forms and downloads.
+        web.load(URLRequest(url: stream.embedUrl))
         UIApplication.shared.isIdleTimerDisabled = true
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -133,7 +123,6 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
 
     private func detach() {
         stopStartup()
-        approvedNestedURLs.removeAll()
 #if DEBUG
         testInterruptionTask?.cancel()
         testInterruptionTask = nil
@@ -156,13 +145,15 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
 
     func receivePlaybackState(_ state: WKScriptMessage) {
         guard let web = state.webView, web === webView, !closed, !suspended,
-              state.name == SportsPlaybackStartup.handlerName, !state.frameInfo.isMainFrame,
+              state.name == SportsPlaybackStartup.handlerName, state.frameInfo.isMainFrame,
               let stream = streams.first(where: { $0.selectionID == selectedID }),
-              SportsPlaybackStartup.accepts(frameURL: state.frameInfo.request.url, for: stream.embedUrl)
-                || state.frameInfo.request.url.map { approvedNestedURLs.contains(SportsPlaybackStartup.documentURL($0)) } == true,
+              SportsPlaybackStartup.accepts(frameURL: state.frameInfo.request.url, for: stream.embedUrl),
               let payload = state.body as? [String: String], payload.count == 1,
               let value = payload["state"], ["ready", "playing", "paused", "buffering", "ended"].contains(value) else { return }
         if value != "ready" {
+#if DEBUG
+            if observedState != value { print("[SportsDiagnostics] observed state=\(value)") }
+#endif
             observedState = value
             observedAt = ProcessInfo.processInfo.systemUptime
             telemetry?.observe()
@@ -217,18 +208,9 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
               action.navigationType != .formSubmitted, action.navigationType != .formResubmitted,
               let frame = action.targetFrame, let url = action.request.url,
               url.user == nil, url.password == nil else { decisionHandler(.cancel); return }
-        if !frame.isMainFrame, approvedNestedURLs.count < 8,
-           let stream = streams.first(where: { $0.selectionID == selectedID }),
-           let source = action.sourceFrame.request.url {
-            let declaredWrapper = source == stream.embedUrl
-                && SportsPlaybackStartup.isGolfWrapper(url, for: stream.embedUrl)
-            let declaredPlayer = approvedNestedURLs.contains(source)
-                && SportsPlaybackStartup.isGolfWrapper(source, for: stream.embedUrl)
-                && SportsPlaybackStartup.isIngestPlayer(url)
-            if declaredWrapper || declaredPlayer { approvedNestedURLs.insert(SportsPlaybackStartup.documentURL(url)) }
-        }
         if frame.isMainFrame {
-            decisionHandler(url.absoluteString == "about:blank" ? .allow : .cancel)
+            let selectedURL = streams.first(where: { $0.selectionID == selectedID })?.embedUrl
+            decisionHandler(url == selectedURL && action.navigationType == .other ? .allow : .cancel)
         } else {
             // Subframes can load the provider's nested players. Native policy
             // above denies forms/downloads, and all main-frame escapes are denied.

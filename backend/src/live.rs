@@ -1626,7 +1626,7 @@ mod tests {
         } })), listener).await;
         let cfg = LiveTv { enabled:true, upstream_url:prism, direct_tve_url:Some("http://127.0.0.1:1".into()), ..LiveTv::default() };
         let (_, bridge) = router_with_bridge(cfg, String::new()).unwrap();
-        let session = bridge.tune_sports("https://embed.st/embed/admin/event/1", "event-1", "Game", None).await.unwrap();
+        let session = bridge.tune_sports("https://strmfree.st/embed/basketball/event1080p", "event-1", "Game", None).await.unwrap();
         assert_eq!(session["channel"]["id"], "event-1");
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         let sessions = bridge.0.sessions.lock().unwrap();

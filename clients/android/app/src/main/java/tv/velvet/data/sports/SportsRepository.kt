@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
 @Serializable data class SportsEvent(val id: String, val title: String, val sportId: String, val sportName: String,
     val startTime: String, val isLive: Boolean, val popular: Boolean = false, val posterUrl: String? = null,
     val homeTeam: SportsTeam? = null, val awayTeam: SportsTeam? = null, val sourceCount: Int = 0)
-@Serializable data class SportsCatalog(val enabled: Boolean = false, val sourceName: String = "Streamed",
+@Serializable data class SportsCatalog(val enabled: Boolean = false, val sourceName: String = "StreamFree",
     val sports: List<Sport> = emptyList(), val events: List<SportsEvent> = emptyList(), val message: String? = null)
 @Serializable data class SportsStream(val id: String, val source: String, val streamNo: Int, val language: String,
     val hd: Boolean, val embedUrl: String) {
@@ -31,59 +31,29 @@ import java.util.concurrent.TimeUnit
 @Serializable private data class ApiError(val error: String)
 class SportsException(message: String) : IOException(message)
 
-/** Validate the API-provided embed, never a user-entered browser destination. */
+/** Accept only a provider player document, never a user-entered browser destination. */
 fun isSafeEmbed(url: String): Boolean = runCatching {
     val u = URI(url)
     val host = u.host?.lowercase().orEmpty()
-    u.scheme == "https" && u.userInfo == null && u.port == -1 && u.path.startsWith("/embed/") &&
-        (host == "embed.st" || host == "embed.pk")
+    val parts = u.path.orEmpty().split('/')
+    url.length <= 1400 && u.scheme == "https" && u.userInfo == null && u.port == -1 &&
+        host in setOf("strmfree.st", "streamfree.top") && u.query == null && u.fragment == null &&
+        parts.size == 4 && parts[0].isEmpty() && parts[1] == "embed" &&
+        Regex("[A-Za-z0-9_-]{1,80}").matches(parts[2]) &&
+        // URI decodes UTF-8 once. Unicode team names are valid, while encoded
+        // slashes, dot segments, double escapes and malformed UTF-8 are not.
+        Regex("[\\p{L}\\p{N}_-]{1,200}").matches(parts[3])
 }.getOrDefault(false)
 fun isEmbedNavigationAllowed(initial: String, destination: String): Boolean = runCatching {
     val a = URI(initial); val b = URI(destination)
-    isSafeEmbed(destination) && a.host.equals(b.host, true) && a.path == b.path && a.query == b.query
+    isSafeEmbed(initial) && isSafeEmbed(destination.substringBefore('#')) &&
+        a.host.equals(b.host, true) && a.path == b.path && a.query == b.query
 }.getOrDefault(false)
-/** Only the selected top-level document is trusted before it declares its player frames. */
+/** StreamFree's documented embed owns its JWPlayer directly; child frames are ads. */
 fun isSportsStartupFrameAllowed(embed: String, frameUrl: String, topLevel: Boolean) =
     topLevel && isEmbedNavigationAllowed(embed, frameUrl)
 
-/** Each exact parent may approve only its large direct player, never arbitrary links or ads. */
-class SportsStartupFramePolicy(private val embed: String) {
-    private val wrappers = mutableSetOf<String>()
-    private val children = mutableSetOf<String>()
-    private val golfId = runCatching {
-        URI(embed).path.trim('/').split('/').takeIf { isSafeEmbed(embed) && it.size == 4 && it[0] == "embed" && it[1] == "golf" }?.get(2)
-    }.getOrNull()
-    private fun wrapper(url: String) = runCatching {
-        val frame = URI(url); val query = url.toHttpUrlOrNull()
-        golfId != null && frame.scheme == "https" && frame.host == "rockylive.st" && frame.port == -1 && frame.userInfo == null && frame.fragment == null &&
-            frame.path in setOf("/source/streamed.php", "/source/streamed1.php") && query?.queryParameterValues("id") == listOf(golfId) &&
-            query.queryParameterValues("no").let { it.size == 1 && it.single()?.matches(Regex("[1-9][0-9]{0,3}")) == true }
-    }.getOrDefault(false)
-    private fun ingest(url: String) = runCatching {
-        val frame = URI(url)
-        golfId != null && isSafeEmbed(url) && frame.query == null && frame.fragment in setOf(null, "player=clappr&autoplay=true") &&
-            Regex("/embed/ingest/[A-Za-z0-9_-]{1,200}/[1-9][0-9]{0,3}/?").matches(frame.path)
-    }.getOrDefault(false)
-    fun accepts(url: String, topLevel: Boolean) = isSportsStartupFrameAllowed(embed, url, topLevel) || (!topLevel && (url in wrappers || url.substringBefore('#') in children))
-    // Embeds are allowed to load only their own player frames, not an unbounded tree
-    // of advertising documents (each origin otherwise creates a browser process).
-    fun allowsFrameNavigation(url: String) = isEmbedNavigationAllowed(embed, url) || wrapper(url) || ingest(url)
-    fun mayWait(url: String, topLevel: Boolean) = !topLevel && (wrapper(url) || ingest(url))
-    fun register(parent: String, topLevel: Boolean, child: String, width: Int, height: Int): Boolean {
-        if (width !in 320..16384 || height !in 180..16384) return false
-        val destinations = when {
-            topLevel && isSportsStartupFrameAllowed(embed, parent, true) && wrapper(child) -> wrappers
-            !topLevel && parent in wrappers && ingest(child) -> children
-            else -> return false
-        }
-        val identity = child.substringBefore('#')
-        if (identity !in destinations && destinations.size >= 4) return false
-        destinations += identity
-        return true
-    }
-    fun clear() { wrappers.clear(); children.clear() }
-}
-/** Streamed's documented iframe integration, with navigation/popups guarded by the native host. */
+/** StreamFree's documented iframe integration, with navigation/popups guarded by the native host. */
 fun sportsEmbedDocument(url: String): String {
     require(isSafeEmbed(url))
     val escaped = url.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")

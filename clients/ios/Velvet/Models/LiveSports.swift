@@ -102,8 +102,19 @@ enum SportsEmbedPolicy {
         if url.scheme == "http", ["127.0.0.1", "localhost"].contains(host), url.port == 18881 { return true }
         #endif
         guard url.scheme?.lowercased() == "https", url.port == nil else { return false }
-        // Streamed publishes its canonical embeds on this origin. Subresource
-        // requests stay inside WebKit, isolated from app credentials and APIs.
-        return ["embed.st", "embed.pk"].contains(host) && url.path.hasPrefix("/embed/")
+        // StreamFree's documented embeds contain exactly a category and key.
+        // Decode each segment independently to permit real Unicode team names,
+        // while rejecting encoded separators, traversal, and remote query data.
+        guard ["strmfree.st", "streamfree.top"].contains(host), url.query == nil, url.fragment == nil,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        let parts = components.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts[0].isEmpty, parts[1] == "embed" else { return false }
+        return parts[2...].allSatisfy { part in
+            guard let value = String(part).removingPercentEncoding, !value.isEmpty,
+                  value.utf8.count <= 240, value != ".", value != ".." else { return false }
+            return value.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_"
+            }
+        }
     }
 }

@@ -92,7 +92,7 @@ private struct LiveSportsContent: View {
                     HStack(spacing: 16) { scopePicker; sportPicker }
                     VStack(alignment: .leading, spacing: 12) { scopePicker; sportPicker }
                 }
-                Text("Events from Streamed")
+                Text("Events from StreamFree")
                     .font(VelvetFont.body(13)).foregroundStyle(VelvetColors.textSecondary)
                 if let message = vm.catalog?.message, !message.isEmpty {
                     Text(message).font(VelvetFont.body(14)).foregroundStyle(VelvetColors.textSecondary)
