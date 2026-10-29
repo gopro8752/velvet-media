@@ -14,11 +14,15 @@ Older Velvet builds cannot use this source. Update every client before enabling 
 
 ## Private deployment
 
-The service currently requires a provisioned runtime session from your own signed-in Spectrum account. An account sign-in UI is not included in this source package. Do not copy another installation's session, place credentials in an image, or publish the private configuration directory. Normal refreshes use the stored refresh token. The service renews ten minutes before expiry even when nobody is watching, with one shared refresh operation for background and player requests. Temporary failures retry with delays of one to fifteen minutes. Expired sessions with a saved device verifier are checked with Spectrum first; device renewal occurs only when Spectrum explicitly directs it. Tokens and rotated device context are saved atomically. A provider instruction to sign in again stops automatic renewal attempts; provision the fresh session and restart the service. Temporary provider failures do not become misleading sign-in prompts.
+The service requires a provisioned runtime session from your own signed-in Spectrum account. An account sign-in UI and unattended password login are not included in this source package. Do not copy another installation's session, place credentials in an image, or publish the private configuration directory.
+
+The service renews ten minutes before expiry, even when nobody is watching. Background maintenance and player requests share one renewal operation. A current session first uses its refresh token; an ordinary invalid-token response falls back once to its saved device verifier. An already expired session uses its saved verifier directly, following Spectrum's web client's automatic-renewal flow. This new authorization uses PKCE and a fresh nonce; it does not attach the expired session's context or require the separate resume-session validation endpoint to approve renewal. Rotated tokens, verifier and context are saved together in a private atomic file.
+
+Temporary provider failures back off from one to fifteen minutes. Explicit forced sign-in, account-security/countermeasure responses, and forbidden authorization stop further attempts with those credentials. The service continues checking for a newly provisioned session without repeating denied authentication requests. Spectrum may still require interactive sign-in, MFA, a password reset, or a challenge; this service does not bypass those decisions. A successful synthetic test or one live renewal is not proof that an account will never require sign-in again.
 
 Create `backend/spectrum-config/` outside version control, protect it with mode `0700`, and protect its JSON files with mode `0600`:
 
-- `auth.json`: the provisioned account's `accessToken`, `refreshToken`, `expiresAt` (Unix milliseconds), and `deviceId`. Preserve its `deviceVerifier` and `contextToken` when provided; these support provider-directed session renewal. Do not invent or substitute device identity fields.
+- `auth.json`: the provisioned account's `accessToken`, `refreshToken`, `expiresAt` (Unix milliseconds), and `deviceId`. Preserve its `deviceVerifier` and `contextToken` when provided; these support saved-device renewal. Do not invent or substitute device identity fields.
 - `spectrum.json`: `authFile` set to `/config/auth.json`; `tuneQuery` and `manifestQuery` containing the account's actual provider-issued playback/privacy/location settings; optionally `sourceName` and reviewed `channelAliases` (`id`, `entitlementId`, optional `name`). Do not change location flags to claim another home or market. Do not include another playback's Aegis token or stream-session identifier.
 
 Start the optional private service alongside the backend:
@@ -42,6 +46,20 @@ guide_enabled = true
 The native service becomes the authoritative Live TV lineup and playback source. It does not silently fall back to PrismCast. The existing `upstream_url` remains available for the separate Roku sports browser path. An included channel does not guarantee availability outside the account's home.
 
 Keep the Compose service's 90-second shutdown grace period in other deployment tools. Shutdown cancels future renewal timers and waits for an in-flight token rotation to be saved, so a restart does not discard a newly issued refresh token.
+
+## Session installation and private diagnostics
+
+Keep one running native service as the owner of each provisioned session. Do not leave another browser or helper independently refreshing the same copied credentials. A sign-in helper should write the complete new session to a temporary file with mode `0600`, then atomically rename it to `auth.pending.json` next to `auth.json`. The service validates and imports this pending session on its next authentication check. Send `SIGHUP` to import immediately; no service restart is needed. This preserves a completed login even when an older token rotation is still running. Do not overwrite the active `auth.json` while the service is renewing it.
+
+The private `/health` response separates process liveness (`ok`) from authentication readiness (`auth.ready`). It also includes active/opening playback-session counts and sanitized authentication phase, expiry, last successful renewal, next renewal check, current failure reason and stage, and the last failure time/reason/stage. Last-failure history remains after successful renewal or a fresh sign-in so recovery does not erase the reason for an outage. Authentication history is persisted in `auth.json.status.json` with mode `0600`; last-success time survives process restarts. The status does not contain account identity, tokens, provider response bodies, or media URLs. `ready` means a locally unexpired credential is available, not that every channel is entitled or that the provider has just revalidated it.
+
+Operators can send `SIGUSR2` for an immediate normal renewal through the running service's existing credential owner. To deliberately test saved-device renewal, atomically place this **non-secret**, one-shot command in `auth.json.command.json`, then send `SIGUSR2` within 60 seconds:
+
+```json
+{"action":"renew_device","createdAt":1800000000000}
+```
+
+Replace the example timestamp with the current Unix time in milliseconds. Other fields/actions, stale commands and oversized files are rejected. The command is consumed once. This operator test can rotate credentials or reveal that Spectrum requires sign-in, so check status afterward. An ordinary first-leg verifier rejection during this deliberate diagnostic does not disable an otherwise unexpired access/refresh session. Forced sign-in, account/security challenges, forbidden access and expired sessions still stop denied renewal attempts. Signals and private configuration access are operator-only controls; there is no public renewal endpoint. Do not use `SIGUSR1`, which Node reserves for its inspector.
 
 ## Program guide
 

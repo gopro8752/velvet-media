@@ -5,7 +5,23 @@ const ORIGIN = 'https://apis.spectrum.net';
 const CLIENT_ID = 'stva-ovp';
 const MAX_AUTH_BYTES = 256 * 1024;
 export const authText = value => typeof value === 'string' && value.length > 0 && value.length <= 65536 && !/[\r\n\0]/.test(value);
-const signIn = () => new BridgeError('sign_in_required', 401);
+export const authFailure = (reason = 'authentication_rejected', step = null) => {
+  const error = new BridgeError('sign_in_required', 401);
+  error.authReason = reason; error.authStep = step; return error;
+};
+const signIn = authFailure;
+const suspiciousCodes = new Set([1300,1301,1302,1303,1304,1305,1306]);
+function rejection(response, value, step) {
+  // Spectrum's web client stops on these account/security decisions rather than
+  // attempting another credential. Inspect only known fields; never retain a body.
+  const action = value?.nextAction;
+  const providerCode = Number(value?.resultCode ?? value?.errorCode ?? value?.code ?? response.headers?.['x-pi-auth-failure']);
+  if (action === 'COUNTERMEASURES' || suspiciousCodes.has(providerCode)) return signIn('provider_challenge', step);
+  if (action === 'STANDARD_AUTH') return signIn('interactive_sign_in_required', step);
+  if (response.status === 403) return signIn('authentication_forbidden', step);
+  if (response.status === 401 || (response.status === 400 && ['invalid_grant','invalid_token'].includes(value?.error))) return signIn('authentication_rejected', step);
+  return null;
+}
 const hasVerifier = auth => authText(auth.deviceVerifier);
 const clientHeaders = auth => ({'x-client-id': CLIENT_ID, 'x-client-device-id': auth.deviceId});
 
@@ -19,23 +35,27 @@ function parse(response) {
   return value;
 }
 
-function requireSuccess(response, value) {
-  if (response.status === 200) return;
-  if ([401,403].includes(response.status) || (response.status === 400 && ['invalid_grant','invalid_token'].includes(value.error))) throw signIn();
-  throw new BridgeError();
-}
-
-async function post(path, fields, auth, request, extraHeaders = {}) {
+async function post(path, fields, auth, request, extraHeaders = {}, step) {
   const body = Buffer.from(new URLSearchParams(fields).toString());
-  const response = await request({url: ORIGIN + path, method: 'POST',
-    headers: {...clientHeaders(auth), 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': body.length, ...extraHeaders},
-    body, maxBytes: MAX_AUTH_BYTES});
-  // Authentication status remains meaningful when a gateway omits its JSON
-  // error body. Let the caller validate the saved session once in that case.
-  if ([401,403].includes(response.status)) throw signIn();
-  const value = parse(response);
-  requireSuccess(response, value);
-  return value;
+  let response;
+  try {
+    response = await request({url: ORIGIN + path, method: 'POST',
+      headers: {...clientHeaders(auth), 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': body.length, ...extraHeaders},
+      body, maxBytes: MAX_AUTH_BYTES});
+    let value;
+    try { value = parse(response); }
+    catch (error) {
+      if ([401,403].includes(response.status)) throw rejection(response, null, step);
+      throw error;
+    }
+    const denied = rejection(response, value, step);
+    if (denied) throw denied;
+    if (response.status !== 200) throw new BridgeError();
+    return value;
+  } catch (error) {
+    if (error instanceof BridgeError) {error.authStep = step; throw error;}
+    const safe = new BridgeError(); safe.authStep = step; throw safe;
+  }
 }
 
 function tokenResult(value, current, now, {nonce, verifier} = {}) {
@@ -66,7 +86,7 @@ function tokenResult(value, current, now, {nonce, verifier} = {}) {
 }
 
 async function refreshToken(auth, request, now) {
-  return tokenResult(await post('/auth/oauth/v2/token', {client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: auth.refreshToken}, auth, request), auth, now);
+  return tokenResult(await post('/auth/oauth/v2/token', {client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: auth.refreshToken}, auth, request, {}, 'refresh_token'), auth, now);
 }
 
 async function verifierAuth(auth, request, now) {
@@ -74,46 +94,40 @@ async function verifierAuth(auth, request, now) {
   const verifier = randomBytes(96).toString('base64url');
   const nonce = randomBytes(24).toString('base64url');
   const headers = {Authorization: `Bearer ${auth.deviceVerifier}`};
-  if (authText(auth.contextToken)) headers['x-context-token'] = auth.contextToken;
+  // Automatic verifier renewal starts a new authorization. Like the web
+  // client's autoRefreshToken path, do not attach an expired session context.
   const authorization = await post('/auth/oauth/v2/consumer/video/deviceverifier/auth', {
     client_id: CLIENT_ID, response_type: 'code', state: 'state', client_device_id: auth.deviceId,
     nonce, supportSMB: 'false', supportMDUBulk: 'false',
     code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256',
-  }, auth, request, headers);
+  }, auth, request, headers, 'device_verifier');
   if (!authText(authorization.authCode)) throw new BridgeError();
   const value = await post('/auth/oauth/v2/token', {
     client_id: CLIENT_ID, grant_type: 'authorization_code', code: authorization.authCode,
     client_device_id: auth.deviceId, code_verifier: verifier,
-  }, auth, request);
+  }, auth, request, {}, 'authorization_code');
   return tokenResult(value, auth, now, {nonce, verifier: authorization.deviceVerifier ?? authorization.xoauth_device_verifier});
 }
 
-async function validate(auth, request, now, allowRefresh) {
-  const headers = {...clientHeaders(auth), 'x-access-token': auth.accessToken,
-    'x-refresh-token': auth.refreshToken, 'x-device-verifier': auth.deviceVerifier};
-  if (authText(auth.contextToken)) headers['x-context-token'] = auth.contextToken;
-  const response = await request({url: ORIGIN + '/auth/oauth/v2/validateSession?getLocation=false', headers, maxBytes: MAX_AUTH_BYTES});
-  let value;
-  try { value = parse(response); }
-  catch (error) { if ([401,403].includes(response.status)) throw signIn(); throw error; }
-  if (![200,401,403].includes(response.status)) { requireSuccess(response, value); throw new BridgeError(); }
-  if (response.status === 200 && value.isValidSession === true) {
-    const ttl = Number(value.accessTokenTTL);
-    if (!Number.isFinite(ttl) || ttl <= 0 || !Number.isSafeInteger(Math.ceil(now() + ttl * 1000))) throw new BridgeError();
-    return {...auth, expiresAt: now() + ttl * 1000};
+export async function renewAuth(current, {request, now = Date.now, method = 'automatic', onMethod = () => {}}) {
+  // This is the provider web client's automatic lifecycle, not resumeAuth's
+  // validateSession path. A validation response can demand STANDARD_AUTH for an
+  // expired access session even when its independent saved-device credential works.
+  const expired = Number.isFinite(Number(current.expiresAt)) && Number(current.expiresAt) <= now();
+  if (method === 'device_verifier' || (expired && hasVerifier(current))) {
+    onMethod('device_verifier');
+    return verifierAuth(current, request, now);
   }
-  // Only an explicit provider direction can authorize saved-device renewal.
-  // STANDARD_AUTH, COUNTERMEASURES, or any unknown/missing action require login.
-  if (response.status !== 403 && value.nextAction === 'DEVICEVERIFIER_AUTH') return verifierAuth(auth, request, now);
-  if (response.status !== 403 && value.nextAction === 'REFRESH_AUTH' && allowRefresh) return refreshToken(auth, request, now);
-  throw signIn();
-}
-
-export async function renewAuth(current, {request, now = Date.now}) {
-  if (hasVerifier(current) && Number(current.expiresAt) <= now()) return validate(current, request, now, true);
+  onMethod('refresh_token');
   try { return await refreshToken(current, request, now); }
   catch (error) {
-    if (error instanceof BridgeError && error.code === 'sign_in_required' && hasVerifier(current)) return validate(current, request, now, false);
+    // Outages/malformed responses are retried later. Only an ordinary invalid
+    // refresh credential can fall back; account challenges and forbidden access
+    // require the provider's interactive sign-in flow.
+    if (error instanceof BridgeError && error.authReason === 'authentication_rejected' && hasVerifier(current)) {
+      onMethod('device_verifier');
+      return verifierAuth(current, request, now);
+    }
     throw error;
   }
 }

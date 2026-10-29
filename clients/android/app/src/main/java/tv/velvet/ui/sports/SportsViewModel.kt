@@ -1,5 +1,6 @@
 package tv.velvet.ui.sports
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -35,7 +36,12 @@ class SportsStreamsViewModel(private val repository: SportsRepository, private v
         job?.cancel()
         job = viewModelScope.launch {
             mutable.value = SportsStreamsState()
-            try { val result = repository.streams(eventId); mutable.value = SportsStreamsState(false, result.streams, result.message) }
+            val began = SystemClock.elapsedRealtime()
+            try {
+                val result = repository.streams(eventId)
+                android.util.Log.d("VelvetSports", "Startup phase=sources-ready elapsedMs=${SystemClock.elapsedRealtime() - began} count=${result.streams.size}")
+                mutable.value = SportsStreamsState(false, result.streams, result.message)
+            }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { mutable.value = SportsStreamsState(false, message = sportsMessage(e)) }
         }

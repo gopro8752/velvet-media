@@ -118,3 +118,22 @@ enum SportsEmbedPolicy {
         }
     }
 }
+
+/// Main-document DNS recovery only. Never follows a redirect or changes the event/quality.
+struct SportsEmbedRecovery {
+    private(set) var currentURL: URL
+    private var retried = false
+    init(_ initial: URL) { currentURL = initial }
+
+    mutating func retryDNSFailure(failedURL: URL?, isDNSFailure: Bool, playbackStarted: Bool, remainingMilliseconds: Int) -> URL? {
+        guard isDNSFailure, !playbackStarted, !retried, remainingMilliseconds > 1000,
+              failedURL == currentURL, SportsEmbedPolicy.accepts(currentURL),
+              let host = currentURL.host?.lowercased(), ["strmfree.st", "streamfree.top"].contains(host),
+              var components = URLComponents(url: currentURL, resolvingAgainstBaseURL: false) else { return nil }
+        components.host = host == "strmfree.st" ? "streamfree.top" : "strmfree.st"
+        guard let alternate = components.url, SportsEmbedPolicy.accepts(alternate) else { return nil }
+        retried = true
+        currentURL = alternate
+        return alternate
+    }
+}

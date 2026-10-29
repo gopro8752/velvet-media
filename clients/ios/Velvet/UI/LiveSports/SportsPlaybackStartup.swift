@@ -6,7 +6,9 @@ enum SportsPlaybackStartup {
     static let world = WKContentWorld.world(name: "VelvetSportsStartup")
     static let handlerName = "sportsPlaybackState"
     static let cancelScript = "window.__velvetCancelStartup?.()"
-    static let beginScript = "window.__velvetStartApprovedStartup?.()"
+    static func beginScript(remainingMilliseconds: Int) -> String {
+        "window.__velvetStartApprovedStartup?.(\(max(0, min(45000, remainingMilliseconds))))"
+    }
 
     static func makeScript(for embedURL: URL) -> String {
         let config = ["embedURL": embedURL.absoluteString]
@@ -28,6 +30,7 @@ enum SportsPlaybackStartup {
       let deadline = 0;
       let timer = null;
       const samples = new WeakMap();
+      const milestones = new Set();
       let observation = null;
       const observePlayback = video => {
         if (observation !== null) return;
@@ -44,6 +47,7 @@ enum SportsPlaybackStartup {
       };
       let lastAttempt = -Infinity;
       const notify = state => window.webkit.messageHandlers.sportsPlaybackState.postMessage({state});
+      const milestone = state => { if (!milestones.has(state)) { milestones.add(state); notify(state); } };
       const visible = element => {
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
@@ -63,6 +67,11 @@ enum SportsPlaybackStartup {
           return visible(video) && rect.width >= 320 && rect.height >= 180;
         });
         for (const video of videos) {
+          if ((video.getAttribute('src') || '').trim() || video.srcObject ||
+              Array.from(video.querySelectorAll('source')).some(source => (source.getAttribute('src') || '').trim())) {
+            milestone('media-source');
+          }
+          if (video.readyState >= 1) milestone('media-metadata');
           const previous = samples.get(video);
           const time = video.currentTime;
           if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2 &&
@@ -102,9 +111,10 @@ enum SportsPlaybackStartup {
       };
       // Only the selected StreamFree embed can receive native startup approval;
       // nested advertising documents never get play or click automation.
-      window.__velvetStartApprovedStartup = () => {
+      window.__velvetStartApprovedStartup = remainingMilliseconds => {
         if (stopped || timer !== null) return;
-        deadline = performance.now() + 45000;
+        const remaining = Number.isFinite(remainingMilliseconds) ? Math.max(0, Math.min(45000, remainingMilliseconds)) : 45000;
+        deadline = performance.now() + remaining;
         timer = setInterval(tick, 300);
         tick();
       };

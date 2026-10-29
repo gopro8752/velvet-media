@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 @MainActor
 protocol LiveSportsServing: AnyObject {
@@ -21,10 +22,14 @@ final class LiveSportsClient: LiveSportsServing {
     }
 
     func streams(eventID: String) async throws -> SportsStreams {
+        let began = ProcessInfo.processInfo.systemUptime
         guard !eventID.isEmpty, !eventID.contains("/"), !eventID.contains("?"), !eventID.contains("#") else {
             throw SportsError.message("This event is unavailable. Refresh the events and try again.")
         }
         let result: SportsStreams = try await get(path: "sports/events/\(eventID)/streams")
+        let elapsed = Int((ProcessInfo.processInfo.systemUptime - began) * 1000)
+        Logger(subsystem: "tv.velvet.ios", category: "SportsStartup")
+            .info("Startup phase=sources-ready elapsedMs=\(elapsed, privacy: .public)")
         guard result.eventId == eventID else { throw SportsError.message("The server returned a different event. Please refresh.") }
         var seen = Set<String>()
         return SportsStreams(eventId: result.eventId, streams: result.streams.filter {

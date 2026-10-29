@@ -43,6 +43,11 @@ import tv.velvet.ui.theme.VelvetColors
 @Composable
 fun SportsPlayerScreen(eventId: String, title: String, onBack: () -> Unit) {
     val app = LocalContext.current.applicationContext as VelvetApp
+    LaunchedEffect(eventId) {
+        // The user selected an event. Prepare only Gecko and our bundled helper
+        // while its source list loads; no provider page or hidden stream opens.
+        SportsBrowserRuntime.prepare(app).accept({}, {})
+    }
     val vm: SportsStreamsViewModel = viewModel(factory = viewModelFactory { initializer { SportsStreamsViewModel(app.container.sportsRepository, eventId) } })
     val state by vm.state.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<SportsStream?>(null) }

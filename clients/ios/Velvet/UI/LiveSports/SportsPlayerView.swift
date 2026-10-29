@@ -1,4 +1,5 @@
 import AVFoundation
+import OSLog
 import SwiftUI
 import WebKit
 
@@ -21,6 +22,13 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
     private var hasLoaded = false
     private var startupTask: Task<Void, Never>?
     private var startupFrames: [WKFrameInfo] = []
+    // Reuse downloaded player resources only within this player. A fresh store
+    // on every Reload/source change needlessly repeats its cold network setup.
+    private var websiteDataStore: WKWebsiteDataStore?
+    private var loadStartedAt: TimeInterval = 0
+    private var embedRecovery: SportsEmbedRecovery?
+    private var mainNavigation: WKNavigation?
+    private let startupLogger = Logger(subsystem: "tv.velvet.ios", category: "SportsStartup")
 #if DEBUG
     private var testInterruptionTask: Task<Void, Never>?
 #endif
@@ -48,9 +56,18 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func load(_ id: String) {
+        load(id, dnsRetry: false)
+    }
+
+    private func load(_ id: String, dnsRetry: Bool) {
         guard !closed, let stream = streams.first(where: { $0.selectionID == id }),
               SportsEmbedPolicy.accepts(stream.embedUrl) else { return }
-        if hasLoaded { telemetry?.sourceSwitch() }
+        if !dnsRetry {
+            embedRecovery = SportsEmbedRecovery(stream.embedUrl)
+            loadStartedAt = ProcessInfo.processInfo.systemUptime
+        }
+        guard let embedURL = embedRecovery?.currentURL, SportsEmbedPolicy.accepts(embedURL) else { return }
+        if hasLoaded && !dnsRetry { telemetry?.sourceSwitch() }
         hasLoaded = true
         observedState = "buffering"
         telemetry?.observe(force: true)
@@ -60,7 +77,9 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         loading = true
         message = nil
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        let store = websiteDataStore ?? .nonPersistent()
+        websiteDataStore = store
+        configuration.websiteDataStore = store
         configuration.allowsInlineMediaPlayback = true
         configuration.allowsPictureInPictureMediaPlayback = false
         configuration.allowsAirPlayForMediaPlayback = false
@@ -68,7 +87,7 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.add(SportsPlaybackStateHandler(owner: self),
             contentWorld: SportsPlaybackStartup.world, name: SportsPlaybackStartup.handlerName)
-        configuration.userContentController.addUserScript(WKUserScript(source: SportsPlaybackStartup.makeScript(for: stream.embedUrl),
+        configuration.userContentController.addUserScript(WKUserScript(source: SportsPlaybackStartup.makeScript(for: embedURL),
             injectionTime: .atDocumentEnd, forMainFrameOnly: false, in: SportsPlaybackStartup.world))
 
         let web = WKWebView(frame: .zero, configuration: configuration)
@@ -81,8 +100,10 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         web.allowsLinkPreview = false
         web.accessibilityIdentifier = "sports.webPlayer"
         webView = web
+        startupPhase("browser-created")
+        let remainingSeconds = max(0, 50 - (ProcessInfo.processInfo.systemUptime - loadStartedAt))
         startupTask = Task { [weak self, weak web] in
-            try? await Task.sleep(nanoseconds: 50_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(remainingSeconds * 1_000_000_000))
             guard !Task.isCancelled, let self, let web, web === self.webView, self.loading else { return }
             self.stopStartup()
             self.loading = false
@@ -93,7 +114,10 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         // Load only the selected public embed. Keeping its document first-party
         // lets WebKit use the provider's own HLS/service-worker startup path.
         // Native delegates still reject escapes, windows, forms and downloads.
-        web.load(URLRequest(url: stream.embedUrl))
+        // Reload must still fetch a fresh embed/session; only its reusable
+        // resources can benefit from the current player's in-memory store.
+        mainNavigation = web.load(URLRequest(url: embedURL, cachePolicy: .reloadIgnoringLocalCacheData))
+        startupPhase("document-requested")
         UIApplication.shared.isIdleTimerDisabled = true
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -112,6 +136,7 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         telemetry?.end()
         closed = true
         detach()
+        websiteDataStore = nil
     }
 
     func usePlayerControls() {
@@ -138,6 +163,7 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
             web.removeFromSuperview()
         }
         webView = nil
+        mainNavigation = nil
         loading = false
         UIApplication.shared.isIdleTimerDisabled = false
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
@@ -147,9 +173,14 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         guard let web = state.webView, web === webView, !closed, !suspended,
               state.name == SportsPlaybackStartup.handlerName, state.frameInfo.isMainFrame,
               let stream = streams.first(where: { $0.selectionID == selectedID }),
-              SportsPlaybackStartup.accepts(frameURL: state.frameInfo.request.url, for: stream.embedUrl),
+              let embedURL = embedRecovery?.currentURL,
+              SportsPlaybackStartup.accepts(frameURL: state.frameInfo.request.url, for: embedURL),
               let payload = state.body as? [String: String], payload.count == 1,
-              let value = payload["state"], ["ready", "playing", "paused", "buffering", "ended"].contains(value) else { return }
+              let value = payload["state"], ["ready", "media-source", "media-metadata", "playing", "paused", "buffering", "ended"].contains(value) else { return }
+        if value == "media-source" || value == "media-metadata" {
+            startupPhase(value)
+            return
+        }
         if value != "ready" {
 #if DEBUG
             if observedState != value { print("[SportsDiagnostics] observed state=\(value)") }
@@ -160,13 +191,16 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         }
         if value == "ready" {
             if loading, startupFrames.count < 16 {
+                startupPhase("helper-ready")
                 startupFrames.append(state.frameInfo)
-                web.evaluateJavaScript(SportsPlaybackStartup.beginScript, in: state.frameInfo,
+                let remaining = max(0, Int((49 - (ProcessInfo.processInfo.systemUptime - loadStartedAt)) * 1000))
+                web.evaluateJavaScript(SportsPlaybackStartup.beginScript(remainingMilliseconds: remaining), in: state.frameInfo,
                     in: SportsPlaybackStartup.world, completionHandler: nil)
             }
             else { web.evaluateJavaScript(SportsPlaybackStartup.cancelScript, in: state.frameInfo,
                                           in: SportsPlaybackStartup.world, completionHandler: nil) }
         } else if value == "playing" && loading {
+            startupPhase("first-video")
             // A decoded picture and advancing time, not a page load or ad-click,
             // ends startup permanently so later Pause remains the user's choice.
             stopStartup()
@@ -201,6 +235,22 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
         startupFrames.removeAll()
     }
 
+    private func startupPhase(_ name: String) {
+        let elapsed = Int((ProcessInfo.processInfo.systemUptime - loadStartedAt) * 1000)
+        // Fixed phase names and elapsed time only; no page URLs or provider tokens.
+        startupLogger.info("Startup phase=\(name, privacy: .public) elapsedMs=\(elapsed, privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard webView === self.webView, !closed else { return }
+        startupPhase("document-committed")
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === self.webView, !closed else { return }
+        startupPhase("document-loaded")
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
 
@@ -209,7 +259,7 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
               let frame = action.targetFrame, let url = action.request.url,
               url.user == nil, url.password == nil else { decisionHandler(.cancel); return }
         if frame.isMainFrame {
-            let selectedURL = streams.first(where: { $0.selectionID == selectedID })?.embedUrl
+            let selectedURL = embedRecovery?.currentURL
             decisionHandler(url == selectedURL && action.navigationType == .other ? .allow : .cancel)
         } else {
             // Subframes can load the provider's nested players. Native policy
@@ -226,13 +276,25 @@ final class SportsWebPlayer: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        failed(webView, error: error)
+        failed(webView, error: error, allowsDNSRetry: navigation != nil && navigation === mainNavigation)
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         failed(webView, error: error)
     }
-    private func failed(_ web: WKWebView, error: Error) {
+    private func failed(_ web: WKWebView, error: Error, allowsDNSRetry: Bool = false) {
         guard web === webView, (error as NSError).code != NSURLErrorCancelled else { return }
+        let failure = error as NSError
+        let failedURL = (failure.userInfo[NSURLErrorFailingURLErrorKey] as? URL)
+            ?? (failure.userInfo[NSURLErrorFailingURLStringErrorKey] as? String).flatMap(URL.init(string:))
+        let dnsFailure = allowsDNSRetry && failure.domain == NSURLErrorDomain &&
+            [NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed].contains(failure.code)
+        let remaining = Int((50 - (ProcessInfo.processInfo.systemUptime - loadStartedAt)) * 1000)
+        if !closed, !suspended, embedRecovery?.retryDNSFailure(failedURL: failedURL, isDNSFailure: dnsFailure,
+            playbackStarted: !loading, remainingMilliseconds: remaining) != nil {
+            startupPhase("dns-mirror-retry")
+            load(selectedID, dnsRetry: true)
+            return
+        }
         stopStartup()
         loading = false
         message = "Couldn't load this player. Try another stream or retry."

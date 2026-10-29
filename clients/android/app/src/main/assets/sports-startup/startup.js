@@ -29,7 +29,8 @@
       // the startup overlay without ever notifying the app.
       const observeMs = Number.isFinite(message.observeMs) ? Math.max(0, Math.min(45000, message.observeMs)) : 45000;
       deadline = Date.now() + observeMs;
-      actionDeadline = Date.now() + Math.min(30000, observeMs);
+      const actionMs = Number.isFinite(message.actionMs) ? Math.max(0, Math.min(30000, message.actionMs)) : 30000;
+      actionDeadline = Date.now() + Math.min(actionMs, observeMs);
       timer = setInterval(tick, 400); tick();
     }
   });

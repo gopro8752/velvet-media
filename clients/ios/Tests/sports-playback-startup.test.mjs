@@ -74,7 +74,7 @@ function fixture({ url = 'https://strmfree.st/embed/basketball/wizards-vs-cavali
       vm.runInContext(configuredScript, context, { timeout: 1000 });
       if (approve) vm.runInContext('window.__velvetStartApprovedStartup?.()', context);
     },
-    approve() { vm.runInContext('window.__velvetStartApprovedStartup?.()', context); },
+    approve(remaining) { vm.runInContext(`window.__velvetStartApprovedStartup?.(${remaining === undefined ? '' : Number(remaining)})`, context); },
     cancel() { vm.runInContext('window.__velvetCancelStartup?.()', context); },
     advance(ms) {
       const end = now + ms;
@@ -270,4 +270,34 @@ test('passive reporting requires ongoing clock movement and stops when backgroun
   f.document.hidden = true; f.advance(5000);
   assert.equal(f.messages.length, count);
   assert.equal(f.timerCount, 0);
+});
+
+test('startup milestones separate source attachment and metadata from decoded playback without leaking URLs', () => {
+  const f = fixture();
+  const video = f.video({readyState: 0, videoWidth: 0, videoHeight: 0, paused: false});
+  f.start();
+  assert.deepEqual(f.messages, [{state: 'ready'}, {state: 'media-source'}]);
+  f.advance(3000);
+  assert.equal(f.messages.length, 2);
+  video.readyState = 1;
+  f.advance(300);
+  assert.deepEqual(f.messages.at(-1), {state: 'media-metadata'});
+  f.advance(3000);
+  assert.equal(f.messages.length, 3);
+  video.readyState = 4; video.videoWidth = 1920; video.videoHeight = 1080;
+  video.currentTime = .5; f.advance(300);
+  assert.deepEqual(f.messages.at(-1), {state: 'playing'});
+  for (const message of f.messages) assert.deepEqual(Object.keys(message), ['state']);
+  assert.equal(video.plays, 0);
+});
+
+test('a DNS replacement receives only the remaining original startup time', () => {
+  const f = fixture();
+  const control = f.control(); f.start(false); f.approve(1000);
+  assert.equal(control.clicks, 1);
+  f.advance(1200);
+  assert.equal(f.timerCount, 0);
+  f.advance(5000);
+  assert.equal(control.clicks, 1);
+  assert.equal(f.messages.some(message => message.state === 'playing'), false);
 });

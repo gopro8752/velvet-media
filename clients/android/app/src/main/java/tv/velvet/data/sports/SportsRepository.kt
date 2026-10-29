@@ -53,6 +53,25 @@ fun isEmbedNavigationAllowed(initial: String, destination: String): Boolean = ru
 fun isSportsStartupFrameAllowed(embed: String, frameUrl: String, topLevel: Boolean) =
     topLevel && isEmbedNavigationAllowed(embed, frameUrl)
 
+/** One DNS-only retry of the selected document, never a redirect or media-source fallback. */
+internal class SportsEmbedRecovery(initial: String) {
+    var currentUrl = initial
+        private set
+    private var retried = false
+    init { require(isSafeEmbed(initial)) }
+    fun retryDnsFailure(failedUrl: String?, isDnsFailure: Boolean, playbackStarted: Boolean, remainingMs: Long): String? {
+        if (!isDnsFailure || playbackStarted || retried || remainingMs <= 1_000 ||
+            failedUrl == null || !isEmbedNavigationAllowed(currentUrl, failedUrl)) return null
+        val current = URI(currentUrl)
+        val host = if (current.host.equals("strmfree.st", true)) "streamfree.top" else "strmfree.st"
+        val alternate = "https://$host${current.rawPath}"
+        if (!isSafeEmbed(alternate)) return null
+        retried = true
+        currentUrl = alternate
+        return alternate
+    }
+}
+
 /** StreamFree's documented iframe integration, with navigation/popups guarded by the native host. */
 fun sportsEmbedDocument(url: String): String {
     require(isSafeEmbed(url))

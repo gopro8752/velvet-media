@@ -28,6 +28,18 @@ final class SportsMockProtocol: URLProtocol {
         for path in ["http://strmfree.st/embed/basketball/a", "https://strmfree.st.evil.example/embed/basketball/a", "https://name:pass@strmfree.st/embed/basketball/a", "https://strmfree.st:8443/embed/basketball/a", "https://strmfree.st/login", "file:///tmp/video", "javascript:alert(1)", "https://127.0.0.1/embed/basketball/a", "https://strmfree.st/embed/basketball/a?redirect=ad", "https://strmfree.st/embed/basketball/a#player", "https://strmfree.st/embed/basketball/a%2fb", "https://strmfree.st/embed/basketball/a%252fb", "https://strmfree.st/embed/basketball/%2e%2e", "https://strmfree.st/embed/basketball/a/", "https://embed.st/embed/golf/a/1"] {
             expect(!SportsEmbedPolicy.accepts(URL(string: path)!), "Unsafe embed accepted: \(path)")
         }
+        let original = URL(string: "https://strmfree.st/embed/soccer/cf-montr%C3%A9al1080p")!
+        var recovery = SportsEmbedRecovery(original)
+        expect(recovery.retryDNSFailure(failedURL: original, isDNSFailure: false, playbackStarted: false, remainingMilliseconds: 20000) == nil, "TLS/network errors cannot trigger a mirror")
+        expect(recovery.retryDNSFailure(failedURL: original, isDNSFailure: true, playbackStarted: true, remainingMilliseconds: 20000) == nil, "Mid-game must not trigger hidden playback")
+        expect(recovery.retryDNSFailure(failedURL: original, isDNSFailure: true, playbackStarted: false, remainingMilliseconds: 1000) == nil, "Mirror must honor total startup budget")
+        for bad in ["https://strmfree.st/ad.html", "https://strmfree.st/embed/soccer/cf-montr%C3%A9al1080p2", "https://strmfree.st/embed/soccer/cf-montr%C3%A9al1080p?redirect=ad"] {
+            expect(recovery.retryDNSFailure(failedURL: URL(string: bad), isDNSFailure: true, playbackStarted: false, remainingMilliseconds: 20000) == nil, "Only exact selected document may recover")
+        }
+        let alternate = recovery.retryDNSFailure(failedURL: original, isDNSFailure: true, playbackStarted: false, remainingMilliseconds: 20000)
+        expect(alternate?.absoluteString == "https://streamfree.top/embed/soccer/cf-montr%C3%A9al1080p", "Mirror must preserve exact encoded path")
+        expect(recovery.currentURL == alternate, "Origin validation must follow the selected mirror")
+        expect(recovery.retryDNSFailure(failedURL: alternate, isDNSFailure: true, playbackStarted: false, remainingMilliseconds: 15000) == nil, "Only one DNS retry is allowed")
         let guide = try LiveDateDecoder.make().decode(LiveGuide.self, from: Data(#"{"enabled":true,"sourceName":"Spectrum","updatedAt":null,"channels":[{"channelId":"tv","programs":[{"id":"next","title":"Next","startTime":"2026-10-12T20:00:00Z","endTime":"2026-10-12T21:00:00Z"},{"id":"now","title":"Current","startTime":"2026-10-12T19:00:00Z","endTime":"2026-10-12T20:00:00Z"}]}]}"#.utf8))
         let schedule = guide.channels[0]
         expect(schedule.now(at: event.startTime)?.title == "Current", "Current program must use exact time interval")

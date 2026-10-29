@@ -243,3 +243,15 @@ test('bridge starts auth maintenance, sanitizes its errors, and waits for rotati
   await new Promise(r=>setImmediate(r));assert.equal(stopped,1);assert.equal(closed,false);
   finished.resolve();await closing;assert.equal(closed,true);
 });
+
+test('private health separates liveness from auth readiness and counts owned playback sessions',async t=>{
+  const auth={phase:'retrying',ready:false,lastSuccessAt:1800000000000,failureReason:'provider_unavailable'};
+  const f=fixture(t,{getAuthStatus:()=>({...auth})});
+  assert.deepEqual(f.bridge.health(),{ok:true,activeSessions:0,openingSessions:0,auth});
+  const tuned=await f.bridge.tune('example','dash-widevine');assert.equal(f.bridge.health().activeSessions,1);
+  await f.bridge.stop(tuned.sessionId);assert.equal(f.bridge.health().activeSessions,0);
+  const server=createHttpServer(f.bridge);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
+  const response=await fetch(`http://127.0.0.1:${server.address().port}/health`);
+  assert.equal(response.status,200);assert.equal((await response.json()).auth.ready,false);
+});

@@ -144,6 +144,8 @@ export function createBridge(input,{request=boundedRequest,provider,now=Date.now
     for(const session of cleanupSessions.values())if(!session.closing&&now()>=session.nextCleanup)closeSession(session).catch(()=>{});
   },15000);reaper.unref?.();
   return {
+    health(){return {ok:true,activeSessions:sessions.size,openingSessions:opening,auth:provider.getAuthStatus?.()??null};},
+    async operatorAuth(options){await provider.operatorAuth(options);log({event:'auth_operator_completed',phase:provider.authStatus.phase,method:provider.authStatus.lastMethod});},
     async channels(){return {enabled:true,sourceName:config.sourceName,channels:(await provider.channels()).map(e=>e.channel),message:null};},
     async guide(){return guide.snapshot(config.sourceName);},
     tune,
@@ -195,7 +197,7 @@ export function createHttpServer(bridge,{allowedClients}={}) {
       if(allowedClients&&!allowedClients.includes(req.socket.remoteAddress))throw new BridgeError('invalid_request',403);
       if(!req.url.startsWith('/')||req.url.startsWith('//')||req.headers.origin)throw new BridgeError('invalid_request',400);
       const url=new URL(req.url,'http://localhost');let match;
-      if(req.method==='GET'&&url.pathname==='/health'&&!url.search)return reply(200,'{"ok":true}');
+      if(req.method==='GET'&&url.pathname==='/health'&&!url.search)return reply(200,JSON.stringify(bridge.health?.()??{ok:true}));
       if(req.method==='GET'&&url.pathname==='/live/channels'&&!url.search)return reply(200,JSON.stringify(await bridge.channels()));
       if(req.method==='GET'&&url.pathname==='/live/guide'&&!url.search)return reply(200,JSON.stringify(await bridge.guide()));
       if(req.method==='POST'&&url.pathname==='/live/tune'&&!url.search){
@@ -232,6 +234,9 @@ async function main(){
   const config=JSON.parse(await readFile(process.env.SPECTRUM_CONFIG,'utf8'));
   const bridge=createBridge(config,{log:entry=>process.stderr.write(JSON.stringify(entry)+'\n')});
   const server=createHttpServer(bridge);server.listen(8812,'0.0.0.0');
-  const close=async()=>{server.close();await bridge.close();server.closeAllConnections();process.exit(0);};process.once('SIGTERM',close);process.once('SIGINT',close);
+  let operator=Promise.resolve();
+  const operate=reload=>{operator=operator.then(()=>bridge.operatorAuth({reload})).catch(error=>bridge.report('auth_operator_failed',error));};
+  process.on('SIGHUP',()=>operate(true));process.on('SIGUSR2',()=>operate(false));
+  const close=async()=>{server.close();await operator;await bridge.close();server.closeAllConnections();process.exit(0);};process.once('SIGTERM',close);process.once('SIGINT',close);
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main().catch(()=>{process.stderr.write('{"event":"startup_failed"}\n');process.exitCode=1;});

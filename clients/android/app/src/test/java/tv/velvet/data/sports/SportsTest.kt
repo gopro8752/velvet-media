@@ -34,6 +34,30 @@ class SportsTest {
         assertFalse(isEmbedNavigationAllowed(embed, "$embed?redirect=https://ads.example"))
         assertFalse(isEmbedNavigationAllowed("https://ads.example/embed/basketball/game", embed))
     }
+    @Test fun `DNS recovery preserves the exact Unicode event and permits only one mirror`() {
+        val original = "https://strmfree.st/embed/soccer/cf-montr%C3%A9al1080p"
+        val recovery = SportsEmbedRecovery(original)
+        val alternate = recovery.retryDnsFailure(original, true, false, 20_000)
+        assertEquals("https://streamfree.top/embed/soccer/cf-montr%C3%A9al1080p", alternate)
+        assertEquals(alternate, recovery.currentUrl)
+        assertFalse(isSportsStartupFrameAllowed(recovery.currentUrl, original, true))
+        assertTrue(isSportsStartupFrameAllowed(recovery.currentUrl, alternate!!, true))
+        assertNull(recovery.retryDnsFailure(alternate, true, false, 15_000))
+        val reverse = SportsEmbedRecovery(alternate)
+        assertEquals(original, reverse.retryDnsFailure(alternate, true, false, 20_000))
+    }
+    @Test fun `DNS recovery never retries other failures documents or an expired startup`() {
+        val original = "https://strmfree.st/embed/basketball/game1080p"
+        val recovery = SportsEmbedRecovery(original)
+        assertNull(recovery.retryDnsFailure(original, false, false, 20_000)) // TLS/network errors stay errors.
+        assertNull(recovery.retryDnsFailure(original, true, true, 20_000)) // No hidden mid-game restarts.
+        assertNull(recovery.retryDnsFailure(original, true, false, 1_000))
+        assertNull(recovery.retryDnsFailure(null, true, false, 20_000))
+        for (other in listOf("https://strmfree.st/ad.html", "https://strmfree.st/embed/basketball/game1080p2", "$original?next=ads"))
+            assertNull(recovery.retryDnsFailure(other, true, false, 20_000))
+        assertEquals(original, recovery.currentUrl)
+        assertNotNull(recovery.retryDnsFailure(original, true, false, 20_000))
+    }
     @Test fun `embed document requires official player origin without sandboxing it`() {
         val url = "https://strmfree.st/embed/basketball/wizards-vs-cavaliers1080p"
         val html = sportsEmbedDocument(url)

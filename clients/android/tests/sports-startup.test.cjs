@@ -126,3 +126,38 @@ test('native remaining observation budget is honored and new posters after30s ar
   await late.step(400);
   assert.equal(late.clicks,0);
 });
+
+test('DOM-ready approval can precede player creation without clicking or finishing early', async () => {
+  const f = fixture({video:false, poster:false});
+  await f.step(800);
+  assert.equal(f.clicks,0); assert.equal(f.plays,0); assert.equal(f.messages.length,0);
+  f.document.querySelectorAll = () => [f.media];
+  f.document.querySelector = selector => selector === '#jwplayer.jwplayer.jw-state-idle .jw-icon-display' ? f.control : null;
+  await f.step(400);
+  assert.equal(f.clicks,1);
+  f.media.paused=false; f.media.readyState=4; f.media.videoWidth=1920; f.media.videoHeight=1080; f.media.currentTime=.5;
+  await f.step(400);
+  assert.equal(f.messages.at(-1).state,'playing');
+  await f.step(4000);
+  assert.equal(f.clicks,1);
+});
+
+test('closing while the player is still being created prevents delayed DOM-ready actions', async () => {
+  const f = fixture({video:false, poster:false});
+  f.portEvents.disconnect();
+  f.document.querySelectorAll = () => [f.media];
+  f.document.querySelector = () => f.control;
+  await f.step(2000);
+  assert.equal(f.clicks,0); assert.equal(f.plays,0); assert.equal(f.messages.length,0);
+});
+
+test('a late DNS mirror receives only the original remaining action and observation budget', async () => {
+  const f = fixture({source:false, poster:true, allow:false});
+  f.portEvents.message({type:'start', actionMs:0, observeMs:1000});
+  await f.step(400);
+  assert.equal(f.clicks,0); assert.equal(f.plays,0);
+  await f.step(1000);
+  f.media.paused=false; f.media.readyState=4; f.media.videoWidth=1920; f.media.videoHeight=1080; f.media.currentTime=.5;
+  await f.step(400);
+  assert.equal(f.messages.length,0);
+});

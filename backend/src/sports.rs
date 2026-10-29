@@ -15,12 +15,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, Semaphore};
 
 const ORIGIN: &str = "https://strmfree.st";
+// Keep canonical identities stable while sending requests and players to a
+// working, explicitly reviewed mirror. Never trust a catalog-supplied origin.
+const MIRRORS: [&str; 2] = ["https://streamfree.top", ORIGIN];
+const MIRROR_HEDGE: Duration = Duration::from_millis(750);
 const CATALOG: &str = "/api/v1/streams";
 const CATEGORIES: &str = "/api/v1/categories";
 const MAX_BODY: usize = 4 * 1024 * 1024;
@@ -127,7 +134,8 @@ struct SportsState {
     enabled: bool,
     token: String,
     http: reqwest::Client,
-    origin: String,
+    origins: Vec<String>,
+    preferred_origin: AtomicUsize,
     cache: Mutex<HashMap<String, CacheEntry>>,
     requests: Semaphore,
     clients: Semaphore,
@@ -155,7 +163,8 @@ fn build_router(
         enabled: cfg.enabled,
         token,
         http,
-        origin: ORIGIN.into(),
+        origins: MIRRORS.iter().map(|origin| origin.to_string()).collect(),
+        preferred_origin: AtomicUsize::new(0),
         cache: Mutex::new(HashMap::new()),
         requests: Semaphore::new(6),
         clients: Semaphore::new(32),
@@ -227,10 +236,17 @@ async fn fetch(state: &SportsState, path: &str) -> Result<Value> {
         .await
         .map_err(|_| unavailable())?
         .map_err(|_| unavailable())?;
+    let value = fetch_available(state, path).await?;
+    cache.fetched = Some(Instant::now());
+    cache.value = Some(value.clone());
+    Ok(value)
+}
+
+async fn fetch_origin(state: &SportsState, path: &str, origin: usize) -> Result<Value> {
     let limit = MAX_BODY;
     let mut response = state
         .http
-        .get(format!("{}{path}", state.origin))
+        .get(format!("{}{path}", state.origins[origin]))
         .send()
         .await
         .map_err(|_| unavailable())?;
@@ -257,9 +273,50 @@ async fn fetch(state: &SportsState, path: &str) -> Result<Value> {
     if entries.len() > MAX_EVENTS {
         return Err(unavailable());
     }
-    cache.fetched = Some(Instant::now());
-    cache.value = Some(value.clone());
     Ok(value)
+}
+
+async fn fetch_available(state: &SportsState, path: &str) -> Result<Value> {
+    let preferred = state.preferred_origin.load(Ordering::Relaxed) % state.origins.len();
+    if state.origins.len() == 1 {
+        return fetch_origin(state, path, preferred).await;
+    }
+    let alternate = (preferred + 1) % state.origins.len();
+    let first = fetch_origin(state, path, preferred);
+    tokio::pin!(first);
+    // A stalled DNS lookup or unhealthy mirror must not consume the whole
+    // provider timeout before the already-reviewed alternative is attempted.
+    let (winner, value) = tokio::select! {
+        result = &mut first => match result {
+            Ok(value) => (preferred, value),
+            Err(_) => (alternate, fetch_origin(state, path, alternate).await?),
+        },
+        _ = tokio::time::sleep(MIRROR_HEDGE) => {
+            let second = fetch_origin(state, path, alternate);
+            tokio::pin!(second);
+            tokio::select! {
+                result = &mut first => match result {
+                    Ok(value) => (preferred, value),
+                    Err(_) => (alternate, second.await?),
+                },
+                result = &mut second => match result {
+                    Ok(value) => (alternate, value),
+                    Err(_) => (preferred, first.await?),
+                },
+            }
+        },
+    };
+    state.preferred_origin.store(winner, Ordering::Relaxed);
+    Ok(value)
+}
+
+fn playback_mirror(value: &str, index: usize) -> String {
+    let Some(mut url) = public_url(value) else {
+        return value.into();
+    };
+    let mirror = reqwest::Url::parse(MIRRORS[index % MIRRORS.len()]).unwrap();
+    url.set_host(mirror.host_str()).unwrap();
+    url.to_string()
 }
 async fn events(
     State(state): State<Arc<SportsState>>,
@@ -303,6 +360,12 @@ async fn events(
         })
         .filter(|v| ids.insert(v.id.clone()))
         .collect();
+    let mirror = state.preferred_origin.load(Ordering::Relaxed);
+    for event in &mut output {
+        if let Some(url) = &mut event.poster_url {
+            *url = playback_mirror(url, mirror);
+        }
+    }
     output.sort_by(|a, b| a.start_time.cmp(&b.start_time).then(a.id.cmp(&b.id)));
     let message = output
         .is_empty()
@@ -572,7 +635,11 @@ async fn catalog_item(state: &SportsState, id: &str) -> Result<Value> {
 }
 async fn load_streams(state: Arc<SportsState>, id: String) -> Result<Streams> {
     let item = catalog_item(&state, &id).await?;
-    let streams = valid_streams(&item);
+    let mut streams = valid_streams(&item);
+    let mirror = state.preferred_origin.load(Ordering::Relaxed);
+    for stream in &mut streams {
+        stream.embed_url = playback_mirror(&stream.embed_url, mirror);
+    }
     let message = if streams.is_empty() {
         Some("No playable embeds are available yet; try another event or retry later".into())
     } else if !variants(&item).iter().any(|v| v.live) {
@@ -660,7 +727,8 @@ mod tests {
         Arc::new(SportsState {
             enabled: true,
             token: token.into(),
-            origin,
+            origins: vec![origin],
+            preferred_origin: AtomicUsize::new(0),
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -771,6 +839,86 @@ mod tests {
         assert_eq!(categories.len(), 2);
         assert_eq!(categories[0].name, "Soccer");
         assert_eq!(categories[1].name, "American football");
+    }
+    #[test]
+    fn playback_mirrors_preserve_identity_and_exact_paths() {
+        let item = fixture("montréal-game", 1791766800, true);
+        let streams = valid_streams(&item);
+        for stream in streams {
+            let primary = playback_mirror(&stream.embed_url, 0);
+            let alternate = playback_mirror(&stream.embed_url, 1);
+            assert!(primary.starts_with("https://streamfree.top/embed/"));
+            assert!(alternate.starts_with("https://strmfree.st/embed/"));
+            assert_eq!(embed_url(&primary), embed_url(&alternate));
+            assert_eq!(
+                stream.id,
+                format!(
+                    "sf-{:x}",
+                    md5::compute(embed_url(&primary).unwrap().as_str())
+                )
+            );
+        }
+    }
+    #[tokio::test]
+    async fn failed_mirror_falls_back_and_following_requests_use_the_healthy_origin() {
+        let bad_hits = Arc::new(AtomicUsize::new(0));
+        let hits = bad_hits.clone();
+        let bad = Router::new().fallback(get(move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+            async { StatusCode::SERVICE_UNAVAILABLE }
+        }));
+        let good = Router::new()
+            .route(CATALOG, get(|| async { Json(json!({"streams":[]})) }))
+            .route(
+                CATEGORIES,
+                get(|| async { Json(json!({"categories":["basketball"]})) }),
+            );
+        let mut origins = Vec::new();
+        let mut tasks = Vec::new();
+        for app in [bad, good] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            origins.push(format!("http://{}", listener.local_addr().unwrap()));
+            tasks.push(tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap()
+            }));
+        }
+        let mut shared = state(origins[0].clone(), "");
+        Arc::get_mut(&mut shared).unwrap().origins = origins;
+        assert!(fetch(&shared, CATALOG).await.is_ok());
+        assert_eq!(shared.preferred_origin.load(Ordering::Relaxed), 1);
+        assert!(fetch(&shared, CATEGORIES).await.is_ok());
+        assert_eq!(bad_hits.load(Ordering::SeqCst), 1);
+        for task in tasks {
+            task.abort();
+        }
+    }
+    #[tokio::test]
+    async fn stalled_mirror_does_not_delay_the_alternate_until_network_timeout() {
+        let slow = Router::new().route(
+            CATALOG,
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Json(json!({"streams":[]}))
+            }),
+        );
+        let good = Router::new().route(CATALOG, get(|| async { Json(json!({"streams":[]})) }));
+        let mut origins = Vec::new();
+        let mut tasks = Vec::new();
+        for app in [slow, good] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            origins.push(format!("http://{}", listener.local_addr().unwrap()));
+            tasks.push(tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap()
+            }));
+        }
+        let mut shared = state(origins[0].clone(), "");
+        Arc::get_mut(&mut shared).unwrap().origins = origins;
+        let result = tokio::time::timeout(Duration::from_secs(3), fetch(&shared, CATALOG)).await;
+        assert!(result.is_ok_and(|value| value.is_ok()));
+        assert_eq!(shared.preferred_origin.load(Ordering::Relaxed), 1);
+        for task in tasks {
+            task.abort();
+        }
     }
     #[tokio::test]
     async fn coalescing_rejects_redirects_and_malformed_envelopes() {

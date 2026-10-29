@@ -42,7 +42,7 @@ test('refresh is singleflight, atomically persists rotated tokens with0600, and 
   assert.equal(stored.refreshToken,'fixture-refresh-rotated');
   assert.equal(stored.expiresAt,NOW+3600000);
   assert.equal((await stat(f.authFile)).mode & 0o777,0o600);
-  assert.deepEqual(await readdir(f.directory),['auth.json']);
+  assert.deepEqual(await readdir(f.directory),['auth.json','auth.json.status.json']);
 });
 
 test('invalid stored credentials fail before any authenticated request', async t => {
@@ -56,13 +56,13 @@ test('invalid stored credentials fail before any authenticated request', async t
 });
 
 test('malformed refresh responses never overwrite persisted credentials and allow a later retry', async t => {
-  const invalid=[reply(Buffer.from('not JSON')),reply({},401),reply({access_token:'bad\r\nheader',refresh_token:'next',expires_in:3600}),
+  const invalid=[reply(Buffer.from('not JSON')),reply({},503),reply({access_token:'bad\r\nheader',refresh_token:'next',expires_in:3600}),
     reply({access_token:'next',refresh_token:'bad\0token',expires_in:3600}),reply({access_token:'next',refresh_token:'next',expires_in:0}),
     reply({access_token:'next',refresh_token:'next',expires_in:'not-a-number'})];
   for (let i=0;i<invalid.length;i++) await t.test(`invalid response${i}`,async t => {
     const f=await fixture(t,(_options,attempt)=>attempt===1?invalid[i]:reply({access_token:'recovered',refresh_token:'recovered-refresh',expires_in:3600}));
     const before=await readFile(f.authFile,'utf8');
-    await assert.rejects(()=>f.provider.refresh(),code(i===1?'sign_in_required':'source_unavailable'));
+    await assert.rejects(()=>f.provider.refresh(),code('source_unavailable'));
     assert.equal(await readFile(f.authFile,'utf8'),before);
     assert.equal((await f.provider.refresh()).accessToken,'recovered');
     assert.equal(f.calls.length,2);
@@ -392,11 +392,11 @@ test('a provider login decision stops idle renewal without discarding the saved 
   const clock=authClock(),errors=[];
   const saved=auth({expiresAt:NOW-1000,deviceVerifier:'fixture-verifier',contextToken:'fixture-context'});
   const f=await fixture(t,options=>{
-    assert.equal(new URL(options.url).pathname,'/auth/oauth/v2/validateSession');
+    assert.equal(new URL(options.url).pathname,'/auth/oauth/v2/consumer/video/deviceverifier/auth');
     return reply({isValidSession:false,nextAction:'STANDARD_AUTH'});
   },{saved,now:clock.now});
   maintain(t,f.provider,clock,error=>errors.push(error.code));await clock.advance(0);
-  assert.equal(f.calls.length,1);assert.deepEqual(errors,['sign_in_required']);assert.deepEqual(clock.delays(),[]);
+  assert.equal(f.calls.length,1);assert.deepEqual(errors,['sign_in_required']);assert.deepEqual(clock.delays(),[60000]);
   await clock.advance(7*24*3600000);assert.equal(f.calls.length,1);
   assert.deepEqual(JSON.parse(await readFile(f.authFile,'utf8')),saved);
 });
