@@ -52,7 +52,7 @@ import java.util.Locale
 
 internal enum class PlaybackOption { AUDIO, SUBTITLES, BLOCK, RESET, RECOVERY }
 
-/** One home for track choices and reversible actions on this show's current release. */
+/** One home for track choices and reversible actions on the current release. */
 @Composable
 internal fun PlaybackOptionsSheet(
     state: PlayerUiState,
@@ -70,7 +70,7 @@ internal fun PlaybackOptionsSheet(
         if (state.audioOptions.isNotEmpty()) add(PlaybackOption.AUDIO)
         if (state.subtitleOptions.isNotEmpty()) add(PlaybackOption.SUBTITLES)
         if (state.canBlockCurrentRelease) add(PlaybackOption.BLOCK)
-        if (state.isShow && state.blockedGroups.isNotEmpty()) add(PlaybackOption.RESET)
+        if (state.hasBlockedReleases) add(PlaybackOption.RESET)
         if (BuildConfig.EXACT_RECOVERY) add(PlaybackOption.RECOVERY)
     }
     LaunchedEffect(available, initialFocus) {
@@ -110,13 +110,13 @@ internal fun PlaybackOptionsSheet(
             )
             if (state.canBlockCurrentRelease) {
                 PlaybackOptionRow(
-                    title = "Block this release", subtitle = "For this show only", navigates = false,
+                    title = "Block this release", subtitle = if (state.isShow) "For this show only" else "Skip this version of the movie", navigates = false,
                     onClick = onBlockCurrent, modifier = focusModifier(PlaybackOption.BLOCK),
                 )
             }
-            if (state.isShow && state.blockedGroups.isNotEmpty()) {
+            if (state.hasBlockedReleases) {
                 PlaybackOptionRow(
-                    title = "Reset blocked releases", subtitle = "For this show only", navigates = false,
+                    title = "Reset blocked releases", subtitle = if (state.isShow) "For this show only" else "For this movie only", navigates = false,
                     onClick = onResetBlocks, modifier = focusModifier(PlaybackOption.RESET),
                 )
             }

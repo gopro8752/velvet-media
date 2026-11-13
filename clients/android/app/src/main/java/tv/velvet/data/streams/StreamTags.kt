@@ -134,7 +134,8 @@ object StreamTags {
     /**
      * Dynamic-range rank (higher = better): Dolby Vision=3, HDR10+=2, HDR10/HDR=1,
      * SDR/none=0. DV wins the label when both DV and HDR10 are in the title
-     * (best-first match), which is the right rank too — DV carries an HDR10 base layer.
+     * (best-first match). This is a quality rank only: not every DV profile carries
+     * an HDR10-compatible base layer. DisplayHdrPolicy filters before sorting.
      */
     fun hdrRank(text: String): Int = when (firstMatch(HDR, text.lowercase())) {
         "Dolby Vision" -> 3

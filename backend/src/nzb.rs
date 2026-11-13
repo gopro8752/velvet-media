@@ -26,15 +26,20 @@ pub struct NzbFile {
 }
 
 impl NzbFile {
-    /// par2/nfo/sfv/sample files are never the thing we stream — and neither are
-    /// RAR/7z/zip archive volumes (we can't stream from inside an archive yet, so
-    /// a release whose payload is archived has NO direct media file → the caller
-    /// refuses it and the app fails over to a raw-media release).
+    /// Raw media must not be confused with a release's cover, notes or subtitles.
+    /// Archive volumes are handled separately by the caller. Keep extensionless
+    /// obfuscated payloads eligible instead of requiring a known video suffix.
     pub fn is_media_candidate(&self) -> bool {
         let s = self.subject.to_ascii_lowercase();
+        let extension = posted_filename(&s).rsplit_once('.').map(|(_, suffix)| suffix);
         !(s.contains(".par2")
-            || s.ends_with(".nfo")
-            || s.contains(".sfv")
+            || matches!(extension,
+                Some("jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "avif"
+                    | "heic" | "tif" | "tiff" | "ico"
+                    | "nfo" | "txt" | "diz" | "rtf" | "pdf" | "htm" | "html" | "url"
+                    | "sfv" | "md5" | "sha1" | "sha256" | "srr" | "nzb" | "torrent"
+                    | "srt" | "sub" | "idx" | "ass" | "ssa" | "vtt" | "sup" | "smi"
+                    | "ttf" | "otf"))
             || s.contains("sample")
             || self.is_archive())
     }
@@ -59,6 +64,32 @@ impl NzbFile {
         }
         false
     }
+}
+
+/// NZB subjects usually end with `"filename.ext" yEnc (part/total)` or the
+/// unquoted equivalent. Inspect the actual suffix before posting metadata, not
+/// a title prefix or a substring such as `.jpg` inside `Movie.jpg.mkv`.
+fn posted_filename(subject: &str) -> &str {
+    let marker = subject.match_indices("yenc").find(|(at, _)| {
+        (*at == 0 || subject[..*at].chars().next_back().is_some_and(char::is_whitespace))
+            && subject[at + 4..].chars().next().is_none_or(|c| c.is_whitespace() || c == '(')
+    });
+    let mut name = subject[..marker.map_or(subject.len(), |(at, _)| at)].trim();
+    // Some indexers omit yEnc but retain the final part counter.
+    if let Some((prefix, count)) = name.rsplit_once('(') {
+        if count.strip_suffix(')').and_then(|value| value.split_once('/'))
+            .is_some_and(|(part, total)| !part.is_empty() && !total.is_empty()
+                && part.bytes().all(|b| b.is_ascii_digit())
+                && total.bytes().all(|b| b.is_ascii_digit())) {
+            name = prefix.trim_end();
+        }
+    }
+    if let Some(quoted) = name.strip_suffix('"') {
+        if let Some((_, filename)) = quoted.rsplit_once('"') {
+            return filename;
+        }
+    }
+    name
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +263,80 @@ mod tests {
         let nzb = parse(SAMPLE).unwrap();
         assert!(nzb.primary_file().unwrap().is_media_candidate());
         assert_eq!(nzb.files.iter().filter(|f| !f.is_media_candidate()).count(), 1);
+    }
+
+    #[test]
+    fn archived_movie_with_cover_and_notes_has_no_raw_media() {
+        let nzb = parse(br#"<nzb>
+          <file subject="[1/4] &quot;Movie.part01.rar&quot; yEnc (1/100)">
+            <segments><segment bytes="100000000" number="1">archive-1@fixture</segment></segments>
+          </file>
+          <file subject="[2/4] &quot;Movie.part02.rar&quot; yEnc (1/100)">
+            <segments><segment bytes="100000000" number="1">archive-2@fixture</segment></segments>
+          </file>
+          <file subject="[3/4] &quot;Movie.jpg&quot; yEnc (1/1)">
+            <segments><segment bytes="93712" number="1">cover@fixture</segment></segments>
+          </file>
+          <file subject="[4/4] &quot;Movie.nfo&quot; yEnc (1/1)">
+            <segments><segment bytes="12000" number="1">notes@fixture</segment></segments>
+          </file>
+        </nzb>"#).unwrap();
+        // The stream loader must take its archive branch instead of displaying
+        // the cover for an instant and treating that as a completed movie.
+        assert!(nzb.primary_file().is_none());
+        assert_eq!(nzb.files.iter().filter(|file| file.is_archive()).count(), 2);
+    }
+
+    fn candidate(subject: &str, bytes: u64) -> NzbFile {
+        NzbFile {
+            subject: subject.into(), groups: vec![], total_bytes: bytes,
+            segments: vec![Segment { number: 1, bytes, message_id: "file@fixture".into() }],
+        }
+    }
+
+    #[test]
+    fn raw_movie_is_selected_even_when_sidecars_are_larger() {
+        let nzb = Nzb { files: vec![
+            candidate("[1/3] Movie.mkv yEnc (1/50)", 500),
+            candidate("[2/3] Movie.PNG yEnc (1/1)", 1000),
+            candidate("[3/3] Movie.en.srt yEnc (1/1)", 2000),
+        ] };
+        assert!(nzb.primary_file().unwrap().subject.contains("Movie.mkv"));
+    }
+
+    #[test]
+    fn sidecars_are_rejected_with_posting_metadata_and_quoted_prefixes() {
+        for subject in [
+            "[1/2] Movie.NFO yEnc (1/1)",
+            "[1/2] \"Movie.JPEG\" yEnc (1/1)",
+            "[1/2] \"Movie.PNG\" (1/1)",
+            "Movie.webp\tyEnc (1/1)",
+            "Movie.nfo",
+            "Movie.en.SRT yEnc (1/1)",
+            "Movie.idx yEnc (1/1)",
+            "Movie.sfv yEnc (1/1)",
+            "Movie.sha256 yEnc (1/1)",
+            "Movie.url yEnc (1/1)",
+            "\"Movie.mkv\" [1/1] \"cover.jpg\" yEnc (1/1)",
+        ] {
+            assert!(!candidate(subject, 100).is_media_candidate(), "{subject}");
+        }
+        assert!(Nzb { files: vec![candidate("Movie.jpg yEnc (1/1)", 56958)] }
+            .primary_file().is_none());
+    }
+
+    #[test]
+    fn obfuscated_payloads_and_video_names_containing_sidecar_words_remain_eligible() {
+        for subject in [
+            "[1/1] \"a6ed4c72efc9\" yEnc (1/400)",
+            "a6ed4c72efc9 yEnc (1/400)",
+            "Movie.jpg.mkv yEnc (1/400)",
+            "[1/1] \"Movie.nfo.mp4\" yEnc (1/400)",
+            "Movie.jpglossless yEnc (1/400)",
+        ] {
+            let nzb = Nzb { files: vec![candidate(subject, 10_000_000)] };
+            assert!(nzb.primary_file().is_some(), "{subject}");
+        }
     }
 }
 

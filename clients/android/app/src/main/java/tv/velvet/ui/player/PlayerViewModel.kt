@@ -134,6 +134,7 @@ data class PlayerUiState(
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
     val blockedGroups: List<ReleaseGroup> = emptyList(),
+    val blockedMovieReleaseCount: Int = 0,
     val canBlockCurrentRelease: Boolean = false,
     val groupActionError: String? = null,
     val recoveryDiagnostics: ExactRecoveryState? = null,
@@ -150,7 +151,9 @@ data class PlayerUiState(
     val replayActive: Boolean = false,
     /** Playback is inside a known intro — the Skip Intro pill should show. */
     val skipIntroVisible: Boolean = false,
-)
+) {
+    val hasBlockedReleases: Boolean get() = blockedGroups.isNotEmpty() || blockedMovieReleaseCount > 0
+}
 
 private data class PendingSeek(val positionMs: Long, val guardNearEnd: Boolean)
 
@@ -200,6 +203,9 @@ class PlayerViewModel(
     private val container = app.container
     private val tmdb = container.tmdbRepository
     private val streamRepo = container.streamRepository
+    private val displayHdr = DisplayHdrSupport(app)
+    /** Keep discovered formats, not permanent URL bans: HDMI capabilities can change. */
+    private val discoveredVideoFormats = ConcurrentHashMap<String, Format>()
     private val settingsRepo = container.settingsRepository
     private val telemetry = tv.velvet.data.telemetry.PlaybackTelemetry(app, settingsRepo)
     private var telemetryIdentity: String? = null
@@ -263,6 +269,7 @@ class PlayerViewModel(
     private var currentStream: StreamOption? = null
     private var allResolvedStreams: List<StreamOption> = emptyList()
     private var blockedGroups: List<ReleaseGroup> = emptyList()
+    private var blockedMovieReleases: List<String> = emptyList()
     private val failoverWatchdog = StreamFailoverWatchdog()
     private var hostStopped = false
     private var recoveryJob: Job? = null
@@ -379,6 +386,7 @@ class PlayerViewModel(
             telemetry.observe()
             when (playbackState) {
                 Player.STATE_READY -> {
+                    if (rejectUnsupportedVideo(player.currentTracks)) return
                     // Playback is live again — the failover pill has served its purpose.
                     _state.update { it.copy(isBuffering = false, switchingSource = false) }
                     applyPendingSeek()
@@ -412,6 +420,7 @@ class PlayerViewModel(
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            if (rejectUnsupportedVideo(tracks)) return
             handleTracksChanged(tracks)
         }
     }
@@ -440,6 +449,12 @@ class PlayerViewModel(
             settingsRepo.blockedReleaseGroups.collect { stored ->
                 if (target.type == MediaType.SHOW && imdbId != null)
                     applyBlockedGroups(blockedReleaseGroupsForShow(stored, imdbId))
+            }
+        }
+        viewModelScope.launch {
+            settingsRepo.blockedMovieReleases.collect { stored ->
+                if (target.type == MediaType.MOVIE && imdbId != null)
+                    applyBlockedMovieReleases(blockedMovieReleasesForMovie(stored, imdbId))
             }
         }
         startTicker()
@@ -517,7 +532,7 @@ class PlayerViewModel(
                 if (curSeason == season && curEpisode == episode && currentStream == source) {
                     allResolvedStreams = (listOf(source) + streams).distinctBy { it.url }
                     candidates = (listOf(source) + streamRepo.sortStreams(streams, settings.preferredQuality))
-                        .distinctBy { it.url }.filterNot { it.url in blacklistedUrls || isBlocked(it) }
+                        .distinctBy { it.url }.filter { it.url !in blacklistedUrls && isSelectable(it) }
                     _state.update { it.copy(streams = candidates) }
                 }
             } catch (cancelled: CancellationException) { throw cancelled
@@ -602,6 +617,9 @@ class PlayerViewModel(
                 // have NO imdb mapping anywhere yet — bailing here made them
                 // unwatchable exactly during the week everyone wants them.
                 imdbId = d.item.imdbId?.takeIf { it.isNotBlank() } ?: "tmdb:${target.mediaId}"
+                if (target.type == MediaType.MOVIE) {
+                    applyBlockedMovieReleases(blockedMovieReleasesForMovie(settingsRepo.blockedMovieReleases.first(), imdbId))
+                }
                 _state.update {
                     it.copy(
                         backdropUrl = d.item.backdropUrl ?: d.item.posterUrl,
@@ -688,7 +706,11 @@ class PlayerViewModel(
         if (handoffLease != null && !handoffFinished) {
             val exact = container.tvHandoffApi.playbackStream(handoffLease.handoff)
             if (isBlocked(exact)) {
-                abortHandoff("This release group is blocked for this show on the TV. Choose another stream on your phone.")
+                abortHandoff("This release is blocked for this title on the TV. Choose another stream on your phone.")
+                return
+            }
+            if (!isDisplayCompatible(exact)) {
+                abortHandoff("This stream's HDR format isn't supported by the connected display. Choose an SDR stream on your phone and send it again.")
                 return
             }
             allResolvedStreams = listOf(exact)
@@ -718,11 +740,12 @@ class PlayerViewModel(
         _state.update { it.copy(checkingSources = true) }
         val prepared = prepareStreams(streams, curSeason, curEpisode)
         if (identity != curSeason to curEpisode) return
-        candidates = prepared.candidates.filterNot(::isBlocked)
-        _state.update { it.copy(streams = prepared.all.filterNot(::isBlocked), episodeVerdicts = prepared.verdicts) }
+        candidates = prepared.candidates.filter(::isSelectable)
+        _state.update { it.copy(streams = prepared.all.filter(::isSelectable), episodeVerdicts = prepared.verdicts) }
         val pick = candidates.firstOrNull()
         if (pick == null) showError(
-            if (prepared.all.isEmpty()) "No unblocked streams are available. Open Playback options to reset blocked releases."
+            if (streams.none(::isDisplayCompatible)) "No streams compatible with this display are available. Try an SDR source."
+            else if (prepared.all.isEmpty()) "No unblocked streams are available. Open Playback options to reset blocked releases."
             else "These sources are temporarily unavailable. Choose a stream or try again.", true)
         else play(pick)
     }
@@ -754,8 +777,8 @@ class PlayerViewModel(
         val group = if (season != null && episode != null) episodesCache[season]?.firstOrNull { it.number == episode } else null
         val complete = streams.filter { EpisodeMatch.coversGroup(it.title, group?.parts?.map { part -> part.name }.orEmpty()) }
         val sorted: List<StreamOption> =
-            runCatching { streamRepo.sortStreams(complete.filterNot(::isBlocked), settings.preferredQuality) }
-                .getOrDefault(complete.filterNot(::isBlocked))
+            runCatching { streamRepo.sortStreams(complete.filter(::isSelectable), settings.preferredQuality) }
+                .getOrDefault(complete.filter(::isSelectable))
         val readiness = container.streamRecoveryApi.startupReadiness(sorted, refreshReadiness, waitForReadyMs = 3_500)
         val healthy = startupCandidates(sorted, readiness, ::rankOf)
         // Keep explicit group continuity without delaying first playback on probe batches.
@@ -801,6 +824,20 @@ class PlayerViewModel(
     }
 
     private fun prepareStream(stream: StreamOption, reason: SourceSwitchReason) {
+        // Recheck at the final gate too: display settings can change after prefetch,
+        // and a cached handoff/recovery candidate must never bypass compatibility.
+        if (!isDisplayCompatible(stream)) {
+            if (handoffLease != null && !handoffFinished) abortHandoff("This stream's HDR format isn't supported by the connected display. Choose another stream on your phone.")
+            else {
+                val next = candidates.firstOrNull { it.url != stream.url && it.url !in blacklistedUrls && isSelectable(it) }
+                if (next != null) play(next, reason)
+                else {
+                    player.stop()
+                    showError("No streams compatible with this display are available. Try an SDR source.", canChoose = true)
+                }
+            }
+            return
+        }
         if (!EpisodeMatch.coversGroup(stream.title, currentEpisodeMeta?.parts?.map { it.name }.orEmpty())) {
             if (handoffLease != null && !handoffFinished) abortHandoff("This source doesn't contain the complete episode. Choose a complete episode on your phone and send it again.")
             else showError("This source doesn't contain the complete episode. Choose another stream.", canChoose = true)
@@ -895,7 +932,7 @@ class PlayerViewModel(
                 phase = PlayerPhase.ERROR,
                 errorMessage = message,
                 // Saved blocks remain manageable even when the resolver returns no sources.
-                canChooseStream = (canChoose && it.streams.isNotEmpty()) || it.blockedGroups.isNotEmpty(),
+                canChooseStream = (canChoose && it.streams.isNotEmpty()) || it.hasBlockedReleases,
                 isBuffering = false,
                 switchingSource = false,
                 checkingSources = false,
@@ -955,7 +992,7 @@ class PlayerViewModel(
         val identity = curSeason to curEpisode
         // Use the full quality-ordered list: earlier cooldowns may have expired,
         // and cached prefetch ordering must not hide newly prepared alternatives.
-        val remaining = _state.value.streams.filter { it.url != failedUrl && it.url !in blacklistedUrls && !isBlocked(it) }
+        val remaining = _state.value.streams.filter { it.url != failedUrl && it.url !in blacklistedUrls && isSelectable(it) }
         recoveryJob?.cancel()
         // Stop the failed/synthetic-watchdog load while consulting cached state.
         // These requests never open another stream or spend a source-switch retry.
@@ -1058,7 +1095,7 @@ class PlayerViewModel(
                     _state.update { it.copy(recoveryDiagnostics = exactRecovery, repairDiagnostics = health?.repair?.takeIf { BuildConfig.EXACT_RECOVERY }) }
                     preparedFallback = health?.takeIf { preparedRevision == revision }?.let {
                         StreamRecoveryApi.preparedCandidate(stream, it, candidates, requestedFraction)
-                            ?.takeIf { candidate -> candidate.url !in blacklistedUrls && !isBlocked(candidate) }
+                            ?.takeIf { candidate -> candidate.url !in blacklistedUrls && isSelectable(candidate) }
                     }
                     val next = preparedFallback
                     if (health?.status == "incomplete" && exactRecovery?.shouldHoldProactiveFallback() != true &&
@@ -1183,7 +1220,7 @@ class PlayerViewModel(
         endedHandled = false
         recoveryBudget.resetBurst()
         val s = currentStream
-        if (s != null && !isBlocked(s)) {
+        if (s != null && isSelectable(s)) {
             if (lastKnownPositionMs > 1_000) {
                 pendingSeek = PendingSeek(lastKnownPositionMs, guardNearEnd = false)
             }
@@ -1200,7 +1237,7 @@ class PlayerViewModel(
      * and never reach this.
      */
     fun switchStream(option: StreamOption) {
-        if (!handoffAccepted || isBlocked(option)) return
+        if (!handoffAccepted || !isSelectable(option)) return
         queueFailureJob?.cancel()
         _state.update { it.copy(queueNotice = null) }
         if (option.url == currentStream?.url && _state.value.phase == PlayerPhase.PLAYING) return
@@ -1219,12 +1256,82 @@ class PlayerViewModel(
         play(option, SourceSwitchReason.MANUAL)
     }
 
-    private fun isBlocked(stream: StreamOption) = target.type == MediaType.SHOW && stream.isReleaseGroupBlocked(blockedGroups)
+    private fun isBlocked(stream: StreamOption) = when (target.type) {
+        MediaType.SHOW -> stream.isReleaseGroupBlocked(blockedGroups)
+        MediaType.MOVIE -> stream.isMovieReleaseBlocked(blockedMovieReleases)
+    }
 
-    private fun canBlockCurrentRelease(): Boolean = target.type == MediaType.SHOW && handoffAccepted &&
-        currentStream?.let { it.releaseGroupForBlocking() != null && !isBlocked(it) } == true
+    private fun canBlockCurrentRelease(): Boolean = handoffAccepted && currentStream?.let {
+        !isBlocked(it) && when (target.type) {
+            MediaType.SHOW -> it.releaseGroupForBlocking() != null
+            MediaType.MOVIE -> it.movieReleaseKeyForBlocking() != null
+        }
+    } == true
 
-    fun blockCurrentRelease() { currentStream?.let(::blockReleaseGroup) }
+    fun blockCurrentRelease(onBlocked: () -> Unit = {}) {
+        currentStream?.let {
+            if (target.type == MediaType.MOVIE) blockMovieRelease(it, onBlocked) else blockReleaseGroup(it, onBlocked)
+        }
+    }
+
+    fun resetBlockedReleases() {
+        if (target.type == MediaType.SHOW) {
+            blockedGroups.toList().forEach { unblockReleaseGroup(it.key) }
+            return
+        }
+        val id = imdbId ?: return
+        if (!handoffAccepted) return
+        viewModelScope.launch {
+            try {
+                settingsRepo.resetBlockedMovieReleases(id)
+                applyBlockedMovieReleases(emptyList())
+                val prepared = prepareStreams(allResolvedStreams, null, null)
+                candidates = prepared.candidates.filter(::isSelectable)
+                _state.update { it.copy(streams = prepared.all.filter(::isSelectable), groupActionError = null) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { _state.update { it.copy(groupActionError = "Couldn't reset blocked releases. Try again.") } }
+        }
+    }
+
+    private fun applyBlockedMovieReleases(releases: List<String>) {
+        val changed = blockedMovieReleases != releases
+        blockedMovieReleases = releases
+        if (changed) {
+            prefetchedStreams = null
+            requestRecoveryPreparation()
+        }
+        candidates = candidates.filter(::isSelectable)
+        _state.update {
+            val visible = (allResolvedStreams.takeIf { all -> all.isNotEmpty() } ?: it.streams).filter(::isSelectable)
+            it.copy(blockedMovieReleaseCount = releases.size, canBlockCurrentRelease = canBlockCurrentRelease(),
+                streams = visible, canChooseStream = (it.canChooseStream && visible.isNotEmpty()) || releases.isNotEmpty())
+        }
+    }
+
+    private fun blockMovieRelease(option: StreamOption, onBlocked: () -> Unit) {
+        val id = imdbId ?: return
+        if (target.type != MediaType.MOVIE || !handoffAccepted) return
+        val key = option.movieReleaseKeyForBlocking() ?: return
+        viewModelScope.launch {
+            try {
+                settingsRepo.blockMovieRelease(id, key)
+                applyBlockedMovieReleases(blockedMovieReleasesForMovie(settingsRepo.blockedMovieReleases.first(), id))
+                _state.update { it.copy(groupActionError = null) }
+                onBlocked()
+                if (currentStream?.let(::isBlocked) == true) {
+                    recoveryBudget.resetBurst()
+                    val next = candidates.firstOrNull { it.url !in blacklistedUrls && isSelectable(it) }
+                    if (next != null) failoverTo(next, SourceSwitchReason.MANUAL)
+                    else {
+                        saveProgressNow()
+                        player.stop()
+                        showError("This release is blocked for this movie. Choose another stream or reset blocked releases in Playback options.", true)
+                    }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { _state.update { it.copy(groupActionError = "Couldn't block this release. Try again.") } }
+        }
+    }
 
     private fun applyBlockedGroups(groups: List<ReleaseGroup>) {
         if (blockedGroups != groups) {
@@ -1232,16 +1339,16 @@ class PlayerViewModel(
             requestRecoveryPreparation()
         }
         blockedGroups = groups
-        candidates = candidates.filterNot(::isBlocked)
+        candidates = candidates.filter(::isSelectable)
         _state.update {
-            val visibleStreams = (allResolvedStreams.takeIf { all -> all.isNotEmpty() } ?: it.streams).filterNot(::isBlocked)
+            val visibleStreams = (allResolvedStreams.takeIf { all -> all.isNotEmpty() } ?: it.streams).filter(::isSelectable)
             it.copy(blockedGroups = groups, canBlockCurrentRelease = canBlockCurrentRelease(),
                 streams = visibleStreams,
                 canChooseStream = it.canChooseStream && (visibleStreams.isNotEmpty() || groups.isNotEmpty()))
         }
     }
 
-    fun blockReleaseGroup(option: StreamOption) {
+    fun blockReleaseGroup(option: StreamOption, onBlocked: () -> Unit = {}) {
         val id = imdbId ?: return
         if (target.type != MediaType.SHOW || !handoffAccepted) return
         val group = option.releaseGroupForBlocking() ?: return
@@ -1252,8 +1359,10 @@ class PlayerViewModel(
                 if (manualGroup == group.key) manualGroup = null
                 if (lastBingeGroup == group.key) lastBingeGroup = null
                 _state.update { it.copy(groupActionError = null) }
+                onBlocked()
                 if (currentStream?.let(::isBlocked) == true) {
-                    val next = candidates.firstOrNull { it.url !in blacklistedUrls && !isBlocked(it) }
+                    recoveryBudget.resetBurst()
+                    val next = candidates.firstOrNull { it.url !in blacklistedUrls && isSelectable(it) }
                     if (next != null) failoverTo(next, SourceSwitchReason.MANUAL)
                     else { saveProgressNow(); player.stop(); showError("This release is blocked for this show. Choose another stream or reset blocked releases in Playback options.", true) }
                 }
@@ -1272,8 +1381,8 @@ class PlayerViewModel(
                 val identity = curSeason to curEpisode
                 val prepared = prepareStreams(allResolvedStreams, identity.first, identity.second)
                 if (identity != curSeason to curEpisode) return@launch
-                candidates = prepared.candidates.filterNot(::isBlocked)
-                _state.update { it.copy(streams = prepared.all.filterNot(::isBlocked), groupActionError = null) }
+                candidates = prepared.candidates.filter(::isSelectable)
+                _state.update { it.copy(streams = prepared.all.filter(::isSelectable), groupActionError = null) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { _state.update { it.copy(groupActionError = "Couldn't reset blocked releases. Try again.") } }
         }
@@ -1699,7 +1808,7 @@ class PlayerViewModel(
         runCatching {
             val streams = streamRepo.streamsFor(id, MediaType.SHOW, next.season, next.number)
             if (streams.isEmpty()) return
-            val sorted = streamRepo.sortStreams(streams.filterNot(::isBlocked), settings.preferredQuality)
+            val sorted = streamRepo.sortStreams(streams.filter(::isSelectable), settings.preferredQuality)
             // Mirror prepareStreams' group precedence (manual pick, then session binge)
             // so the URL the worker fingerprints is the one that will actually play.
             val pick = manualGroup?.let { g -> sorted.firstOrNull { it.bingeGroup == g } }
@@ -2087,8 +2196,8 @@ class PlayerViewModel(
                 // Prefetch may be an entire episode old. Read current cached
                 // health again; an evicted warm or cooled-down failure is stale.
                 val refreshed = prepareStreams(pre.raw, ep.season, ep.number, refreshReadiness = true)
-                candidates = refreshed.candidates.filterNot { it.url in blacklistedUrls || isBlocked(it) }
-                _state.update { it.copy(streams = refreshed.all.filterNot(::isBlocked), episodeVerdicts = refreshed.verdicts) }
+                candidates = refreshed.candidates.filter { it.url !in blacklistedUrls && isSelectable(it) }
+                _state.update { it.copy(streams = refreshed.all.filter(::isSelectable), episodeVerdicts = refreshed.verdicts) }
                 val pick = candidates.firstOrNull()
                 if (pick != null) play(pick)
                 else startStreamsAndPlay()
@@ -2099,6 +2208,9 @@ class PlayerViewModel(
             resolveNextEagerly()
         } finally {
             swapping = false
+            // Track discovery can finish during the episode swap. Validate again
+            // once failure recovery belongs to the new episode, never the old one.
+            rejectUnsupportedVideo(player.currentTracks)
         }
     }
 
@@ -2146,6 +2258,52 @@ class PlayerViewModel(
         return format.label?.takeIf { it.isNotBlank() }
             ?: languageDisplayName(format.language)
             ?: "Subtitles"
+    }
+
+    private fun isDisplayCompatible(stream: StreamOption): Boolean {
+        val support = displayHdr.current()
+        return support.supportsRelease(stream.title) &&
+            discoveredVideoFormats[stream.url]?.let { supportsVideoFormat(support, it) } != false
+    }
+
+    private fun supportsVideoFormat(support: DisplayHdrPolicy, format: Format): Boolean =
+        support.supportsVideo(format.sampleMimeType, format.codecs,
+            pq = format.colorInfo?.colorTransfer == C.COLOR_TRANSFER_ST2084,
+            hybridLogGamma = format.colorInfo?.colorTransfer == C.COLOR_TRANSFER_HLG)
+
+    /** Used by every selection path, including cached/prepared candidates. */
+    private fun isSelectable(stream: StreamOption): Boolean = !isBlocked(stream) && isDisplayCompatible(stream)
+
+    private fun rejectUnsupportedVideo(tracks: Tracks): Boolean {
+        val stream = currentStream ?: return false
+        if (player.currentMediaItem?.localConfiguration?.uri?.toString() != stream.url) return false
+        if (swapping || queueAdvancing || hostStopped || fallbackSelectionJob?.isActive == true) return false
+        val support = displayHdr.current()
+        val unsupported = tracks.groups.any { group ->
+            group.type == C.TRACK_TYPE_VIDEO && (0 until group.length).any { index ->
+                if (!group.isTrackSelected(index)) false else {
+                    val format = group.getTrackFormat(index)
+                    discoveredVideoFormats[stream.url] = format
+                    !supportsVideoFormat(support, format)
+                }
+            }
+        }
+        if (!unsupported) return false
+        Log.w(TAG, "Skipping source: video HDR format is unsupported by the connected display")
+        candidates = candidates.filter(::isSelectable)
+        _state.update { it.copy(streams = it.streams.filter(::isSelectable)) }
+        if (!handoffFinished) {
+            player.stop()
+            abortHandoff("This stream's HDR format isn't supported by the connected display. Choose another stream on your phone.")
+        } else {
+            val position = player.currentPosition
+            if (position > 0) lastKnownPositionMs = position
+            // Display incompatibility is not a bad-source/network failure. Keep it
+            // out of blacklistedUrls so a later HDMI capability change can revive it.
+            selectFallback(PlaybackException("Unsupported display HDR format", null,
+                PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED))
+        }
+        return true
     }
 
     private fun handleTracksChanged(tracks: Tracks) {

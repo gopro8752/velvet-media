@@ -304,10 +304,10 @@ fun PlayerScreen(
                 state = state,
                 retryFocus = retryFocus,
                 onRetry = { vm.retry() },
-                streamActionLabel = if (state.streams.isEmpty() && state.blockedGroups.isNotEmpty()) "Playback options" else "Streams",
+                streamActionLabel = if (state.streams.isEmpty() && state.hasBlockedReleases) "Playback options" else "Streams",
                 onChooseStream = {
                     vm.holdQueueSkip()
-                    openPanel(if (state.streams.isEmpty() && state.blockedGroups.isNotEmpty()) PlayerPanel.OPTIONS else PlayerPanel.STREAMS)
+                    openPanel(if (state.streams.isEmpty() && state.hasBlockedReleases) PlayerPanel.OPTIONS else PlayerPanel.STREAMS)
                 },
                 onNext = if (target.queueSessionId != null && state.hasNext) ({ vm.playNextEpisode() }) else null,
                 onBack = {
@@ -399,7 +399,7 @@ fun PlayerScreen(
                 streams = state.streams,
                 currentUrl = state.currentStreamUrl,
                 episodeVerdicts = state.episodeVerdicts,
-                onOpenPlaybackOptions = if (state.isShow && state.blockedGroups.isNotEmpty())
+                onOpenPlaybackOptions = if (state.hasBlockedReleases)
                     ({ openPanel(PlayerPanel.OPTIONS) }) else null,
                 onPick = { option ->
                     vm.switchStream(option)
@@ -412,8 +412,8 @@ fun PlayerScreen(
                 onFocus = { optionFocus = it },
                 onAudio = { panel = PlayerPanel.AUDIO },
                 onSubtitles = { panel = PlayerPanel.SUBTITLES },
-                onBlockCurrent = vm::blockCurrentRelease,
-                onResetBlocks = { state.blockedGroups.forEach { vm.unblockReleaseGroup(it.key) } },
+                onBlockCurrent = { vm.blockCurrentRelease { closePanel() } },
+                onResetBlocks = vm::resetBlockedReleases,
                 onBack = ::closePanel,
             )
             PlayerPanel.SUBTITLES -> TrackPickerSheet(

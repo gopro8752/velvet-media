@@ -36,6 +36,20 @@ To use [Velour](../../launcher/README.md), sign **both applications with the sam
 
 ## Stream recovery
 
+Source selection checks the connected display's HDR capabilities, including when
+choosing automatic fallbacks, picking a source manually, or accepting Send to TV.
+Dolby Vision releases are skipped on displays that do not report Dolby Vision;
+an HDR label alongside DV is not proof of a compatible base layer. HDR10+ releases
+can use their HDR10 base on an HDR10 display. The player also checks the actual
+video format after loading, to catch missing release tags. This selects a compatible
+source without video transcoding or tone mapping.
+
+**Playback options → Block this release** skips the current movie release and moves
+to another available source, preserving playback position. Movie blocks are exact
+release matches; TV blocks continue to apply to that release group for the show.
+Both are saved on this device. **Reset blocked releases** reverses the blocks for
+the current title, including when every source has been blocked.
+
 The mainline app reports playback position, measured duration, buffered position,
 a temporary session ID, and a seek generation to the configured backend's
 `/stream/:id/playback` endpoint while a native stream is open; leaving playback

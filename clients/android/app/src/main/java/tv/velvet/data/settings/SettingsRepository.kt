@@ -18,6 +18,8 @@ import tv.velvet.data.model.StreamSourceConfig
 import tv.velvet.data.streams.ReleaseGroup
 import tv.velvet.data.streams.withBlockedReleaseGroup
 import tv.velvet.data.streams.withoutBlockedReleaseGroup
+import tv.velvet.data.streams.withBlockedMovieRelease
+import tv.velvet.data.streams.withoutBlockedMovieReleases
 
 private val Context.dataStore by preferencesDataStore(name = "velvet_settings")
 
@@ -63,6 +65,7 @@ class SettingsRepository(private val context: Context, private val json: Json) {
         val BACKEND_URL = stringPreferencesKey("backend_url")
         val MANUAL_GROUPS = stringPreferencesKey("manual_binge_groups_json")
         val BLOCKED_GROUPS = stringPreferencesKey("blocked_release_groups_by_show_json")
+        val BLOCKED_MOVIE_RELEASES = stringPreferencesKey("blocked_exact_releases_by_movie_json")
         val HANDOFF_DEVICE_ID = stringPreferencesKey("handoff_device_id")
         val HANDOFF_SEQUENCE = longPreferencesKey("handoff_presence_sequence")
     }
@@ -76,6 +79,8 @@ class SettingsRepository(private val context: Context, private val json: Json) {
             MapSerializer(String.serializer(), String.serializer())
         private val BLOCKED_GROUPS_SERIALIZER =
             MapSerializer(String.serializer(), ListSerializer(ReleaseGroup.serializer()))
+        private val BLOCKED_MOVIE_RELEASES_SERIALIZER =
+            MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     }
 
     val settings: Flow<VelvetSettings> = context.dataStore.data.map { p ->
@@ -249,6 +254,28 @@ class SettingsRepository(private val context: Context, private val json: Json) {
     private fun decodeBlockedGroups(raw: String?): Map<String, List<ReleaseGroup>> =
         raw?.let {
             runCatching { json.decodeFromString(BLOCKED_GROUPS_SERIALIZER, it) }.getOrElse { emptyMap() }
+        } ?: emptyMap()
+
+    /** Device-local exclusions for an exact movie release, independent of TV group blocks. */
+    val blockedMovieReleases: Flow<Map<String, List<String>>> =
+        context.dataStore.data.map { decodeBlockedMovieReleases(it[Keys.BLOCKED_MOVIE_RELEASES]) }
+
+    suspend fun blockMovieRelease(imdbId: String, key: String) =
+        context.dataStore.edit { p ->
+            val updated = withBlockedMovieRelease(decodeBlockedMovieReleases(p[Keys.BLOCKED_MOVIE_RELEASES]), imdbId, key)
+            p[Keys.BLOCKED_MOVIE_RELEASES] = json.encodeToString(BLOCKED_MOVIE_RELEASES_SERIALIZER, updated)
+        }
+
+    suspend fun resetBlockedMovieReleases(imdbId: String) =
+        context.dataStore.edit { p ->
+            val updated = withoutBlockedMovieReleases(decodeBlockedMovieReleases(p[Keys.BLOCKED_MOVIE_RELEASES]), imdbId)
+            if (updated.isEmpty()) p.remove(Keys.BLOCKED_MOVIE_RELEASES)
+            else p[Keys.BLOCKED_MOVIE_RELEASES] = json.encodeToString(BLOCKED_MOVIE_RELEASES_SERIALIZER, updated)
+        }
+
+    private fun decodeBlockedMovieReleases(raw: String?): Map<String, List<String>> =
+        raw?.let {
+            runCatching { json.decodeFromString(BLOCKED_MOVIE_RELEASES_SERIALIZER, it) }.getOrElse { emptyMap() }
         } ?: emptyMap()
 
     /**
