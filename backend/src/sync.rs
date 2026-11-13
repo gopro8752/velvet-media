@@ -176,6 +176,9 @@ pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
           sid TEXT PRIMARY KEY, nzb_url TEXT NOT NULL,
           reason TEXT NOT NULL, found_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS blocked_releases (
+          sid TEXT PRIMARY KEY, reason TEXT NOT NULL, blocked_at INTEGER NOT NULL
+        );
         "#,
     )?;
     Ok(())

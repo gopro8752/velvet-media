@@ -175,6 +175,9 @@ impl StreamState {
         {
             return Err(StatusCode::BAD_REQUEST);
         }
+        if self.is_blocked(sid) && !request.stopped {
+            return Err(StatusCode::GONE);
+        }
         let entry = self.lookup(sid).ok_or(StatusCode::NOT_FOUND)?;
         if !self.repair_enabled || !self.buffer_config.enabled {
             return Ok(());
@@ -906,11 +909,21 @@ impl StreamState {
             recorder.record(event);
         }
     }
-    /// True if this NZB was verified incomplete within the last 7 days. The
+    /// Explicit owner decisions are independent of repair/verification and never
+    /// expire. Read the ledger each time so a block also applies to warm entries
+    /// and URLs already held by a client, without restarting the backend.
+    fn is_blocked(&self, sid: &str) -> bool {
+        self.db.lock().unwrap().query_row(
+            "SELECT 1 FROM blocked_releases WHERE sid = ?1", [sid], |_| Ok(()),
+        ).is_ok()
+    }
+
+    /// True if explicitly blocked or verified incomplete within the last 7 days. The
     /// verdict EXPIRES: a brand-new post can be condemned mid-propagation while
     /// its articles are still filling in, so an old verdict earns one re-check
     /// (still bad → re-condemned with a fresh timestamp, costing one failover).
     pub fn is_condemned(&self, nzb_url: &str) -> bool {
+        if self.is_blocked(&fnv_hex(nzb_url.as_bytes())) { return true; }
         if self.streams.lock().unwrap().get(&fnv_hex(nzb_url.as_bytes())).is_some_and(|entry| entry.unsupported()) { return true; }
         if self.repair_enabled {
             return false;
@@ -1066,6 +1079,9 @@ impl StreamState {
     }
 
     pub fn source_readiness(&self, sid: &str) -> SourceReadiness {
+        if self.is_blocked(sid) {
+            return SourceReadiness { status: "unavailable", retry_after_seconds: None };
+        }
         let Some(entry) = self.lookup(sid) else {
             return SourceReadiness { status: "unverified", retry_after_seconds: None };
         };
@@ -1083,7 +1099,7 @@ impl StreamState {
     pub fn set_recovery_candidates(&self, sids: &[String]) {
         let entries = self.streams.lock().unwrap();
         let mut seen = std::collections::HashSet::new();
-        let candidates = Arc::new(sids.iter().filter(|sid| entries.contains_key(*sid) && seen.insert((*sid).clone())).cloned().collect());
+        let candidates = Arc::new(sids.iter().filter(|sid| !self.is_blocked(sid) && entries.contains_key(*sid) && seen.insert((*sid).clone())).cloned().collect());
         for sid in sids {
             if let Some(entry) = entries.get(sid) {
                 entry.recovery.lock().unwrap().candidates = Arc::clone(&candidates);
@@ -1093,13 +1109,14 @@ impl StreamState {
 
     fn health(&self, sid: &str) -> Option<StreamHealth> {
         let entry = self.lookup(sid)?;
+        let blocked = self.is_blocked(sid);
         let entries = self.streams.lock().unwrap();
         let (complete, has_layout) = {
             let loaded = entry.loaded.lock().unwrap();
             (loaded.as_ref().and_then(|l| l.complete), loaded.is_some())
         };
         let failure = entry.preparation_failure();
-        let status = if entry.unsupported() { "unsupported" } else if failure.is_some() && !has_layout { "unavailable" } else { match complete {
+        let status = if blocked { "unavailable" } else if entry.unsupported() { "unsupported" } else if failure.is_some() && !has_layout { "unavailable" } else { match complete {
             Some(true) => "complete",
             Some(false) => "incomplete",
             None if entry.verify_lock.try_lock().is_err() => "checking",
@@ -1107,7 +1124,8 @@ impl StreamState {
         }};
         let recovery = entry.recovery.lock().unwrap();
         let ready = recovery.prepared.as_ref().filter(|prepared| {
-            prepared.at.elapsed() < std::time::Duration::from_secs(90)
+            !blocked && !self.is_blocked(&prepared.sid)
+                && prepared.at.elapsed() < std::time::Duration::from_secs(90)
                 && (prepared.fraction - recovery.desired_fraction).abs() < 0.002
                 && entries.get(&prepared.sid).is_some_and(|candidate| {
                     candidate
@@ -1124,15 +1142,23 @@ impl StreamState {
                     .all(|id| self.cache.get(id).is_some())
         });
         Some(StreamHealth {
-            error_code: match status { "unsupported" => Some("unsupported_archive"), "incomplete" => Some("missing_articles"), "unavailable" => failure.map(|(error, _)| error.code()), _ => None },
+            error_code: if blocked { Some("blocked_release") } else { match status { "unsupported" => Some("unsupported_archive"), "incomplete" => Some("missing_articles"), "unavailable" => failure.map(|(error, _)| error.code()), _ => None } },
             status,
             startup: SourceReadiness {
-                status: if failure.is_some() || entry.unsupported() || complete == Some(false) { "unavailable" } else if self.startup_cached(&entry) { "ready" } else { "unverified" },
+                status: if blocked || failure.is_some() || entry.unsupported() || complete == Some(false) { "unavailable" } else if self.startup_cached(&entry) { "ready" } else { "unverified" },
                 retry_after_seconds: failure.map(|(_, seconds)| seconds),
             },
-            exact_recovery: self.buffer_health(&entry),
+            exact_recovery: {
+                let mut health = self.buffer_health(&entry);
+                if blocked {
+                    health.status = "unavailable";
+                    health.hold_fallback = false;
+                    health.verified_ahead_seconds = None;
+                }
+                health
+            },
             recovery: RecoveryHealth {
-                status: if ready.is_some() {
+                status: if blocked { "unavailable" } else if ready.is_some() {
                     "ready"
                 } else if recovery.preparing {
                     "preparing"
@@ -1149,6 +1175,7 @@ impl StreamState {
     }
 
     fn prepare_recovery(&self, sid: &str, fraction: f64) -> bool {
+        if self.is_blocked(sid) { return false; }
         let entry = self.lookup(sid);
         let Some(entry) = entry else { return false };
         let mut recovery = entry.recovery.lock().unwrap();
@@ -1194,12 +1221,14 @@ const WARM_SEGS: usize = 24;
 /// nzbdav lesson ("only ever play verified-complete files") without nzbdav's
 /// blocking import step. Returns whether the release is complete.
 pub async fn verify_stream(st: &StreamState, sid: &str) -> anyhow::Result<bool> {
+    if st.is_blocked(sid) { return Err(StreamError::BlockedRelease.into()); }
     let entry = st
         .lookup(sid)
         .ok_or_else(|| anyhow::anyhow!("unknown stream {sid}"))?;
     // Join an existing sweep rather than reporting a still-unverified source
     // as healthy to a concurrent warm. The guard also releases on cancellation.
     let _verification = entry.verify_lock.lock().await;
+    if st.is_blocked(sid) { return Err(StreamError::BlockedRelease.into()); }
     if let Some(l) = entry.loaded.lock().unwrap().as_ref() {
         if let Some(v) = l.complete {
             return Ok(v);
@@ -1261,8 +1290,10 @@ async fn verify_stream_inner(
 /// segments around that point of the file (so resuming mid-episode is instant
 /// too). A previous warm is reused only while its actual bytes remain cached.
 pub async fn warm_head(st: StreamState, sid: String, fraction: Option<f64>) -> anyhow::Result<()> {
+    if st.is_blocked(&sid) { return Err(StreamError::BlockedRelease.into()); }
     let entry = st.lookup(&sid).ok_or(StreamError::UnknownStream)?;
     let _flight = entry.warm_lock.lock().await;
+    if st.is_blocked(&sid) { return Err(StreamError::BlockedRelease.into()); }
     if st.warm_bytes_cached(&entry, false) && entry.startup.lock().unwrap().as_ref().is_some_and(|p| {
         p.full_warm && match (p.fraction, fraction) {
             (_, None) => true,
@@ -1280,9 +1311,11 @@ pub async fn warm_head(st: StreamState, sid: String, fraction: Option<f64>) -> a
 /// Read exact checksummed media windows without a whole-release STAT or waiting
 /// for PAR2. This establishes startup readiness, never whole-file completeness.
 pub async fn warm_startup(st: StreamState, sid: String) -> anyhow::Result<()> {
+    if st.is_blocked(&sid) { return Err(StreamError::BlockedRelease.into()); }
     let entry = st.lookup(&sid).ok_or(StreamError::UnknownStream)?;
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let _flight = entry.warm_lock.lock().await;
+        if st.is_blocked(&sid) { return Err(StreamError::BlockedRelease.into()); }
         if entry.preparation_failure().is_some() { return Err(StreamError::UpstreamUnavailable.into()); }
         if st.startup_cached(&entry) { return Ok(()); }
         ensure_loaded_context(st.clone(), entry.clone(), "startup", None).await?;
@@ -1446,17 +1479,19 @@ fn warm_targets(
 }
 
 async fn prepare_recovery_inner(st: &StreamState, sid: &str, entry: &Arc<StreamEntry>) {
+    if st.is_blocked(sid) { return; }
     let mut candidates = {
         let recovery = entry.recovery.lock().unwrap();
-        let mut candidates: Vec<_> = recovery.candidates.iter().filter(|candidate| *candidate != sid).cloned().collect();
+        let mut candidates: Vec<_> = recovery.candidates.iter().filter(|candidate| *candidate != sid && !st.is_blocked(candidate)).cloned().collect();
         if let Some(prepared) = &recovery.prepared {
             candidates.retain(|candidate| candidate != &prepared.sid);
-            candidates.insert(0, prepared.sid.clone());
+            if !st.is_blocked(&prepared.sid) { candidates.insert(0, prepared.sid.clone()); }
         }
         candidates
     };
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     while !candidates.is_empty() && tokio::time::Instant::now() < deadline {
+        if st.is_blocked(sid) { return; }
         // Discovery runs after the resolver response. Consult live readiness
         // every time, so a now-ready source at rank29 can be prepared first.
         candidates.sort_by_key(|candidate| match st.source_readiness(candidate).status {
@@ -1472,6 +1507,7 @@ async fn prepare_recovery_inner(st: &StreamState, sid: &str, entry: &Arc<StreamE
         .await;
         match result {
             Ok(Ok(mut segments)) => {
+                if st.is_blocked(&candidate) { continue; }
                 // Loading a large NZB can take long enough for playback to
                 // move (or seek). Refresh the latest requested region before
                 // declaring readiness, with the layout and STAT now cached.
@@ -1523,6 +1559,7 @@ async fn prepare(
     if !req.fraction.is_finite() || !(0.0..=1.0).contains(&req.fraction) {
         return (StatusCode::BAD_REQUEST, "fraction must be between 0 and 1").into_response();
     }
+    if st.is_blocked(&id) { return StreamError::BlockedRelease.response(); }
     if st.prepare_recovery(&id, req.fraction) {
         StatusCode::ACCEPTED.into_response()
     } else {
@@ -1537,7 +1574,7 @@ async fn health(
 ) -> Response {
     match st.health(&id) {
         Some(mut health) => {
-            if let Some(entry) = st.lookup(&id) {
+            if let Some(entry) = st.lookup(&id).filter(|_| !st.is_blocked(&id)) {
                 let file_ids = entry
                     .buffer
                     .lock()
@@ -1652,6 +1689,7 @@ async fn serve(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
+    if st.is_blocked(&id) { return StreamError::BlockedRelease.response(); }
     let Some(entry) = st.lookup(&id) else {
         return StreamError::UnknownStream.response();
     };
@@ -1692,6 +1730,7 @@ async fn serve(
         return response;
     }
 
+    if st.is_blocked(&id) { return StreamError::BlockedRelease.response(); }
     // Read the cached load info into locals (brief lock, nothing held across await).
     let (total, extents, ext_media_start, complete) = {
         let guard = entry.loaded.lock().unwrap();
@@ -1795,6 +1834,7 @@ async fn ensure_loaded_context(
     trigger: &'static str,
     session: Option<String>,
 ) -> anyhow::Result<()> {
+    if st.is_blocked(&fnv_hex(entry.nzb_url.as_bytes())) { return Err(StreamError::BlockedRelease.into()); }
     let background = trigger != "foreground";
     // Fast path: already loaded (brief lock, no await held).
     if entry.loaded.lock().unwrap().is_some() {
@@ -1814,6 +1854,7 @@ async fn ensure_loaded_context(
     // Single-flight: whoever holds the lock does the load; everyone else waits
     // and finds `loaded` populated on re-check.
     let _flight = entry.load_lock.lock().await;
+    if st.is_blocked(&fnv_hex(entry.nzb_url.as_bytes())) { return Err(StreamError::BlockedRelease.into()); }
     if entry.unsupported() { return Err(StreamError::UnsupportedArchive.into()); }
     if entry.loaded.lock().unwrap().is_some() {
         return Ok(());
@@ -2722,6 +2763,79 @@ mod tests {
             complete,
         });
         sid
+    }
+
+    fn block_release(st: &StreamState, sid: &str) {
+        st.db.lock().unwrap().execute(
+            "INSERT INTO blocked_releases (sid, reason, blocked_at) VALUES (?1, 'invalid short media', 1)",
+            [sid],
+        ).unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_release_block_survives_repair_mode_verification_and_restart() {
+        let mut st = test_state();
+        st.repair_enabled = true;
+        let url = "https://fixture.invalid/blocked.nzb";
+        let sid = st.register(url).await;
+        block_release(&st, &sid);
+        assert!(st.is_condemned(url), "manual blocks apply even with exact repair enabled");
+        st.condemn(&sid, url, "background verifier result");
+        assert!(st.is_blocked(&sid), "verification cannot overwrite an owner's block");
+        let mut restored = StreamState::new(Pool::new(&[]), reqwest::Client::new(), st.db.clone());
+        restored.repair_enabled = true;
+        assert!(restored.is_condemned(url), "the deliberately ancient manual block must not expire");
+        assert!(!restored.is_condemned("https://fixture.invalid/other.nzb"));
+    }
+
+    #[tokio::test]
+    async fn manual_release_block_rejects_already_warmed_urls_and_preparation() {
+        let mut st = test_state();
+        st.repair_enabled = true;
+        let sid = loaded_stream(&st, "manual-warm", Some(true)).await;
+        let ids: Vec<_> = (0..5).map(|i| format!("manual-warm-{i}")).collect();
+        for (i, id) in ids.iter().enumerate() { st.cache.put(id, vec![1; 100], i as u64 * 100); }
+        *st.lookup(&sid).unwrap().startup.lock().unwrap() = Some(PreparedStartup {
+            segments: ids, at: std::time::Instant::now(), fraction: None, full_warm: true, crc_verified: true,
+        });
+        assert_eq!(st.source_readiness(&sid).status, "ready");
+        block_release(&st, &sid);
+        assert_eq!(st.source_readiness(&sid).status, "unavailable");
+        let health = st.health(&sid).unwrap();
+        assert_eq!(health.error_code, Some("blocked_release"));
+        assert_eq!(health.startup.status, "unavailable");
+        assert!(!health.exact_recovery.hold_fallback);
+        assert!(!st.prepare_recovery(&sid, 0.0));
+        for result in [warm_head(st.clone(), sid.clone(), None).await, warm_startup(st.clone(), sid.clone()).await] {
+            assert_eq!(result.unwrap_err().downcast_ref::<StreamError>(), Some(&StreamError::BlockedRelease));
+        }
+        assert_eq!(verify_stream(&st, &sid).await.unwrap_err().downcast_ref::<StreamError>(), Some(&StreamError::BlockedRelease));
+        let response = serve(State(st.clone()), Path(sid.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::GONE);
+        assert_eq!(response.headers()["x-velvet-stream-error"], "blocked_release");
+        assert_eq!(prepare(State(st), Path(sid), Json(PrepareRequest { fraction: 0.0 })).await.status(), StatusCode::GONE);
+    }
+
+    #[tokio::test]
+    async fn manual_release_block_removes_cached_alternate_and_selects_another() {
+        let st = test_state();
+        let current = loaded_stream(&st, "manual-current", Some(false)).await;
+        let blocked = loaded_stream(&st, "manual-first", Some(true)).await;
+        let good = loaded_stream(&st, "manual-second", Some(true)).await;
+        for name in ["manual-first", "manual-second"] {
+            for i in 0..5 { st.cache.put(&format!("{name}-{i}"), vec![1; 100], i * 100); }
+        }
+        let sids = vec![current.clone(), blocked.clone(), good.clone()];
+        st.set_recovery_candidates(&sids);
+        let entry = st.lookup(&current).unwrap();
+        prepare_recovery_inner(&st, &current, &entry).await;
+        assert_eq!(st.health(&current).unwrap().recovery.stream_id.as_deref(), Some(blocked.as_str()));
+        block_release(&st, &blocked);
+        assert!(st.health(&current).unwrap().recovery.stream_id.is_none(), "a cached prepared alternate must be hidden immediately");
+        prepare_recovery_inner(&st, &current, &entry).await;
+        assert_eq!(st.health(&current).unwrap().recovery.stream_id.as_deref(), Some(good.as_str()));
+        st.set_recovery_candidates(&sids);
+        assert!(!entry.recovery.lock().unwrap().candidates.contains(&blocked));
     }
 
     #[test]

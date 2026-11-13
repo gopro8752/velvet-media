@@ -7,6 +7,8 @@
 !src/
 !src/*.rs
 !src/epg_mappings.json
+!src/data/
+!src/data/spongebob_episode_groups.json
 !admin/
 !admin/*.html
 !admin/*.css

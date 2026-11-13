@@ -10,6 +10,8 @@ pub enum StreamError {
     UnsupportedArchive,
     #[error("source is temporarily unavailable")]
     UpstreamUnavailable,
+    #[error("source was blocked by the server owner")]
+    BlockedRelease,
     #[error("unknown stream")]
     UnknownStream,
     #[error("bad range")]
@@ -19,6 +21,7 @@ impl StreamError {
     pub fn code(self) -> &'static str { match self {
         Self::MissingArticles => "missing_articles", Self::UnsupportedArchive => "unsupported_archive",
         Self::UpstreamUnavailable => "upstream_unavailable", Self::UnknownStream => "unknown_stream",
+        Self::BlockedRelease => "blocked_release",
         Self::InvalidRange => "invalid_range",
     }}
     pub fn response(self) -> Response {
@@ -26,6 +29,7 @@ impl StreamError {
             Self::MissingArticles=>StatusCode::BAD_GATEWAY,
             Self::UnsupportedArchive=>StatusCode::UNPROCESSABLE_ENTITY,
             Self::UpstreamUnavailable=>StatusCode::SERVICE_UNAVAILABLE,
+            Self::BlockedRelease=>StatusCode::GONE,
             Self::UnknownStream=>StatusCode::NOT_FOUND, Self::InvalidRange=>StatusCode::RANGE_NOT_SATISFIABLE,
         };
         let mut response=(status,self.to_string()).into_response();
