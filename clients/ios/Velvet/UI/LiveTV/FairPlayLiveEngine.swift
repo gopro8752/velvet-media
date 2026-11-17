@@ -169,6 +169,11 @@ final class FairPlayLiveEngine: ObservableObject {
         updateStatus()
     }
 
+    func pause() {
+        guard !tornDown else { return }
+        player.pause()
+    }
+
     var isPlayingNow: Bool { !tornDown && !failed && player.timeControlStatus == .playing }
     var positionMs: Int64 {
         let value = player.currentTime().seconds * 1000

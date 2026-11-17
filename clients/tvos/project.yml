@@ -1,0 +1,103 @@
+name: VelvetTV
+options:
+  bundleIdPrefix: tv.velvet
+  deploymentTarget:
+    tvOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    SWIFT_VERSION: "5.10"
+packages:
+  VLCKitSPM:
+    url: https://github.com/tylerjonesio/vlckit-spm
+    exactVersion: 3.6.0
+targets:
+  VelvetTV:
+    type: application
+    platform: tvOS
+    scheme:
+      testTargets:
+        - VelvetTVTests
+        - VelvetTVUITests
+    sources:
+      - VelvetTV
+      - ../ios/Velvet/Core
+      - ../ios/Velvet/Data
+      - ../ios/Velvet/Models
+      - ../ios/Velvet/UI/Home/HomeViewModel.swift
+      - ../ios/Velvet/UI/Details/DetailsViewModel.swift
+      - ../ios/Velvet/UI/Search/SearchViewModel.swift
+      - ../ios/Velvet/UI/Player/PlayerEngine.swift
+      - ../ios/Velvet/UI/Player/PlayerViewModel.swift
+      - ../ios/Velvet/UI/Player/PlayerRecovery.swift
+      - ../ios/Velvet/UI/Player/StreamFailoverWatchdog.swift
+      - ../ios/Velvet/UI/LiveTV/LivePlayerViewModel.swift
+      - ../ios/Velvet/UI/LiveTV/FairPlayLiveEngine.swift
+      - path: ../ios/Velvet/Resources/Fonts
+        buildPhase: resources
+      - path: ../ios/Velvet/Resources/VLCKit-LICENSE.txt
+        buildPhase: resources
+    dependencies:
+      - package: VLCKitSPM
+        product: VLCKitSPM
+    info:
+      path: VelvetTV/Info.plist
+      properties:
+        CFBundleDisplayName: Velvet
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        ITSAppUsesNonExemptEncryption: false
+        UIUserInterfaceStyle: Dark
+        UIAppFonts: [outfit.ttf, inter.ttf]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: Connect to your Velvet backend on your home network.
+        CFBundleURLTypes:
+          - CFBundleURLName: tv.velvet.tvos
+            CFBundleURLSchemes: [velvet]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tv.velvet.tvos
+        PRODUCT_MODULE_NAME: Velvet
+        TARGETED_DEVICE_FAMILY: "3"
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 1.0.0
+        ENABLE_USER_SCRIPT_SANDBOXING: false
+        ASSETCATALOG_COMPILER_APPICON_NAME: Brand Assets
+  VelvetTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    sources:
+      - Tests/VelvetTVTests
+      - ../ios/Tests/VelvetTests/AudioCompatibilityTests.swift
+      - ../ios/Tests/VelvetTests/CategoryQueueNavigationTests.swift
+      - ../ios/Tests/VelvetTests/EpisodeNavigationTests.swift
+      - ../ios/Tests/VelvetTests/ExactRecoveryTests.swift
+      - ../ios/Tests/VelvetTests/LiveGuidePolicyTests.swift
+      - ../ios/Tests/VelvetTests/ReleaseGroupBlocksTests.swift
+      - ../ios/Tests/VelvetTests/StreamFailoverWatchdogTests.swift
+      - ../ios/Tests/VelvetTests/ProfileCategoryTests.swift
+      - ../ios/Tests/VelvetTests/TmdbBackendTests.swift
+      - ../ios/Tests/VelvetTests/PlaybackRecoveryPlayerTests.swift
+    dependencies:
+      - target: VelvetTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tv.velvet.tvos.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: VelvetTV
+  VelvetTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    sources:
+      - Tests/VelvetTVUITests
+    dependencies:
+      - target: VelvetTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tv.velvet.tvos.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: VelvetTV

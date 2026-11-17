@@ -17,7 +17,7 @@ Velvet is a self-hosted media system built around a simple idea: browsing, playb
 
 The interface puts artwork, readable type, responsive remote navigation, and translucent controls first. **Velour is the companion launcher for Velvet**: the recommended home screen for a Shield or Android TV, with your apps, Continue Watching, and favorite teams brought together in the same visual language.
 
-This repository contains the backend, Android TV app, iPhone/iPad app, **Roku alpha**, and Velour launcher. It is a clean source release: bring your own server, credentials, subscriptions, and signing setup. No hosted account, media library, or preconfigured service access is included.
+This repository contains the backend, Android TV app, iPhone/iPad app, **Apple TV preview**, **Roku alpha**, and Velour launcher. It is a clean source release: bring your own server, credentials, subscriptions, and signing setup. No hosted account, media library, or preconfigured service access is included.
 
 ## On the big screen
 
@@ -47,6 +47,7 @@ Velour and Velvet are designed to be used together. Build and install both with 
 | --- | --- | --- | --- |
 | **Velvet for Android TV** | Kotlin, Compose for TV, Media3, GeckoView | Remote-first browsing and playback, a timeline TV guide, glass dock, profiles, category queues, stream/track controls, and playback handoff. Developed around NVIDIA Shield. | [Android guide](clients/android/README.md) |
 | **Velvet for iPhone and iPad** | SwiftUI, VLCKit, AVPlayer/FairPlay | Touch browsing and playback, an adaptive TV guide, iPad landscape support, shared watch state, categories, and Send to TV. | [iOS guide](clients/ios/README.md) |
+| **Velvet for Apple TV — PREVIEW** | SwiftUI, tvOS, VLCKit, AVPlayer/FairPlay | Siri Remote navigation, cinematic browsing, profiles, personal category queues, full player controls, a TV guide, and native sports through the configured backend bridge. Simulator-tested; physical Apple TV validation is pending. | [Apple TV build, install, and limitations](clients/tvos/README.md) |
 | **Velvet for Roku — ALPHA** | BrightScript, SceneGraph | Native browsing, profiles, categories, player controls, a timeline TV guide, sports views, and reporting. Requires per-device developer-mode sideloading; hardware and feature differences remain. | [Roku guide and limitations](clients/roku/README.md) |
 | **Velour — Velvet's companion launcher** | Kotlin, Compose | Android TV home screen with an app grid, wallpapers, Velvet resume shortcuts, game cards that open Live Sports, weather, and an ambient clock. | [Launcher guide](launcher/README.md) |
 | **Velvet backend + admin** | Rust, Tokio, Axum, SQLite | Resolution and streaming, synchronization, compatibility processing, optional integrations, and private reporting. | [Server guide](backend/README.md) |
@@ -207,6 +208,7 @@ Back up your private configuration and persistent data volume separately from th
 backend/            Rust service, admin UI, Docker and configuration examples
 clients/android/    Android TV application
 clients/ios/        iPhone and iPad application
+clients/tvos/       Apple TV application (preview; shares the iOS data/player core)
 clients/roku/       Roku alpha application and sideload tooling
 launcher/           Velour Android TV launcher
 tve/spectrum/       Optional native Spectrum playback and program-guide service

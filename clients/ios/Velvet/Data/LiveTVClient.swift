@@ -89,6 +89,9 @@ final class LiveTVClient: LiveTVServing {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpBody = body
         if path == "live/tune" {
+            // The existing native bridge calls Apple's playback family "ios";
+            // tvOS shares its FairPlay protocol. Capability negotiation below
+            // distinguishes simulator/device support; telemetry reports tvos.
             request.setValue("ios", forHTTPHeaderField: "X-Velvet-Client")
             request.setValue(Self.playbackCapabilities, forHTTPHeaderField: "X-Velvet-Playback-Capabilities")
         }

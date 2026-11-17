@@ -46,12 +46,14 @@
 		6EBAF9157BBA21E00F68C6FF /* Cards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49499C2FC7D11FDFADB4FA34 /* Cards.swift */; };
 		712A76BA5AA9D52CB0E3E3CE /* StreamFailoverWatchdogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B428D2856BFC27098818D86 /* StreamFailoverWatchdogTests.swift */; };
 		78D6A53ECA6FD1A94B2BFC4F /* TrackPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19A63ED5C6C7E87DB8BCEECE /* TrackPickerSheet.swift */; };
+		7A4BCFB413895A537D7C3CB6 /* MovieReleaseBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D2C51398579FFD2CA7CC8AF /* MovieReleaseBlocks.swift */; };
 		7AB9DB30CF6D5511AF563279 /* LiveGuidePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1EE9C358980F0BC9966FB9 /* LiveGuidePolicy.swift */; };
 		7B0C0EBDABEB414B8A2447F2 /* LiveSportsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8839158F07D16CFCCAD2D93 /* LiveSportsClient.swift */; };
 		7BD056B7BCD4C2B0F71E02A1 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 513BC75CF247A64964A45464 /* SettingsStore.swift */; };
 		7DFB5CDEAA05214ABDC2F19E /* PlayerSessionHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF45F43654398F54B0B1A272 /* PlayerSessionHost.swift */; };
 		7E56852995AE84FE19BD2DA7 /* FairPlayLiveEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 054E78FA16DFFF05D359FE2D /* FairPlayLiveEngine.swift */; };
 		8075AC2E7D55C2DD7F32BF7D /* LiveTVUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9AC89A85577D9448895FDC6 /* LiveTVUITests.swift */; };
+		8A0CFA14DBCC3B5768356595 /* TVVideoCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED96EDCC81F1F70966586EC /* TVVideoCompatibility.swift */; };
 		8A13E715C4C0AFF2FC05FB6A /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 776278A1F2C5BA7F03F67CC6 /* OrientationLock.swift */; };
 		8A7371433A13FAD47D509FB1 /* LiveSportsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C351310A319C0202CB69B0C0 /* LiveSportsView.swift */; };
 		8D742CA5E9166099466A74EA /* TmdbRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF1704F450D81DD4C5AA42C /* TmdbRequest.swift */; };
@@ -64,6 +66,7 @@
 		9610A7A346A2A47872526F61 /* LiveTVView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E1851B3F517E7C0CBC9E940 /* LiveTVView.swift */; };
 		9680851BB17F72CC7C2EB613 /* AudioCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 464D2DC356A020A4258C0BEA /* AudioCompatibility.swift */; };
 		996CB5DA2BEDBC00C1AAF792 /* AddProfileSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E81CA0D202F28275EC65F97 /* AddProfileSheet.swift */; };
+		9C55187B4952F31BBD4BA440 /* AppContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A052A6CEF4B77FBB5DDC9392 /* AppContainer.swift */; };
 		A090C3CEFB8681FF200F0163 /* PlayerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF544A3F9A8A3513A429ED0 /* PlayerEngine.swift */; };
 		A3510ED6AEDD3924206A89B8 /* PlayerControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E913C46640E7803F5F817DE9 /* PlayerControls.swift */; };
 		A641DE226AFD61530F851B30 /* DetailsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6DA49B15BB60FDD97EACED /* DetailsViewModel.swift */; };
@@ -161,6 +164,7 @@
 		5B2B34562D1430F3FDD1D42B /* LivePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePlayerView.swift; sourceTree = "<group>"; };
 		5B428D2856BFC27098818D86 /* StreamFailoverWatchdogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamFailoverWatchdogTests.swift; sourceTree = "<group>"; };
 		5C9B08FCAB984B57782DFBDD /* RecoveryPlaybackMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPlaybackMetrics.swift; sourceTree = "<group>"; };
+		5D2C51398579FFD2CA7CC8AF /* MovieReleaseBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieReleaseBlocks.swift; sourceTree = "<group>"; };
 		5E81CA0D202F28275EC65F97 /* AddProfileSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddProfileSheet.swift; sourceTree = "<group>"; };
 		5F6B1129FA11BE1C4FBDBB6C /* ExactRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExactRecoveryTests.swift; sourceTree = "<group>"; };
 		6442749484A35807BFC49E02 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -177,6 +181,8 @@
 		9682D1ECADED7EBEC63BCDDB /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		96FF3779BE70F10311235297 /* AudioCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCompatibilityTests.swift; sourceTree = "<group>"; };
 		9D06C8931B427B6DA48AA4A3 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
+		9ED96EDCC81F1F70966586EC /* TVVideoCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVVideoCompatibility.swift; sourceTree = "<group>"; };
+		A052A6CEF4B77FBB5DDC9392 /* AppContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContainer.swift; sourceTree = "<group>"; };
 		AA792895E9F12872C4F066F8 /* PlaybackTelemetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTelemetryTests.swift; sourceTree = "<group>"; };
 		AAF1BCEB5C2E323ACFB31C5D /* ProfileAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileAvatar.swift; sourceTree = "<group>"; };
 		AB844934214719AF6DDE68C9 /* SportsPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportsPlayerView.swift; sourceTree = "<group>"; };
@@ -462,6 +468,7 @@
 				09AA5DBDFA6C5A5E8A47DC8B /* LiveFairPlayTransport.swift */,
 				B8839158F07D16CFCCAD2D93 /* LiveSportsClient.swift */,
 				F77A9CD6CD56BD473AC3719E /* LiveTVClient.swift */,
+				5D2C51398579FFD2CA7CC8AF /* MovieReleaseBlocks.swift */,
 				7336CAC5BDA10935F5614A19 /* Persistence.swift */,
 				4A061A5759A006C5C87A9E10 /* PlaybackTelemetry.swift */,
 				432D11B37F3180CD9ECE3D7A /* ProfileStore.swift */,
@@ -478,6 +485,7 @@
 				DDF1704F450D81DD4C5AA42C /* TmdbRequest.swift */,
 				94F4DF00CEAFC0D03A752255 /* TmdbRows.swift */,
 				B333E19704CA86542D4B5BB6 /* TVHandoff.swift */,
+				9ED96EDCC81F1F70966586EC /* TVVideoCompatibility.swift */,
 				CC764CCCEAD3B28421E93001 /* Sync */,
 			);
 			path = Data;
@@ -495,6 +503,7 @@
 		E6B7023ABB8DCF5EE0C43666 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				A052A6CEF4B77FBB5DDC9392 /* AppContainer.swift */,
 				878E32C02B2C574E34829C98 /* Theme.swift */,
 			);
 			path = Core;
@@ -631,6 +640,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				996CB5DA2BEDBC00C1AAF792 /* AddProfileSheet.swift in Sources */,
+				9C55187B4952F31BBD4BA440 /* AppContainer.swift in Sources */,
 				9680851BB17F72CC7C2EB613 /* AudioCompatibility.swift in Sources */,
 				6EBAF9157BBA21E00F68C6FF /* Cards.swift in Sources */,
 				65CEE1BEFA5898299FF79E06 /* CompanionApi.swift in Sources */,
@@ -656,6 +666,7 @@
 				D5D516AD52091957C7415D87 /* LiveTVClient.swift in Sources */,
 				9610A7A346A2A47872526F61 /* LiveTVView.swift in Sources */,
 				DDF4A9C158E10439AF40BCE3 /* Models.swift in Sources */,
+				7A4BCFB413895A537D7C3CB6 /* MovieReleaseBlocks.swift in Sources */,
 				8A13E715C4C0AFF2FC05FB6A /* OrientationLock.swift in Sources */,
 				FB794E37E54D8EB40C8DB61E /* Persistence.swift in Sources */,
 				18F22ECD61C2C9B5F53D7D10 /* PlaybackOptionsSheet.swift in Sources */,
@@ -687,6 +698,7 @@
 				06D5DD7ED459145AD53FD95A /* StreamTags.swift in Sources */,
 				E8061404678507B7A8ECF037 /* SyncEngine.swift in Sources */,
 				DD6EAC7AB93E7DBB9980BBA7 /* TVHandoff.swift in Sources */,
+				8A0CFA14DBCC3B5768356595 /* TVVideoCompatibility.swift in Sources */,
 				18DA0A45FEA20A1CA601F7EE /* Theme.swift in Sources */,
 				3543C06D917B7FFB6DF14119 /* TmdbClient.swift in Sources */,
 				D65034F8B0ABDB33342DFEFA /* TmdbDtos.swift in Sources */,

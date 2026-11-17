@@ -51,6 +51,8 @@ Keep this key private. It can view usage by profile and device, current playback
 
 Playback reports begin when compatible clients send telemetry. Historic playback is not inferred from existing watch progress. The analytics database is separate from watch-state data, defaults to `/data/velvet-analytics.db`, and can be relocated with `VELVET_ANALYTICS_DB`. Capacity samples, usage buckets, and session records are retained for 90 days.
 
+The Apple TV client reports its platform as `tvos`. Update the backend to the Apple TV release before relying on those reports; older backends reject that platform label. Playback itself does not depend on reporting being available.
+
 ### Exact repair and recovery reporting
 
 Mainline Velvet includes the verified read-ahead and exact-byte recovery engine first tested in Beta. Enable `[repair].enabled` and `[stream_buffer].enabled` in your private TOML configuration, reserve a writable private cache directory, and set the file, disk, download, concurrency, and time limits to fit your server. See the example configuration. The image includes PAR2 and FFmpeg/ffprobe. Native installations also need `par2`.

@@ -373,7 +373,7 @@ impl PlaybackEvent {
             && valid_id(&self.profile_id)
             && clean_text(&self.media_id, 128)
             && !self.media_id.is_empty()
-            && matches!(self.platform.as_str(), "android" | "ios" | "roku")
+            && matches!(self.platform.as_str(), "android" | "ios" | "tvos" | "roku")
             && matches!(
                 self.kind.as_str(),
                 "movie" | "tv" | "live_tv" | "live_sports"
@@ -940,6 +940,27 @@ mod tests {
     use super::*;
     fn event() -> PlaybackEvent {
         serde_json::from_value(json!({"sessionId":"test-session","sequence":1,"deviceId":"device-1","deviceName":"Shield","platform":"android","appVersion":"1","profileId":"profile-2","profileName":"Sam","kind":"tv","mediaId":"123","title":"Example","state":"playing","playedMs":0,"bufferedMs":0})).unwrap()
+    }
+    #[test]
+    fn tvos_playback_reports_preserve_platform_and_count_watched_time() {
+        let mut c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        let mut e = event();
+        e.platform = "tvos".into();
+        e.device_name = "Apple TV".into();
+        e.kind = "live_sports".into();
+        assert!(e.validate());
+        ingest(&mut c, &e, 100_000).unwrap();
+        e.sequence = 2;
+        e.played_ms = 15_000;
+        ingest(&mut c, &e, 115_000).unwrap();
+        let row: (String, i64) = c.query_row(
+            "SELECT platform,played_ms FROM admin_sessions WHERE id=?1", [&e.session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(row, ("tvos".into(), 15_000));
+        e.platform = "unknown-platform".into();
+        assert!(!e.validate());
     }
     #[test]
     fn counts_actual_deltas_once_and_ignores_position() {

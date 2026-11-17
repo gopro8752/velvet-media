@@ -276,6 +276,15 @@ final class PlayerEngine: NSObject, ObservableObject {
         }
     }
 
+    var videoCodecs: [String] {
+        (player.media?.tracksInformation ?? []).compactMap { raw in
+            guard let info = raw as? [String: Any],
+                  (info[VLCMediaTracksInformationType] as? String) == VLCMediaTracksInformationTypeVideo,
+                  let code = (info[VLCMediaTracksInformationCodec] as? NSNumber)?.uint32Value else { return nil }
+            return String(bytes: (0..<4).map { UInt8(truncatingIfNeeded: code >> ($0 * 8)) }, encoding: .ascii)
+        }
+    }
+
     var subtitleTracks: [PlayerTrack] {
         tracks(names: player.videoSubTitlesNames, ids: player.videoSubTitlesIndexes)
     }

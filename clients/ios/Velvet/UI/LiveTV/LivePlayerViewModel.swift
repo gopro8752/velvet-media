@@ -18,6 +18,8 @@ final class LivePlayerViewModel: ObservableObject {
     @Published private(set) var audioOptions: [TrackOption] = []
     @Published private(set) var subtitleOptions: [TrackOption] = []
 
+    private let telemetryKind: String
+    @Published private(set) var paused = false
     private let client: LiveTVServing
     private var telemetry: PlaybackTelemetry?
     private var telemetryChannel: String?
@@ -32,9 +34,10 @@ final class LivePlayerViewModel: ObservableObject {
     private var healthySince: Date?
     private var hasStarted = false
 
-    init(channel: LiveChannel, client: LiveTVServing, hardwareDecoding: Bool, settings: SettingsStore? = nil) {
+    init(channel: LiveChannel, client: LiveTVServing, hardwareDecoding: Bool, settings: SettingsStore? = nil, telemetryKind: String = "live_tv") {
         self.channel = channel
         self.client = client
+        self.telemetryKind = telemetryKind
         self.hardwareDecoding = hardwareDecoding
         if let settings { telemetry = PlaybackTelemetry(settings: settings) }
     }
@@ -60,9 +63,9 @@ final class LivePlayerViewModel: ObservableObject {
         if telemetryChannel != channel.id {
             telemetryChannel = channel.id
             phase = .loading
-            telemetry?.start(kind: "live_tv", mediaId: channel.id, title: channel.name) { [weak self] in
+            telemetry?.start(kind: telemetryKind, mediaId: channel.id, title: channel.name) { [weak self] in
                 guard let self else { return .init(state: "ended") }
-                let status = self.phase == .suspended ? "paused" : self.phase == .failed ? "error" :
+                let status = self.phase == .suspended || self.paused ? "paused" : self.phase == .failed ? "error" :
                     self.phase == .loading || self.buffering ? "buffering" :
                     self.isPlayingNow ? "playing" : "paused"
                 return .init(state: status, positionMs: self.positionMs)
@@ -70,6 +73,7 @@ final class LivePlayerViewModel: ObservableObject {
         }
         guard let generation = lifecycle.start() else { return }
         retryTask?.cancel()
+        paused = false
         activateAudio()
         beginTune(generation)
     }
@@ -163,7 +167,7 @@ final class LivePlayerViewModel: ObservableObject {
                 self.buffering = false
                 self.refreshTracks()
             case .buffering:
-                self.buffering = true
+                self.buffering = !self.paused
             }
             self.telemetry?.observe()
         }
@@ -199,6 +203,7 @@ final class LivePlayerViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, let self, self.lifecycle.accepts(generation) else { return }
                 self.refreshTracks()
+                guard !self.paused else { continue }
                 let now = Date()
                 if self.healthySince != nil {
                     if now.timeIntervalSince(self.lastProgressAt) > 25 {
@@ -236,9 +241,27 @@ final class LivePlayerViewModel: ObservableObject {
             }
         } else {
             phase = .failed
-            message = text + " Tap Retry to reconnect."
+            message = text + " Choose Retry to reconnect."
             UIApplication.shared.isIdleTimerDisabled = false
         }
+    }
+
+    /// A live pause keeps the viewer lease. Resume retains the current buffer;
+    /// Watch live explicitly retunes at the live edge.
+    func togglePlayPause() {
+        guard phase == .playing, !lifecycle.closed else { return }
+        paused.toggle()
+        if paused {
+            fairPlayEngine?.pause()
+            engine?.pause()
+            buffering = false
+        } else {
+            lastProgressAt = Date()
+            openedAt = lastProgressAt
+            fairPlayEngine?.play()
+            engine?.play()
+        }
+        telemetry?.observe(force: true)
     }
 
     func suspend() {
@@ -269,6 +292,7 @@ final class LivePlayerViewModel: ObservableObject {
         fairPlayEngine?.teardown()
         fairPlayEngine = nil
         buffering = false
+        paused = false
         audioOptions = []
         subtitleOptions = []
         let old = liveSession

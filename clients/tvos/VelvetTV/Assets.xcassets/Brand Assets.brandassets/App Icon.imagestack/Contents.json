@@ -1,0 +1,14 @@
+{
+  "info" : {
+    "author" : "tv.velvet.tvos",
+    "version" : 1
+  },
+  "layers" : [
+    {
+      "filename" : "Foreground.imagestacklayer"
+    },
+    {
+      "filename" : "Background.imagestacklayer"
+    }
+  ]
+}

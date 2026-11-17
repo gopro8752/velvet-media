@@ -65,8 +65,13 @@ final class PlaybackTelemetry {
         clock = PlaybackTelemetryClock(now: openedAt)
         recovery = (kind == "tv" || kind == "movie") ? RecoveryPlaybackMetrics(nowMs: Int64(openedAt * 1_000)) : nil
         sequence = 0; lastSent = 0; sampler = sample
+        #if os(tvOS)
+        let platform = "tvos"
+        #else
+        let platform = "ios"
+        #endif
         payload = ["sessionId": UUID().uuidString, "deviceId": deviceId,
-                   "deviceName": UIDevice.current.model, "platform": "ios",
+                   "deviceName": UIDevice.current.model, "platform": platform,
                    "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
                    "profileId": profileId ?? settings.activeProfileId ?? "default", "kind": kind,
                    "mediaId": mediaId, "title": String(title.prefix(500)), "errorCount": 0, "sourceSwitches": 0]

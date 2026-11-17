@@ -1,0 +1,992 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0A63CD8AD06F146D48FCE958 /* TmdbClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F826C0179B8F9CAF461D344 /* TmdbClient.swift */; };
+		0C454D3285AD4DE01846A96E /* PlayerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3352D00BD40BCF6AD90DCE06 /* PlayerEngine.swift */; };
+		0D6A2AEC76DDEC038D6DE9FF /* TmdbRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8FCE89D118CC0FF2D2F76F /* TmdbRows.swift */; };
+		1015DE6E51BA9446F2FEA9C9 /* TVLiveTVView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A80F488E5695A5EB0F1FF9 /* TVLiveTVView.swift */; };
+		1AA9C1C02CAAD20BD38FEB14 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C09819EB837D54B8DE4C4EE /* SyncEngine.swift */; };
+		1AAC27C560E4D96251FB2582 /* TVVideoCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2C4230941D8868735E0A193 /* TVVideoCompatibility.swift */; };
+		1D5A85440232FDB16CF22552 /* CategoryQueueNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78C856166B2A35224A93C4A0 /* CategoryQueueNavigationTests.swift */; };
+		1EB500CEA9965DA3730EA511 /* ProfileCategoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BC34741D8F433E38D9D0F1E /* ProfileCategoryTests.swift */; };
+		214B84451BC7C7BEED101564 /* LiveTVClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3EAC2C36C6F6BD0087C2C98 /* LiveTVClient.swift */; };
+		21C0AF8B0517937CC0CF6155 /* LiveSportsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D24A8B50F0DD9748412D744 /* LiveSportsClient.swift */; };
+		28E6422B13562DDF0032043D /* TVPlayerSessionHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC26E44F11C33BA4A977EF6B /* TVPlayerSessionHost.swift */; };
+		29009C7635037424378B7C81 /* ExactRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A2E187D34B70D835D3482A4 /* ExactRecoveryTests.swift */; };
+		2C63577C3DFDB340B85C78D3 /* TmdbBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504DE186D1548309017424DF /* TmdbBackendTests.swift */; };
+		304C3F537E680C962687BDE9 /* TVBrowseUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64A631966ECE00804BE00002 /* TVBrowseUITests.swift */; };
+		350785A1659EB53D7E6BAAE2 /* VLCKit-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 81A49DB0D2E95C11C5BAFB20 /* VLCKit-LICENSE.txt */; };
+		359544AD977F5F8E406F701B /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF30DF0B7B0E2296B8D7B04 /* SettingsStore.swift */; };
+		448343CC9FAA1CFBC7ADDFEA /* AppContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D197791CB5A5C72C914AEF40 /* AppContainer.swift */; };
+		44F34C6287A93D1EA05D659C /* PlaybackRecoveryPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6212150FA45B4865B85D44 /* PlaybackRecoveryPlayerTests.swift */; };
+		474D731CD0E4B46F1351A36E /* Outfit-OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 6AE00450CF918C56FCE0CE20 /* Outfit-OFL.txt */; };
+		4753B1490EC1DE7E6867A96C /* PlayerRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88AFC23E2A2DF2A18F96B88A /* PlayerRecovery.swift */; };
+		4B1F8B3535E1801D8A48E4F8 /* EpisodeMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13C778DAC0AA3AD0A0FA9EE0 /* EpisodeMatch.swift */; };
+		5251117C09DDB8395836D3F4 /* VelvetTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 686CFC27BA1C34A245E3297A /* VelvetTVApp.swift */; };
+		5323D993CC14EFE14453301E /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C25EA573A150406FAE6E6C5D /* Theme.swift */; };
+		57F02A84CD1F5BF3A1F1203A /* AudioCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D06A5B84E666CBFE394D8C1 /* AudioCompatibility.swift */; };
+		5A78CFD172B8185CC24FFA6A /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84D3D8BBD030C40A6817BD1 /* HomeViewModel.swift */; };
+		5C3088A53D35BD26A55356A3 /* HomeCategories.swift in Sources */ = {isa = PBXBuildFile; fileRef = C64C14840D7A456F794A67F6 /* HomeCategories.swift */; };
+		61998B3359104BA661546521 /* TVDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60EC8C9DF889057792C8C0D0 /* TVDetailsView.swift */; };
+		6247F3D10D95834AADE1ADA4 /* TVCreateCategoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1184FEF96E4807FD2B94167 /* TVCreateCategoryView.swift */; };
+		66A9E7C6BF5AC0E3D1ACEF73 /* TVMoviePlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F25DC00E802D039E0508AECF /* TVMoviePlayerTests.swift */; };
+		6783C72DE67F8469F9869AE9 /* TVHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFB37D557301F6A67C2DF83 /* TVHandoff.swift */; };
+		6B6812810F939F931117AE02 /* LivePlayerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87E6F0CAC40865FCF30F1578 /* LivePlayerViewModel.swift */; };
+		6BA642A103DA760B8E6F3623 /* TmdbRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F79008EC041B754A0D74A7 /* TmdbRepository.swift */; };
+		6EEF48C33F0BE1E4F091413A /* AudioCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B9DA0A0A5427EEEB9D2897 /* AudioCompatibilityTests.swift */; };
+		720E94AAD32E117A4164EB5D /* SearchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20A1B6AA63CDFB015D4560F0 /* SearchViewModel.swift */; };
+		7D2E639954978C3C9D27512F /* NativeSportsClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B14E6B6FE5D8EE09A219374 /* NativeSportsClientTests.swift */; };
+		84857323A64BC739A580D4AC /* LiveTV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9A42CB636FA0BB0CA6E1F6 /* LiveTV.swift */; };
+		8F1015ED1E61856F9A4FD8E5 /* TVServicesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D2AB44E4127BEFD190E3EBF /* TVServicesUITests.swift */; };
+		90F6A959FB4F92CAD9012A55 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 411A8CF2A47BC690560C4DB1 /* Assets.xcassets */; };
+		9771C168AF2C8381889E0A7D /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BEDCF7CB141FA1533463A53 /* Models.swift */; };
+		98989707A2B6D586849DA450 /* TVSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3AEE53EF683DD8D7C27D16B /* TVSettingsView.swift */; };
+		9E247DD08FA388BB4A720D9B /* TVLivePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E20FC1B0D4CE2246A87A115 /* TVLivePlayerView.swift */; };
+		9EF88FA4C24EBB265B797E80 /* TVPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9D694C0781FA5B6537D4887 /* TVPlayerView.swift */; };
+		A209B0924EA4DF30E2F4546A /* StreamLookahead.swift in Sources */ = {isa = PBXBuildFile; fileRef = 495FB2DAF6A3FFD9C54301B2 /* StreamLookahead.swift */; };
+		A4AD5C315C8A1B640DB63A01 /* FairPlayLiveEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C25AFBE3061A54263FD5178 /* FairPlayLiveEngine.swift */; };
+		A54266D6BDC033D0553B411D /* CompanionApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F4761F5A22FAA9908D3882F /* CompanionApi.swift */; };
+		A7028A06B53E5237C63E728D /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = CF57B2C47CFF7752B6F8DE2D /* VLCKitSPM */; };
+		A77DB77CFCAD90C142F53C1E /* TmdbDtos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87CD1F144AF1E107B7AB57F5 /* TmdbDtos.swift */; };
+		AA85AC4C16E7FBBE312EECB3 /* PlayerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92DCED180113A1B4F0DB6CBA /* PlayerViewModel.swift */; };
+		B11E88E3A71B632F07A9FBD9 /* TVSportsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3029FA31AF546BA62B40A1D4 /* TVSportsView.swift */; };
+		B86A78F07E895529554175C4 /* ReleaseGroupBlocksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49C53355FEBF517D63B7DA3 /* ReleaseGroupBlocksTests.swift */; };
+		B923B401E177B887A75C1954 /* TVPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DB89216908AD6AAA7667110 /* TVPlayerTests.swift */; };
+		BADDE1C969F304206B872880 /* StreamRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA2222B290FA7AC47E62BD3E /* StreamRepository.swift */; };
+		BDBB3DD165BCCE56B5FB0907 /* TVDeepLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B2837A650CBF17D406198A /* TVDeepLinkTests.swift */; };
+		BFB59BCA37C885039B407E24 /* RecoveryPlaybackMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4203493B780E5E1E37F1121 /* RecoveryPlaybackMetrics.swift */; };
+		C0700652C1BB5814FF48CD81 /* StreamFailoverWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FB92BD9A0DB5011CFF72D6 /* StreamFailoverWatchdog.swift */; };
+		C17E1BEAB0CA47DE4FFF57F8 /* Persistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1E1C96020E79D64452EC30 /* Persistence.swift */; };
+		C27A421B29D8D29640693D87 /* EpisodeNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 299CC769E5D69371A9918121 /* EpisodeNavigationTests.swift */; };
+		C44121D534614136E384D056 /* PlaybackTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67680984A19DC0D323D7A9DA /* PlaybackTelemetry.swift */; };
+		C4EC48AB51F711057A8A4D9B /* inter.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 761F23C10FB74969076BAEBA /* inter.ttf */; };
+		CCE0CEA86FB40ED1AC7B512D /* StreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5C579C58BC9A1EF824E27E6 /* StreamClient.swift */; };
+		CCE9A76DFF43FF0602F41C7B /* StreamFailoverWatchdogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C3FC806F780A640DD15E6A4 /* StreamFailoverWatchdogTests.swift */; };
+		D13FE348FBE6731BAF4F1246 /* ProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C81917FF4E110BAD78B60CC /* ProfileStore.swift */; };
+		D47FC88CD402EAFE3E3FC5C0 /* TVSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89232FD08F0B46321C009035 /* TVSearchView.swift */; };
+		D693A59F5719FD97A4B131C7 /* TVProfilePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C834901FBC1067C652F53DE /* TVProfilePickerView.swift */; };
+		DA430FC71B7AC9539C999317 /* LiveSports.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB9884D0807CD00B3A437FE5 /* LiveSports.swift */; };
+		DC8BB14FE7512612E3391255 /* MovieReleaseBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4F09B844F8B0744F3059108 /* MovieReleaseBlocks.swift */; };
+		DD94CD02E8B1282303CCC8E1 /* LiveGuidePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A5A7565CC0BAE137E11A5E4 /* LiveGuidePolicyTests.swift */; };
+		DDA417BCE61071E73E4CE5C0 /* Inter-OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = C0B78D9C02952F039853909D /* Inter-OFL.txt */; };
+		DE622C8491D32CAAECFDF7CB /* TVPlayerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81879A00D9858CC3D8E9192 /* TVPlayerUITests.swift */; };
+		DFBCD2C71CCB0C475B73CFBA /* TVHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A90EE565F7C19F0215D108E /* TVHomeView.swift */; };
+		E1E21A34EB8A11E7F1104D89 /* TmdbRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109C41B5526A962F80AD6795 /* TmdbRequest.swift */; };
+		E1E3C827F2D8876CD528151F /* StreamTags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D80B3677964938ED0D2799 /* StreamTags.swift */; };
+		E73B3DFACB42292A74169613 /* DetailsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B5256134911AF47C10EC46E /* DetailsViewModel.swift */; };
+		E7A87A9EA51C1CF47A559A30 /* TVComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 360452EFB792281A0C46E4D7 /* TVComponents.swift */; };
+		E816FE3DCE79B2BE10925D32 /* EpisodeNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AA96EAED92E13870779DE17 /* EpisodeNavigation.swift */; };
+		EC66BF372BD57FDD8287A828 /* ReleaseGroupBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0A64366E427AA2AA4DF268B /* ReleaseGroupBlocks.swift */; };
+		EFE6E4D57D3B94707A69E041 /* outfit.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A41749B069B97169F28FAE90 /* outfit.ttf */; };
+		F285E1C7887E07784BD5A2B7 /* LiveGuidePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD28AB41BD4C8D82AC0D4B7 /* LiveGuidePolicy.swift */; };
+		FF81908E8509BDC7B2A14E4E /* LiveFairPlayTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDD3301F7D3205B244EDA3D9 /* LiveFairPlayTransport.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5DFC9AF039CBC6C4855C1A1E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2C940CA5A3B827F4E57B26E0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 36BE12D1FBC4BD865D71E511;
+			remoteInfo = VelvetTV;
+		};
+		D30434FB109C660DEDFFED8D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2C940CA5A3B827F4E57B26E0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 36BE12D1FBC4BD865D71E511;
+			remoteInfo = VelvetTV;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		09D80B3677964938ED0D2799 /* StreamTags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamTags.swift; sourceTree = "<group>"; };
+		0A5A7565CC0BAE137E11A5E4 /* LiveGuidePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGuidePolicyTests.swift; sourceTree = "<group>"; };
+		0D06A5B84E666CBFE394D8C1 /* AudioCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCompatibility.swift; sourceTree = "<group>"; };
+		109C41B5526A962F80AD6795 /* TmdbRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbRequest.swift; sourceTree = "<group>"; };
+		11B9DA0A0A5427EEEB9D2897 /* AudioCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCompatibilityTests.swift; sourceTree = "<group>"; };
+		13C778DAC0AA3AD0A0FA9EE0 /* EpisodeMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpisodeMatch.swift; sourceTree = "<group>"; };
+		1C25AFBE3061A54263FD5178 /* FairPlayLiveEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FairPlayLiveEngine.swift; sourceTree = "<group>"; };
+		20A1B6AA63CDFB015D4560F0 /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
+		299CC769E5D69371A9918121 /* EpisodeNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpisodeNavigationTests.swift; sourceTree = "<group>"; };
+		3029FA31AF546BA62B40A1D4 /* TVSportsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSportsView.swift; sourceTree = "<group>"; };
+		3352D00BD40BCF6AD90DCE06 /* PlayerEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerEngine.swift; sourceTree = "<group>"; };
+		360452EFB792281A0C46E4D7 /* TVComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVComponents.swift; sourceTree = "<group>"; };
+		39FB92BD9A0DB5011CFF72D6 /* StreamFailoverWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamFailoverWatchdog.swift; sourceTree = "<group>"; };
+		3B5256134911AF47C10EC46E /* DetailsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailsViewModel.swift; sourceTree = "<group>"; };
+		3D24A8B50F0DD9748412D744 /* LiveSportsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSportsClient.swift; sourceTree = "<group>"; };
+		3D2AB44E4127BEFD190E3EBF /* TVServicesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVServicesUITests.swift; sourceTree = "<group>"; };
+		411A8CF2A47BC690560C4DB1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		495FB2DAF6A3FFD9C54301B2 /* StreamLookahead.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamLookahead.swift; sourceTree = "<group>"; };
+		4B14E6B6FE5D8EE09A219374 /* NativeSportsClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSportsClientTests.swift; sourceTree = "<group>"; };
+		4FD28AB41BD4C8D82AC0D4B7 /* LiveGuidePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGuidePolicy.swift; sourceTree = "<group>"; };
+		504DE186D1548309017424DF /* TmdbBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbBackendTests.swift; sourceTree = "<group>"; };
+		5C09819EB837D54B8DE4C4EE /* SyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEngine.swift; sourceTree = "<group>"; };
+		5F826C0179B8F9CAF461D344 /* TmdbClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbClient.swift; sourceTree = "<group>"; };
+		60EC8C9DF889057792C8C0D0 /* TVDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDetailsView.swift; sourceTree = "<group>"; };
+		63A80F488E5695A5EB0F1FF9 /* TVLiveTVView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVLiveTVView.swift; sourceTree = "<group>"; };
+		64A631966ECE00804BE00002 /* TVBrowseUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVBrowseUITests.swift; sourceTree = "<group>"; };
+		67680984A19DC0D323D7A9DA /* PlaybackTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTelemetry.swift; sourceTree = "<group>"; };
+		686CFC27BA1C34A245E3297A /* VelvetTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VelvetTVApp.swift; sourceTree = "<group>"; };
+		6AE00450CF918C56FCE0CE20 /* Outfit-OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Outfit-OFL.txt"; sourceTree = "<group>"; };
+		6E8FCE89D118CC0FF2D2F76F /* TmdbRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbRows.swift; sourceTree = "<group>"; };
+		6FFB37D557301F6A67C2DF83 /* TVHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVHandoff.swift; sourceTree = "<group>"; };
+		761F23C10FB74969076BAEBA /* inter.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = inter.ttf; sourceTree = "<group>"; };
+		78C856166B2A35224A93C4A0 /* CategoryQueueNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryQueueNavigationTests.swift; sourceTree = "<group>"; };
+		79812F9FA4C0786098062433 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		7A2E187D34B70D835D3482A4 /* ExactRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExactRecoveryTests.swift; sourceTree = "<group>"; };
+		7AA96EAED92E13870779DE17 /* EpisodeNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpisodeNavigation.swift; sourceTree = "<group>"; };
+		7C81917FF4E110BAD78B60CC /* ProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStore.swift; sourceTree = "<group>"; };
+		7C834901FBC1067C652F53DE /* TVProfilePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVProfilePickerView.swift; sourceTree = "<group>"; };
+		81A49DB0D2E95C11C5BAFB20 /* VLCKit-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "VLCKit-LICENSE.txt"; sourceTree = "<group>"; };
+		87CD1F144AF1E107B7AB57F5 /* TmdbDtos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbDtos.swift; sourceTree = "<group>"; };
+		87E6F0CAC40865FCF30F1578 /* LivePlayerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePlayerViewModel.swift; sourceTree = "<group>"; };
+		88AFC23E2A2DF2A18F96B88A /* PlayerRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerRecovery.swift; sourceTree = "<group>"; };
+		89232FD08F0B46321C009035 /* TVSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSearchView.swift; sourceTree = "<group>"; };
+		8A90EE565F7C19F0215D108E /* TVHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVHomeView.swift; sourceTree = "<group>"; };
+		8B9A42CB636FA0BB0CA6E1F6 /* LiveTV.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTV.swift; sourceTree = "<group>"; };
+		8BEDCF7CB141FA1533463A53 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		8C3FC806F780A640DD15E6A4 /* StreamFailoverWatchdogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamFailoverWatchdogTests.swift; sourceTree = "<group>"; };
+		8E20FC1B0D4CE2246A87A115 /* TVLivePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVLivePlayerView.swift; sourceTree = "<group>"; };
+		92DCED180113A1B4F0DB6CBA /* PlayerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerViewModel.swift; sourceTree = "<group>"; };
+		93F79008EC041B754A0D74A7 /* TmdbRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmdbRepository.swift; sourceTree = "<group>"; };
+		94E3DC62E9EF4A208B2F2C39 /* VelvetTVTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = VelvetTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9BC34741D8F433E38D9D0F1E /* ProfileCategoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileCategoryTests.swift; sourceTree = "<group>"; };
+		9DB89216908AD6AAA7667110 /* TVPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerTests.swift; sourceTree = "<group>"; };
+		9F4761F5A22FAA9908D3882F /* CompanionApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionApi.swift; sourceTree = "<group>"; };
+		A2E5D418D1CAA2C41AD8E50A /* VelvetTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VelvetTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A3EAC2C36C6F6BD0087C2C98 /* LiveTVClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTVClient.swift; sourceTree = "<group>"; };
+		A41749B069B97169F28FAE90 /* outfit.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = outfit.ttf; sourceTree = "<group>"; };
+		A49C53355FEBF517D63B7DA3 /* ReleaseGroupBlocksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseGroupBlocksTests.swift; sourceTree = "<group>"; };
+		A66604D239DAF625AC8DB5CC /* VelvetTVUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = VelvetTVUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AFF30DF0B7B0E2296B8D7B04 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
+		B9D694C0781FA5B6537D4887 /* TVPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerView.swift; sourceTree = "<group>"; };
+		C0B78D9C02952F039853909D /* Inter-OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Inter-OFL.txt"; sourceTree = "<group>"; };
+		C25EA573A150406FAE6E6C5D /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		C2C4230941D8868735E0A193 /* TVVideoCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVVideoCompatibility.swift; sourceTree = "<group>"; };
+		C3B2837A650CBF17D406198A /* TVDeepLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDeepLinkTests.swift; sourceTree = "<group>"; };
+		C4203493B780E5E1E37F1121 /* RecoveryPlaybackMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPlaybackMetrics.swift; sourceTree = "<group>"; };
+		C5C579C58BC9A1EF824E27E6 /* StreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamClient.swift; sourceTree = "<group>"; };
+		C64C14840D7A456F794A67F6 /* HomeCategories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeCategories.swift; sourceTree = "<group>"; };
+		C84D3D8BBD030C40A6817BD1 /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
+		CC26E44F11C33BA4A977EF6B /* TVPlayerSessionHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerSessionHost.swift; sourceTree = "<group>"; };
+		D0A64366E427AA2AA4DF268B /* ReleaseGroupBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseGroupBlocks.swift; sourceTree = "<group>"; };
+		D197791CB5A5C72C914AEF40 /* AppContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContainer.swift; sourceTree = "<group>"; };
+		D4F09B844F8B0744F3059108 /* MovieReleaseBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieReleaseBlocks.swift; sourceTree = "<group>"; };
+		D81879A00D9858CC3D8E9192 /* TVPlayerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerUITests.swift; sourceTree = "<group>"; };
+		DE1E1C96020E79D64452EC30 /* Persistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence.swift; sourceTree = "<group>"; };
+		E3AEE53EF683DD8D7C27D16B /* TVSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSettingsView.swift; sourceTree = "<group>"; };
+		EA2222B290FA7AC47E62BD3E /* StreamRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamRepository.swift; sourceTree = "<group>"; };
+		F1184FEF96E4807FD2B94167 /* TVCreateCategoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVCreateCategoryView.swift; sourceTree = "<group>"; };
+		F25DC00E802D039E0508AECF /* TVMoviePlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVMoviePlayerTests.swift; sourceTree = "<group>"; };
+		FB9884D0807CD00B3A437FE5 /* LiveSports.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSports.swift; sourceTree = "<group>"; };
+		FD6212150FA45B4865B85D44 /* PlaybackRecoveryPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackRecoveryPlayerTests.swift; sourceTree = "<group>"; };
+		FDD3301F7D3205B244EDA3D9 /* LiveFairPlayTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFairPlayTransport.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C699E1EF879B2310167239A7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7028A06B53E5237C63E728D /* VLCKitSPM in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0755031360C73872F62E3EF8 /* Data */ = {
+			isa = PBXGroup;
+			children = (
+				0D06A5B84E666CBFE394D8C1 /* AudioCompatibility.swift */,
+				13C778DAC0AA3AD0A0FA9EE0 /* EpisodeMatch.swift */,
+				7AA96EAED92E13870779DE17 /* EpisodeNavigation.swift */,
+				C64C14840D7A456F794A67F6 /* HomeCategories.swift */,
+				FDD3301F7D3205B244EDA3D9 /* LiveFairPlayTransport.swift */,
+				3D24A8B50F0DD9748412D744 /* LiveSportsClient.swift */,
+				A3EAC2C36C6F6BD0087C2C98 /* LiveTVClient.swift */,
+				D4F09B844F8B0744F3059108 /* MovieReleaseBlocks.swift */,
+				DE1E1C96020E79D64452EC30 /* Persistence.swift */,
+				67680984A19DC0D323D7A9DA /* PlaybackTelemetry.swift */,
+				7C81917FF4E110BAD78B60CC /* ProfileStore.swift */,
+				C4203493B780E5E1E37F1121 /* RecoveryPlaybackMetrics.swift */,
+				D0A64366E427AA2AA4DF268B /* ReleaseGroupBlocks.swift */,
+				AFF30DF0B7B0E2296B8D7B04 /* SettingsStore.swift */,
+				C5C579C58BC9A1EF824E27E6 /* StreamClient.swift */,
+				495FB2DAF6A3FFD9C54301B2 /* StreamLookahead.swift */,
+				EA2222B290FA7AC47E62BD3E /* StreamRepository.swift */,
+				09D80B3677964938ED0D2799 /* StreamTags.swift */,
+				5F826C0179B8F9CAF461D344 /* TmdbClient.swift */,
+				87CD1F144AF1E107B7AB57F5 /* TmdbDtos.swift */,
+				93F79008EC041B754A0D74A7 /* TmdbRepository.swift */,
+				109C41B5526A962F80AD6795 /* TmdbRequest.swift */,
+				6E8FCE89D118CC0FF2D2F76F /* TmdbRows.swift */,
+				6FFB37D557301F6A67C2DF83 /* TVHandoff.swift */,
+				C2C4230941D8868735E0A193 /* TVVideoCompatibility.swift */,
+				8757061A13F7E2A21B32E01D /* Sync */,
+			);
+			path = Data;
+			sourceTree = "<group>";
+		};
+		0FD20B89BEB2286274ED726C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A2E5D418D1CAA2C41AD8E50A /* VelvetTV.app */,
+				94E3DC62E9EF4A208B2F2C39 /* VelvetTVTests.xctest */,
+				A66604D239DAF625AC8DB5CC /* VelvetTVUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		35CA16DD478D3D0CC48D5713 /* Velvet */ = {
+			isa = PBXGroup;
+			children = (
+				C566F2ACF4CE9A9424E41087 /* Core */,
+				0755031360C73872F62E3EF8 /* Data */,
+				5AC3062169E9E2702D1B6160 /* Models */,
+				57AE3B3FCC5725C8A8B9A5E9 /* Resources */,
+				B24A2290743EDD6C52525AEA /* UI */,
+			);
+			path = Velvet;
+			sourceTree = "<group>";
+		};
+		3CE8F0E0973619868DE594E7 /* VelvetTests */ = {
+			isa = PBXGroup;
+			children = (
+				11B9DA0A0A5427EEEB9D2897 /* AudioCompatibilityTests.swift */,
+				78C856166B2A35224A93C4A0 /* CategoryQueueNavigationTests.swift */,
+				299CC769E5D69371A9918121 /* EpisodeNavigationTests.swift */,
+				7A2E187D34B70D835D3482A4 /* ExactRecoveryTests.swift */,
+				0A5A7565CC0BAE137E11A5E4 /* LiveGuidePolicyTests.swift */,
+				FD6212150FA45B4865B85D44 /* PlaybackRecoveryPlayerTests.swift */,
+				9BC34741D8F433E38D9D0F1E /* ProfileCategoryTests.swift */,
+				A49C53355FEBF517D63B7DA3 /* ReleaseGroupBlocksTests.swift */,
+				8C3FC806F780A640DD15E6A4 /* StreamFailoverWatchdogTests.swift */,
+				504DE186D1548309017424DF /* TmdbBackendTests.swift */,
+			);
+			path = VelvetTests;
+			sourceTree = "<group>";
+		};
+		57AE3B3FCC5725C8A8B9A5E9 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				81A49DB0D2E95C11C5BAFB20 /* VLCKit-LICENSE.txt */,
+				C64DA643481B1788306BE75E /* Fonts */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		58D492FE1C8C4933CA3E27D9 /* LiveTV */ = {
+			isa = PBXGroup;
+			children = (
+				1C25AFBE3061A54263FD5178 /* FairPlayLiveEngine.swift */,
+				87E6F0CAC40865FCF30F1578 /* LivePlayerViewModel.swift */,
+			);
+			path = LiveTV;
+			sourceTree = "<group>";
+		};
+		5AC3062169E9E2702D1B6160 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				4FD28AB41BD4C8D82AC0D4B7 /* LiveGuidePolicy.swift */,
+				FB9884D0807CD00B3A437FE5 /* LiveSports.swift */,
+				8B9A42CB636FA0BB0CA6E1F6 /* LiveTV.swift */,
+				8BEDCF7CB141FA1533463A53 /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		5C59E84B4D4F0240F3489410 /* VelvetTVUITests */ = {
+			isa = PBXGroup;
+			children = (
+				64A631966ECE00804BE00002 /* TVBrowseUITests.swift */,
+				D81879A00D9858CC3D8E9192 /* TVPlayerUITests.swift */,
+				3D2AB44E4127BEFD190E3EBF /* TVServicesUITests.swift */,
+			);
+			path = VelvetTVUITests;
+			sourceTree = "<group>";
+		};
+		639BF1F3C022AF7932256832 = {
+			isa = PBXGroup;
+			children = (
+				D7774DCDEF519634D4B1555E /* clients */,
+				E9CC2774FF48B77CB54A430B /* Tests */,
+				E866EF96CAD66BF430D54D60 /* VelvetTV */,
+				0FD20B89BEB2286274ED726C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		7F936D3E0C7EE76320129B78 /* Player */ = {
+			isa = PBXGroup;
+			children = (
+				3352D00BD40BCF6AD90DCE06 /* PlayerEngine.swift */,
+				88AFC23E2A2DF2A18F96B88A /* PlayerRecovery.swift */,
+				92DCED180113A1B4F0DB6CBA /* PlayerViewModel.swift */,
+				39FB92BD9A0DB5011CFF72D6 /* StreamFailoverWatchdog.swift */,
+			);
+			path = Player;
+			sourceTree = "<group>";
+		};
+		8757061A13F7E2A21B32E01D /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				9F4761F5A22FAA9908D3882F /* CompanionApi.swift */,
+				5C09819EB837D54B8DE4C4EE /* SyncEngine.swift */,
+			);
+			path = Sync;
+			sourceTree = "<group>";
+		};
+		B24A2290743EDD6C52525AEA /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				F85430958EBD80B1581D595B /* Details */,
+				D9A30E61E8F3D77105FFDF3D /* Home */,
+				58D492FE1C8C4933CA3E27D9 /* LiveTV */,
+				7F936D3E0C7EE76320129B78 /* Player */,
+				C07D3A2E09282239247A61DC /* Search */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		C07D3A2E09282239247A61DC /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				20A1B6AA63CDFB015D4560F0 /* SearchViewModel.swift */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		C566F2ACF4CE9A9424E41087 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				D197791CB5A5C72C914AEF40 /* AppContainer.swift */,
+				C25EA573A150406FAE6E6C5D /* Theme.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		C64DA643481B1788306BE75E /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				C0B78D9C02952F039853909D /* Inter-OFL.txt */,
+				761F23C10FB74969076BAEBA /* inter.ttf */,
+				6AE00450CF918C56FCE0CE20 /* Outfit-OFL.txt */,
+				A41749B069B97169F28FAE90 /* outfit.ttf */,
+			);
+			path = Fonts;
+			sourceTree = "<group>";
+		};
+		D7774DCDEF519634D4B1555E /* clients */ = {
+			isa = PBXGroup;
+			children = (
+				E87B637EBD9E4869924D3603 /* ios */,
+			);
+			name = clients;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		D9A30E61E8F3D77105FFDF3D /* Home */ = {
+			isa = PBXGroup;
+			children = (
+				C84D3D8BBD030C40A6817BD1 /* HomeViewModel.swift */,
+			);
+			path = Home;
+			sourceTree = "<group>";
+		};
+		E866EF96CAD66BF430D54D60 /* VelvetTV */ = {
+			isa = PBXGroup;
+			children = (
+				411A8CF2A47BC690560C4DB1 /* Assets.xcassets */,
+				79812F9FA4C0786098062433 /* Info.plist */,
+				360452EFB792281A0C46E4D7 /* TVComponents.swift */,
+				F1184FEF96E4807FD2B94167 /* TVCreateCategoryView.swift */,
+				60EC8C9DF889057792C8C0D0 /* TVDetailsView.swift */,
+				8A90EE565F7C19F0215D108E /* TVHomeView.swift */,
+				8E20FC1B0D4CE2246A87A115 /* TVLivePlayerView.swift */,
+				63A80F488E5695A5EB0F1FF9 /* TVLiveTVView.swift */,
+				CC26E44F11C33BA4A977EF6B /* TVPlayerSessionHost.swift */,
+				B9D694C0781FA5B6537D4887 /* TVPlayerView.swift */,
+				7C834901FBC1067C652F53DE /* TVProfilePickerView.swift */,
+				89232FD08F0B46321C009035 /* TVSearchView.swift */,
+				E3AEE53EF683DD8D7C27D16B /* TVSettingsView.swift */,
+				3029FA31AF546BA62B40A1D4 /* TVSportsView.swift */,
+				686CFC27BA1C34A245E3297A /* VelvetTVApp.swift */,
+			);
+			path = VelvetTV;
+			sourceTree = "<group>";
+		};
+		E87B637EBD9E4869924D3603 /* ios */ = {
+			isa = PBXGroup;
+			children = (
+				EDA8318FAE8ABC211816B432 /* Tests */,
+				35CA16DD478D3D0CC48D5713 /* Velvet */,
+			);
+			path = ios;
+			sourceTree = "<group>";
+		};
+		E9CC2774FF48B77CB54A430B /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				F95A8ED0E1054AF4B31F1325 /* VelvetTVTests */,
+				5C59E84B4D4F0240F3489410 /* VelvetTVUITests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		EDA8318FAE8ABC211816B432 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				3CE8F0E0973619868DE594E7 /* VelvetTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		F85430958EBD80B1581D595B /* Details */ = {
+			isa = PBXGroup;
+			children = (
+				3B5256134911AF47C10EC46E /* DetailsViewModel.swift */,
+			);
+			path = Details;
+			sourceTree = "<group>";
+		};
+		F95A8ED0E1054AF4B31F1325 /* VelvetTVTests */ = {
+			isa = PBXGroup;
+			children = (
+				4B14E6B6FE5D8EE09A219374 /* NativeSportsClientTests.swift */,
+				C3B2837A650CBF17D406198A /* TVDeepLinkTests.swift */,
+				F25DC00E802D039E0508AECF /* TVMoviePlayerTests.swift */,
+				9DB89216908AD6AAA7667110 /* TVPlayerTests.swift */,
+			);
+			path = VelvetTVTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		36BE12D1FBC4BD865D71E511 /* VelvetTV */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 36B9BC7E5744F91507656320 /* Build configuration list for PBXNativeTarget "VelvetTV" */;
+			buildPhases = (
+				66DB749E9F2BCD0045B4B022 /* Sources */,
+				0FE46485D2E1D3F2AC225538 /* Resources */,
+				C699E1EF879B2310167239A7 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VelvetTV;
+			packageProductDependencies = (
+				CF57B2C47CFF7752B6F8DE2D /* VLCKitSPM */,
+			);
+			productName = VelvetTV;
+			productReference = A2E5D418D1CAA2C41AD8E50A /* VelvetTV.app */;
+			productType = "com.apple.product-type.application";
+		};
+		9667468535B0668C6ED9DE39 /* VelvetTVTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A06EC4301E5D1C258690BA9E /* Build configuration list for PBXNativeTarget "VelvetTVTests" */;
+			buildPhases = (
+				E49483394AAF5035C2E95B73 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A5FF4314DA2F9F1B42285487 /* PBXTargetDependency */,
+			);
+			name = VelvetTVTests;
+			packageProductDependencies = (
+			);
+			productName = VelvetTVTests;
+			productReference = 94E3DC62E9EF4A208B2F2C39 /* VelvetTVTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		EAFDCD7475C53495E17F048C /* VelvetTVUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 943601F59741C88BCAD27A63 /* Build configuration list for PBXNativeTarget "VelvetTVUITests" */;
+			buildPhases = (
+				3C5538E301870CAF0663A37D /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				89F2DACF1331A0E2695CDFFD /* PBXTargetDependency */,
+			);
+			name = VelvetTVUITests;
+			packageProductDependencies = (
+			);
+			productName = VelvetTVUITests;
+			productReference = A66604D239DAF625AC8DB5CC /* VelvetTVUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2C940CA5A3B827F4E57B26E0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					9667468535B0668C6ED9DE39 = {
+						TestTargetID = 36BE12D1FBC4BD865D71E511;
+					};
+					EAFDCD7475C53495E17F048C = {
+						TestTargetID = 36BE12D1FBC4BD865D71E511;
+					};
+				};
+			};
+			buildConfigurationList = 3AEAA18AC5235CC43035617A /* Build configuration list for PBXProject "VelvetTV" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 639BF1F3C022AF7932256832;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				4569042D4765CE5730BD1754 /* XCRemoteSwiftPackageReference "vlckit-spm" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 0FD20B89BEB2286274ED726C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				36BE12D1FBC4BD865D71E511 /* VelvetTV */,
+				9667468535B0668C6ED9DE39 /* VelvetTVTests */,
+				EAFDCD7475C53495E17F048C /* VelvetTVUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0FE46485D2E1D3F2AC225538 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				90F6A959FB4F92CAD9012A55 /* Assets.xcassets in Resources */,
+				DDA417BCE61071E73E4CE5C0 /* Inter-OFL.txt in Resources */,
+				474D731CD0E4B46F1351A36E /* Outfit-OFL.txt in Resources */,
+				350785A1659EB53D7E6BAAE2 /* VLCKit-LICENSE.txt in Resources */,
+				C4EC48AB51F711057A8A4D9B /* inter.ttf in Resources */,
+				EFE6E4D57D3B94707A69E041 /* outfit.ttf in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3C5538E301870CAF0663A37D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				304C3F537E680C962687BDE9 /* TVBrowseUITests.swift in Sources */,
+				DE622C8491D32CAAECFDF7CB /* TVPlayerUITests.swift in Sources */,
+				8F1015ED1E61856F9A4FD8E5 /* TVServicesUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		66DB749E9F2BCD0045B4B022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				448343CC9FAA1CFBC7ADDFEA /* AppContainer.swift in Sources */,
+				57F02A84CD1F5BF3A1F1203A /* AudioCompatibility.swift in Sources */,
+				A54266D6BDC033D0553B411D /* CompanionApi.swift in Sources */,
+				E73B3DFACB42292A74169613 /* DetailsViewModel.swift in Sources */,
+				4B1F8B3535E1801D8A48E4F8 /* EpisodeMatch.swift in Sources */,
+				E816FE3DCE79B2BE10925D32 /* EpisodeNavigation.swift in Sources */,
+				A4AD5C315C8A1B640DB63A01 /* FairPlayLiveEngine.swift in Sources */,
+				5C3088A53D35BD26A55356A3 /* HomeCategories.swift in Sources */,
+				5A78CFD172B8185CC24FFA6A /* HomeViewModel.swift in Sources */,
+				FF81908E8509BDC7B2A14E4E /* LiveFairPlayTransport.swift in Sources */,
+				F285E1C7887E07784BD5A2B7 /* LiveGuidePolicy.swift in Sources */,
+				6B6812810F939F931117AE02 /* LivePlayerViewModel.swift in Sources */,
+				DA430FC71B7AC9539C999317 /* LiveSports.swift in Sources */,
+				21C0AF8B0517937CC0CF6155 /* LiveSportsClient.swift in Sources */,
+				84857323A64BC739A580D4AC /* LiveTV.swift in Sources */,
+				214B84451BC7C7BEED101564 /* LiveTVClient.swift in Sources */,
+				9771C168AF2C8381889E0A7D /* Models.swift in Sources */,
+				DC8BB14FE7512612E3391255 /* MovieReleaseBlocks.swift in Sources */,
+				C17E1BEAB0CA47DE4FFF57F8 /* Persistence.swift in Sources */,
+				C44121D534614136E384D056 /* PlaybackTelemetry.swift in Sources */,
+				0C454D3285AD4DE01846A96E /* PlayerEngine.swift in Sources */,
+				4753B1490EC1DE7E6867A96C /* PlayerRecovery.swift in Sources */,
+				AA85AC4C16E7FBBE312EECB3 /* PlayerViewModel.swift in Sources */,
+				D13FE348FBE6731BAF4F1246 /* ProfileStore.swift in Sources */,
+				BFB59BCA37C885039B407E24 /* RecoveryPlaybackMetrics.swift in Sources */,
+				EC66BF372BD57FDD8287A828 /* ReleaseGroupBlocks.swift in Sources */,
+				720E94AAD32E117A4164EB5D /* SearchViewModel.swift in Sources */,
+				359544AD977F5F8E406F701B /* SettingsStore.swift in Sources */,
+				CCE0CEA86FB40ED1AC7B512D /* StreamClient.swift in Sources */,
+				C0700652C1BB5814FF48CD81 /* StreamFailoverWatchdog.swift in Sources */,
+				A209B0924EA4DF30E2F4546A /* StreamLookahead.swift in Sources */,
+				BADDE1C969F304206B872880 /* StreamRepository.swift in Sources */,
+				E1E3C827F2D8876CD528151F /* StreamTags.swift in Sources */,
+				1AA9C1C02CAAD20BD38FEB14 /* SyncEngine.swift in Sources */,
+				E7A87A9EA51C1CF47A559A30 /* TVComponents.swift in Sources */,
+				6247F3D10D95834AADE1ADA4 /* TVCreateCategoryView.swift in Sources */,
+				61998B3359104BA661546521 /* TVDetailsView.swift in Sources */,
+				6783C72DE67F8469F9869AE9 /* TVHandoff.swift in Sources */,
+				DFBCD2C71CCB0C475B73CFBA /* TVHomeView.swift in Sources */,
+				9E247DD08FA388BB4A720D9B /* TVLivePlayerView.swift in Sources */,
+				1015DE6E51BA9446F2FEA9C9 /* TVLiveTVView.swift in Sources */,
+				28E6422B13562DDF0032043D /* TVPlayerSessionHost.swift in Sources */,
+				9EF88FA4C24EBB265B797E80 /* TVPlayerView.swift in Sources */,
+				D693A59F5719FD97A4B131C7 /* TVProfilePickerView.swift in Sources */,
+				D47FC88CD402EAFE3E3FC5C0 /* TVSearchView.swift in Sources */,
+				98989707A2B6D586849DA450 /* TVSettingsView.swift in Sources */,
+				B11E88E3A71B632F07A9FBD9 /* TVSportsView.swift in Sources */,
+				1AAC27C560E4D96251FB2582 /* TVVideoCompatibility.swift in Sources */,
+				5323D993CC14EFE14453301E /* Theme.swift in Sources */,
+				0A63CD8AD06F146D48FCE958 /* TmdbClient.swift in Sources */,
+				A77DB77CFCAD90C142F53C1E /* TmdbDtos.swift in Sources */,
+				6BA642A103DA760B8E6F3623 /* TmdbRepository.swift in Sources */,
+				E1E21A34EB8A11E7F1104D89 /* TmdbRequest.swift in Sources */,
+				0D6A2AEC76DDEC038D6DE9FF /* TmdbRows.swift in Sources */,
+				5251117C09DDB8395836D3F4 /* VelvetTVApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E49483394AAF5035C2E95B73 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6EEF48C33F0BE1E4F091413A /* AudioCompatibilityTests.swift in Sources */,
+				1D5A85440232FDB16CF22552 /* CategoryQueueNavigationTests.swift in Sources */,
+				C27A421B29D8D29640693D87 /* EpisodeNavigationTests.swift in Sources */,
+				29009C7635037424378B7C81 /* ExactRecoveryTests.swift in Sources */,
+				DD94CD02E8B1282303CCC8E1 /* LiveGuidePolicyTests.swift in Sources */,
+				7D2E639954978C3C9D27512F /* NativeSportsClientTests.swift in Sources */,
+				44F34C6287A93D1EA05D659C /* PlaybackRecoveryPlayerTests.swift in Sources */,
+				1EB500CEA9965DA3730EA511 /* ProfileCategoryTests.swift in Sources */,
+				B86A78F07E895529554175C4 /* ReleaseGroupBlocksTests.swift in Sources */,
+				CCE9A76DFF43FF0602F41C7B /* StreamFailoverWatchdogTests.swift in Sources */,
+				BDBB3DD165BCCE56B5FB0907 /* TVDeepLinkTests.swift in Sources */,
+				66A9E7C6BF5AC0E3D1ACEF73 /* TVMoviePlayerTests.swift in Sources */,
+				B923B401E177B887A75C1954 /* TVPlayerTests.swift in Sources */,
+				2C63577C3DFDB340B85C78D3 /* TmdbBackendTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		89F2DACF1331A0E2695CDFFD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 36BE12D1FBC4BD865D71E511 /* VelvetTV */;
+			targetProxy = 5DFC9AF039CBC6C4855C1A1E /* PBXContainerItemProxy */;
+		};
+		A5FF4314DA2F9F1B42285487 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 36BE12D1FBC4BD865D71E511 /* VelvetTV */;
+			targetProxy = D30434FB109C660DEDFFED8D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2782F9111B035DD82F5351AF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.tvos.uitests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = VelvetTV;
+			};
+			name = Release;
+		};
+		3252A2FF01C76AB0E389D288 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.tvos.uitests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = VelvetTV;
+			};
+			name = Debug;
+		};
+		94B985E808EC2FA8E10E751A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "Brand Assets";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = VelvetTV/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.tvos;
+				PRODUCT_MODULE_NAME = Velvet;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Debug;
+		};
+		97E0C4760BCF38AD7A5D60E0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.tvos.tests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VelvetTV.app/VelvetTV";
+				TEST_TARGET_NAME = VelvetTV;
+			};
+			name = Release;
+		};
+		99FD5E9945ACF8B5381DC13F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "Brand Assets";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = VelvetTV/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.tvos;
+				PRODUCT_MODULE_NAME = Velvet;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Release;
+		};
+		CC4D19D55EAAFF39B326BDD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.10;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Debug;
+		};
+		CD69AA82D6019B4DF049C534 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.10;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Release;
+		};
+		FA81E4069052746D67CAF393 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = tv.velvet.tvos.tests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VelvetTV.app/VelvetTV";
+				TEST_TARGET_NAME = VelvetTV;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		36B9BC7E5744F91507656320 /* Build configuration list for PBXNativeTarget "VelvetTV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				94B985E808EC2FA8E10E751A /* Debug */,
+				99FD5E9945ACF8B5381DC13F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3AEAA18AC5235CC43035617A /* Build configuration list for PBXProject "VelvetTV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC4D19D55EAAFF39B326BDD8 /* Debug */,
+				CD69AA82D6019B4DF049C534 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		943601F59741C88BCAD27A63 /* Build configuration list for PBXNativeTarget "VelvetTVUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3252A2FF01C76AB0E389D288 /* Debug */,
+				2782F9111B035DD82F5351AF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A06EC4301E5D1C258690BA9E /* Build configuration list for PBXNativeTarget "VelvetTVTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FA81E4069052746D67CAF393 /* Debug */,
+				97E0C4760BCF38AD7A5D60E0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4569042D4765CE5730BD1754 /* XCRemoteSwiftPackageReference "vlckit-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tylerjonesio/vlckit-spm";
+			requirement = {
+				kind = exactVersion;
+				version = 3.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CF57B2C47CFF7752B6F8DE2D /* VLCKitSPM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4569042D4765CE5730BD1754 /* XCRemoteSwiftPackageReference "vlckit-spm" */;
+			productName = VLCKitSPM;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 2C940CA5A3B827F4E57B26E0 /* Project object */;
+}

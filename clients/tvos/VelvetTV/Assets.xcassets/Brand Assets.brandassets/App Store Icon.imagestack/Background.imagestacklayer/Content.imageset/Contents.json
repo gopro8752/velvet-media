@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "layer1x.png",
+      "idiom" : "tv",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "tv.velvet.tvos",
+    "version" : 1
+  }
+}

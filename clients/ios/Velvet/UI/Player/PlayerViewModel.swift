@@ -152,6 +152,8 @@ final class PlayerViewModel: ObservableObject {
     @Published private(set) var hasNext = false
     @Published private(set) var hasPrevious = false
     @Published private(set) var blockedGroups: [ReleaseGroup] = []
+    @Published private(set) var blockedMovieReleases: Set<String> = []
+    private let movieReleaseBlocks: MovieReleaseBlockStore
     @Published private(set) var groupActionError: String?
     /// Display name of the active embedded subtitle track; nil = subtitles off.
     @Published private(set) var subtitleLabel: String?
@@ -312,8 +314,10 @@ final class PlayerViewModel: ObservableObject {
          playback: PlaybackStore,
          companion: CompanionApi,
          queuePlayback: CategoryQueuePlayback? = nil,
-         queuePrefetch: CategoryQueuePrefetch? = nil) {
+         queuePrefetch: CategoryQueuePrefetch? = nil,
+         movieReleaseBlocks: MovieReleaseBlockStore? = nil) {
         self.target = target
+        self.movieReleaseBlocks = movieReleaseBlocks ?? MovieReleaseBlockStore()
         self.tmdb = tmdb
         self.streamRepo = streamRepo
         self.settings = settings
@@ -389,6 +393,7 @@ final class PlayerViewModel: ObservableObject {
             } else {
                 imdbId = "tmdb:\(target.mediaId)"
             }
+            if !isShow, let imdbId { blockedMovieReleases = movieReleaseBlocks.keys(movie: imdbId) }
             backdropUrl = d.item.backdropUrl ?? d.item.posterUrl
             showTitle = d.item.title
             // Spec §2 (player side): settle the launch/foreground pull BEFORE
@@ -572,6 +577,13 @@ final class PlayerViewModel: ObservableObject {
             ?? streamRepo.autoPick(pool, preferredQuality: settings.preferredQuality,
                                    previousBingeGroup: lastBingeGroup)
             ?? pool.first else {
+            #if os(tvOS)
+            if !hasBlockedReleases, !allResolvedStreams.isEmpty,
+               allResolvedStreams.allSatisfy({ !TVVideoCompatibility.connectedDisplay.supports(title: $0.title) }) {
+                showError("These releases use a video format this player or display cannot show correctly. Try a different quality in Settings.", canChoose: false)
+                return
+            }
+            #endif
             showError("No playable streams are available. Try another stream or reset blocked releases in playback options.",
                       canChoose: true)
             return
@@ -768,7 +780,7 @@ final class PlayerViewModel: ObservableObject {
         errorMessage = message
         // Block management remains available even when a fresh source lookup
         // returns nothing; an outage must not hide the user's saved exclusions.
-        canChooseStream = (canChoose && !streams.isEmpty) || !blockedGroups.isEmpty
+        canChooseStream = (canChoose && !streams.isEmpty) || hasBlockedReleases
         isBuffering = false
         upNext = .hidden
         scheduleUnavailableQueueItem()
@@ -1338,7 +1350,11 @@ final class PlayerViewModel: ObservableObject {
     }
 
     private func isBlocked(_ stream: StreamOption) -> Bool {
-        isShow && stream.isReleaseGroupBlocked(blockedGroups)
+        #if os(tvOS)
+        if !TVVideoCompatibility.connectedDisplay.supports(title: stream.title) { return true }
+        #endif
+        if isShow { return stream.isReleaseGroupBlocked(blockedGroups) }
+        return MovieReleaseBlocks.key(for: stream.url).map(blockedMovieReleases.contains) ?? false
     }
 
     private func applyBlockedGroups(_ groups: [ReleaseGroup]) {
@@ -1381,6 +1397,50 @@ final class PlayerViewModel: ObservableObject {
         applyBlockedGroups(settings.blockedGroups(imdbId: id))
         fallbackStreams = streams.filter { $0.url != currentStream?.url && !failedStreamUrls.contains($0.url) }
         groupActionError = nil
+    }
+
+    var hasBlockedReleases: Bool { !blockedGroups.isEmpty || !blockedMovieReleases.isEmpty }
+
+    var canBlockCurrentRelease: Bool {
+        guard let stream = currentStream, !isBlocked(stream) else { return false }
+        return isShow ? stream.releaseGroupForBlocking() != nil : MovieReleaseBlocks.key(for: stream.url) != nil
+    }
+
+    func blockCurrentRelease() {
+        guard let stream = currentStream else { return }
+        if isShow { blockReleaseGroup(stream); return }
+        guard let id = imdbId, movieReleaseBlocks.block(movie: id, url: stream.url) else {
+            groupActionError = "Couldn't save the blocked release. Try again."
+            return
+        }
+        blockedMovieReleases = movieReleaseBlocks.keys(movie: id)
+        streams = allResolvedStreams.filter { !isBlocked($0) }
+        prefetchedStreams = nil
+        groupActionError = nil
+        let position = pendingSeek?.positionMs ?? seekGrace?.targetMs
+            ?? (engine.positionMs > 0 ? engine.positionMs : lastKnownPositionMs)
+        if position > 1_000 { pendingSeek = PendingSeek(positionMs: position, guardNearEnd: false) }
+        let allowed = streams.filter { !failedStreamUrls.contains($0.url) }
+        guard let next = allowed.first else {
+            saveProgressNow()
+            showError("This release is blocked for this movie. Choose another stream or reset blocked releases in playback options.", canChoose: true)
+            return
+        }
+        fallbackStreams = allowed.filter { $0.url != next.url }
+        failoverNotice = true
+        play(stream: next, startPlaying: !queueAutoAdvanceSuspended)
+    }
+
+    func resetBlockedReleases() {
+        if isShow {
+            for key in blockedGroups.map(\.key) { unblockReleaseGroup(key) }
+        } else if let id = imdbId {
+            movieReleaseBlocks.reset(movie: id)
+            blockedMovieReleases = []
+            streams = allResolvedStreams.filter { !isBlocked($0) }
+            fallbackStreams = streams.filter { $0.url != currentStream?.url && !failedStreamUrls.contains($0.url) }
+            groupActionError = nil
+        }
     }
 
     func setSourcePickerOpen(_ open: Bool) {
@@ -2250,6 +2310,12 @@ final class PlayerViewModel: ObservableObject {
     /// Called whenever VLC reports new track info (.playing / .esAdded).
     private func refreshTracks() {
         guard phase == .playing, !swapping, !tornDown else { return }
+        #if os(tvOS)
+        if engine.videoCodecs.contains(where: TVVideoCompatibility.isDolbyCodec) {
+            handlePlayerError(allowInPlaceRetry: false)
+            return
+        }
+        #endif
         externalAudioTrackIds.formUnion(engine.compatibleAudioTrackIds)
         let subs = engine.subtitleTracks
         let audios = engine.audioTracks
